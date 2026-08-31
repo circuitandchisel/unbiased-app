@@ -71,11 +71,14 @@ type Entry =
          *  tool calls and it is the only place the tool's name appears, so it
          *  is shown verbatim rather than rebuilt here. */
         message?: string | null;
+        /** Set on cards where "Always allow" is offered (browser consents);
+         *  names the persistent grant main will record. */
+        alwaysKey?: string | null;
         decision?: ApprovalDecision;
       };
     };
 
-type ApprovalDecision = "accept" | "acceptForSession" | "decline";
+type ApprovalDecision = "accept" | "acceptForSession" | "acceptAlways" | "decline";
 // "main" or a dynamic side-chat pane ("side:<n>").
 type PaneId = string;
 type ThreadSummary = { id: string; title: string; createdAt?: string };
@@ -404,6 +407,7 @@ type HeldApproval = {
   reason: string | null;
   grantRoot?: string | null;
   message?: string | null;
+  alwaysKey?: string | null;
   // Present when the request came from a sub-agent's thread (multi-agent) —
   // the card renders in the parent's pane, tagged with the agent's name.
   agentName?: string;
@@ -571,6 +575,7 @@ declare global {
           reason: string | null;
           grantRoot?: string | null;
           message?: string | null;
+          alwaysKey?: string | null;
         }) => void,
       ) => () => void;
       onCommand: (
@@ -7873,6 +7878,7 @@ function ChatPane({
         kind: p.kind,
         grantRoot: p.grantRoot,
         message: p.message,
+        alwaysKey: p.alwaysKey,
       };
       const idx = cleaned.findIndex((e) => e.kind === "command" && e.itemId === p.itemId);
       // A resumed conversation's approval attaches to a card INSIDE history,
@@ -15560,6 +15566,7 @@ function PermissionsPrompt({
     kind?: "command" | "fileChange" | "mcpTool";
     grantRoot?: string | null;
     message?: string | null;
+    alwaysKey?: string | null;
   };
   onDecide: (d: ApprovalDecision) => void;
 }) {
@@ -15734,6 +15741,12 @@ function PermissionsPrompt({
                 [
                   { label: "Allow once", d: "accept" },
                   { label: "Allow this conversation", d: "acceptForSession" },
+                  // Only where main can actually honor it — cards minted with
+                  // an alwaysKey (the browser consents). Offering it on engine
+                  // cards would promise a persistence that doesn't exist.
+                  ...(approval.alwaysKey
+                    ? [{ label: "Always allow (never ask again)", d: "acceptAlways" }]
+                    : []),
                 ] as { label: string; d: ApprovalDecision }[]
               ).map((opt) => (
                 <button

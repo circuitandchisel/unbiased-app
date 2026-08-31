@@ -56,7 +56,7 @@ contextBridge.exposeInMainWorld("unbiased", {
   saveTranscript: (threadId: string, entries: unknown) =>
     ipcRenderer.invoke("transcript:save", { threadId, entries }),
   loadTranscript: (threadId: string) => ipcRenderer.invoke("transcript:load", threadId),
-  decideApproval: (requestId: string, decision: "accept" | "acceptForSession" | "decline") =>
+  decideApproval: (requestId: string, decision: "accept" | "acceptForSession" | "acceptAlways" | "decline") =>
     ipcRenderer.invoke("chat:approve", { requestId, decision }),
   liveApprovals: () => ipcRenderer.invoke("chat:live-approvals"),
   mcpList: () => ipcRenderer.invoke("mcp:list"),
