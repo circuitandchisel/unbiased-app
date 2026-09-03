@@ -1387,8 +1387,12 @@ async function ensureBrowserAllowed(tool: string, threadId: string | null, detai
   const root = rootThreadOf(threadId);
   const attaching = tool === "browser_connect";
   if (attaching) {
-    if (browserConnectGrants.has(root)) return null;
-  } else if ((threadAccessModes.get(root) ?? accessMode) !== "ask" || browserNetGrants.has(root)) {
+    if (approvalGrants().browserConnectAlways || browserConnectGrants.has(root)) return null;
+  } else if (
+    (threadAccessModes.get(root) ?? accessMode) !== "ask" ||
+    approvalGrants().browserBrowseAlways ||
+    browserNetGrants.has(root)
+  ) {
     return null;
   }
   const decision = await requestLocalApproval(
@@ -1397,13 +1401,21 @@ async function ensureBrowserAllowed(tool: string, threadId: string | null, detai
     attaching
       ? "The agent wants a browser it can use as you — reading pages you are signed into (mail, X, dashboards, internal tools). Approving opens an Unbiased-managed Chrome window; anything you sign into there stays available to the agent. Allow only if you want it acting with those accounts."
       : "The agent wants to use the browser, which reaches the network. This conversation is in Ask-for-approval mode, so nothing goes out until you allow it.",
+    attaching ? "browser-connect" : "browser-browse",
   );
   if (decision === "decline") {
     return attaching
       ? "The user declined access to their Chrome browser. Continue with public pages via browser_search instead."
       : "The user declined browser/network access for this conversation.";
   }
-  if (decision === "acceptForSession") (attaching ? browserConnectGrants : browserNetGrants).add(root);
+  // The grant is decided HERE, not in chat:approve — only this closure knows
+  // whether the question was connect (signed-in session) or plain browsing.
+  if (decision === "acceptAlways") {
+    saveApprovalGrants(attaching ? { browserConnectAlways: true } : { browserBrowseAlways: true });
+  }
+  if (decision === "acceptForSession" || decision === "acceptAlways") {
+    (attaching ? browserConnectGrants : browserNetGrants).add(root);
+  }
   return null;
 }
 
@@ -1950,8 +1962,12 @@ function resetSubAgentState(): void {
     if (pending.kind === "local") pending.settle("decline");
   }
   pendingApprovals.clear();
-  browserNetGrants.clear();
-  browserConnectGrants.clear();
+  // The browser grant Sets deliberately SURVIVE an engine restart: they are
+  // keyed by conversation (root) thread ids, which persist across engine
+  // processes — unlike everything above, which is scoped to one engine's
+  // RPC ids. Clearing them here meant "Allow this conversation" was silently
+  // forgotten every time MCP settings applied or the user re-signed-in, and
+  // the same consent card came back mid-conversation.
   threadAccessModes.clear();
   browserAttachedExternal = false;
   browserSessionBound = false;
@@ -2332,6 +2348,36 @@ function turnSandbox(cwd: string | null): Record<string, unknown> {
     ...base,
     writableRoots: [...((base.writableRoots as string[]) ?? []), join(info.project, ".git")],
   };
+}
+
+// Approval choices the user made durable. Every other approval is
+// deliberately per-session — engine memory, or the in-memory grant Sets —
+// and dies with its engine process. "Always allow" is the one tier that
+// must not: it exists because the browser-consent card is gated in EVERY
+// access mode (including full), so without a persisted grant it re-asked
+// on each app launch, engine restart and conversation switch.
+function approvalGrantsFile(): string {
+  return join(app.getPath("userData"), "approval-grants.json");
+}
+type ApprovalGrants = { browserConnectAlways?: boolean; browserBrowseAlways?: boolean };
+let approvalGrantsCache: ApprovalGrants | null = null;
+function approvalGrants(): ApprovalGrants {
+  if (!approvalGrantsCache) {
+    try {
+      approvalGrantsCache = JSON.parse(readFileSync(approvalGrantsFile(), "utf8"));
+    } catch {
+      approvalGrantsCache = {};
+    }
+  }
+  return approvalGrantsCache!;
+}
+function saveApprovalGrants(patch: ApprovalGrants): void {
+  approvalGrantsCache = { ...approvalGrants(), ...patch };
+  try {
+    writeFileSync(approvalGrantsFile(), JSON.stringify(approvalGrantsCache));
+  } catch {
+    // Best-effort: the in-memory grant still covers this run.
+  }
 }
 
 // Last known context usage per thread — lets the composer gauge appear
@@ -3523,7 +3569,10 @@ function createWindow(): void {
 // kept so the card can be retired when that thread's turn dies (interrupt,
 // failure) — the engine drops the request server-side and would never
 // answer a late decision.
-type ApprovalDecision = "accept" | "acceptForSession" | "decline";
+// "acceptAlways" is offered only on cards minted with an alwaysKey (the
+// local browser consents) — it persists the grant to approval-grants.json
+// so the question is never asked again on this machine.
+type ApprovalDecision = "accept" | "acceptForSession" | "acceptAlways" | "decline";
 type PendingApproval = { threadId: string | null } & (
   | { kind: "engine"; rpcId: number | string }
   // An MCP tool call. codex gates every one behind
@@ -3557,7 +3606,16 @@ let nextEngineApproval = 1;
  *  wait for the human. Routed exactly like an engine approval: a sub-agent's
  *  request surfaces in its PARENT's pane, and a backgrounded conversation
  *  holds it until reopened. */
-function requestLocalApproval(threadId: string | null, command: string, reason: string): Promise<ApprovalDecision> {
+function requestLocalApproval(
+  threadId: string | null,
+  command: string,
+  reason: string,
+  // Present only when "Always allow" is a sane answer (the browser
+  // consents). Its value tells chat:approve which persistent grant the
+  // decision maps to; cards without it never show the option — the
+  // scheduled-task card stays deliberately human-in-the-loop.
+  alwaysKey?: "browser-connect" | "browser-browse",
+): Promise<ApprovalDecision> {
   const requestId = `apr_${APPROVAL_BOOT}_local_${nextLocalApproval++}`;
   return new Promise((resolve) => {
     pendingApprovals.set(requestId, { kind: "local", threadId, settle: resolve });
@@ -3570,6 +3628,7 @@ function requestLocalApproval(threadId: string | null, command: string, reason: 
       command,
       cwd: null,
       reason,
+      ...(alwaysKey ? { alwaysKey } : {}),
       ...(sub ? { agentName: sub.name } : {}),
     };
     const paneId = target ? paneForThread(target) : null;
@@ -7820,7 +7879,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("chat:approve", (_e, payload: {
     requestId: string;
-    decision: "accept" | "acceptForSession" | "decline";
+    decision: ApprovalDecision;
   }) => {
     const pending = pendingApprovals.get(payload.requestId);
     // Nothing is waiting on this: the turn died, most often because the app
@@ -7849,7 +7908,12 @@ app.whenReady().then(async () => {
       }
     }
     if (pending.kind === "engine") {
-      engine.respond(pending.rpcId, { decision: payload.decision });
+      // Only local cards (minted with an alwaysKey) ever offer "acceptAlways",
+      // but map it defensively — the engine wire enum would fail to
+      // deserialize a value it has never heard of.
+      engine.respond(pending.rpcId, {
+        decision: payload.decision === "acceptAlways" ? "accept" : payload.decision,
+      });
     } else if (pending.kind === "elicitation") {
       // "acceptForSession" collapses to a plain accept: codex advertises
       // persistence options in the request (_meta.persist), but the shape for
