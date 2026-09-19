@@ -70,11 +70,18 @@ jobs:
       # The accessibility bridge must sit BESIDE the app too: extraResources
       # copies from ../unbiased-ax/dist. Without it `npm run dist` fails at
       # the copy, which would only show up on a tag push.
-      # No token: this checkout uses only public repository data.
+      # Needs the App token, exactly like the engine above: unbiased-ax is a
+      # PRIVATE repository. This used to say "no token: this checkout uses only
+      # public repository data", which was simply untrue — and the cost of the
+      # assumption was paid on a tag push, where it is most expensive. v1.11.0
+      # failed here: actions/checkout retried the default-branch lookup three
+      # times and got 404 each time, because an unauthenticated read of a
+      # private repo is indistinguishable from one that does not exist.
       - name: checkout accessibility bridge
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: circuitandchisel/unbiased-ax
+          token: ${{ steps.app-token.outputs.token }}
           path: unbiased-ax
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
