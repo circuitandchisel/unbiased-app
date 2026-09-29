@@ -6,6 +6,18 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.0 — September 29, 2026
+
+### New
+
+- **Make Pareto's replies your own.** Choose the amount of detail, the tone, and whether explanations use plain language in Settings → Agent.
+
+### Improved
+
+- **Navigation stays close when the sidebar is closed.** A slim icon bar keeps New chat, Open project, Connectors, Scheduled, and Settings within reach.
+- **Conversations are easier to scan.** The first new message of each day shows its date and time, and newly completed replies reveal their time beside the copy button. An interrupted turn has just one copy button for its last reply.
+- **The workspace feels more consistent.** The composer has more breathing room, and sidebar and Settings controls use the same hover styling.
+
 ## 1.12.0 — September 29, 2026
 
 ### New
