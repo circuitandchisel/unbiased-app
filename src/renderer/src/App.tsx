@@ -24,7 +24,7 @@ import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
-import { Bot, Check, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
+import { Bot, Check, ChevronLeft, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
@@ -11393,7 +11393,7 @@ const TASK_TEMPLATES: { name: string; schedule: ScheduleSpec; prompt: string; bl
  * has its own list, search, filters and creation flow. A modal frames all of
  * that as an interruption and caps it at 620px while the content wants a page.
  * The nav is not kept visible for the same reason Settings does not keep it —
- * you are somewhere else, and "← Back to app" is the way out.
+ * you are somewhere else, and "Back to app" is the way out.
  *
  * Still not built: describing a task in prose and having the agent derive the
  * schedule. That needs a model round-trip that can fail, and it is a feature
@@ -15393,7 +15393,8 @@ function SettingsView({
             fontFamily: "inherit",
           }}
         >
-          ← Back to app
+          <ChevronLeft size={16} strokeWidth={1.8} aria-hidden="true" />
+          Back to app
         </button>
 {(
           [
