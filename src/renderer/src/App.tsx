@@ -25,6 +25,7 @@ import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import { Check, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
+import { SideChatIdleTracker } from "./side-chat-idle";
 
 type EngineStatus =
   | { state: "starting" }
@@ -1692,6 +1693,7 @@ export function App() {
   const [sideChats, setSideChats] = useState<string[]>([]);
   const [sideContexts, setSideContexts] = useState<Record<string, string | null>>({});
   const [sideNonce, setSideNonce] = useState(0);
+  const sideChatIdleRef = useRef(new SideChatIdleTracker());
   // Text handed to the MAIN composer from outside it — the embedded
   // browser's "Add … to chat" context-menu items land here and are
   // consumed into annotation chips by the same contextChip mechanism
@@ -1958,7 +1960,10 @@ export function App() {
       setBrowserTitles({});
       // Matching closeSideChat: the engine drops each ephemeral pane, so the
       // fork of the previous conversation doesn't linger under the cap.
-      for (const id of sideChatsRef.current) void window.unbiased.resetSideChat(id);
+      for (const id of sideChatsRef.current) {
+        sideChatIdleRef.current.close(id);
+        void window.unbiased.resetSideChat(id);
+      }
       setSideChats([]);
       setPanelMode("launcher");
       setSideOpenPersisted(false);
@@ -2459,11 +2464,13 @@ export function App() {
   function openSideChatTab() {
     setSidePlusOpen(false);
     if (sideChats.length >= MAX_TABS_PER_KIND) {
+      sideChatIdleRef.current.use(sideChats[sideChats.length - 1]);
       setPanelMode(sideChats[sideChats.length - 1]);
       setSideOpenPersisted(true);
       return;
     }
     const id = `side:${tabIdRef.current++}`;
+    sideChatIdleRef.current.use(id);
     setSideChats((cs) => [...cs, id]);
     setPanelMode(id);
     setSideOpenPersisted(true);
@@ -2586,6 +2593,7 @@ export function App() {
       id = `side:${tabIdRef.current++}`;
       setSideChats((cs) => [...cs, id]);
     }
+    sideChatIdleRef.current.use(id);
     setSideContexts((m) => ({ ...m, [id]: text }));
     setPanelMode(id);
     setSideOpenPersisted(true);
@@ -2665,6 +2673,7 @@ export function App() {
   // the ephemeral pane (matching every other tab kind, and freeing the
   // slot under the cap).
   function closeSideChat(id: string) {
+    sideChatIdleRef.current.close(id);
     setSideChats((cs) => cs.filter((x) => x !== id));
     setSideContexts((m) => {
       const rest = { ...m };
@@ -2673,6 +2682,23 @@ export function App() {
     });
     void window.unbiased.resetSideChat(id);
   }
+
+  useEffect(() => {
+    if (sideChats.length === 0) return;
+    const closeIdleChats = () => {
+      for (const id of sideChatIdleRef.current.expired()) closeSideChat(id);
+    };
+    const timer = window.setInterval(closeIdleChats, 60_000);
+    window.addEventListener("focus", closeIdleChats);
+    document.addEventListener("visibilitychange", closeIdleChats);
+    closeIdleChats();
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", closeIdleChats);
+      document.removeEventListener("visibilitychange", closeIdleChats);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sideChats]);
 
   const connected = status.state === "connected";
   // The engine's list plus any thread it does not know about yet, so a chat
@@ -4305,7 +4331,10 @@ export function App() {
                   }}
                 >
                   <button
-                    onClick={() => setPanelMode(t)}
+                    onClick={() => {
+                      if (t.startsWith("side:")) sideChatIdleRef.current.use(t);
+                      setPanelMode(t);
+                    }}
                     title={cfg.title ?? cfg.label}
                     aria-current={panelMode === t ? "page" : undefined}
                     data-nopress
@@ -4555,6 +4584,9 @@ export function App() {
           {sideChats.map((id) => (
           <div
             key={id}
+            onPointerDown={() => sideChatIdleRef.current.use(id)}
+            onKeyDown={() => sideChatIdleRef.current.use(id)}
+            onWheel={() => sideChatIdleRef.current.use(id)}
             style={{
               flex: 1,
               minHeight: 0,
@@ -4571,6 +4603,7 @@ export function App() {
             onContextClear={() => setSideContexts((m) => ({ ...m, [id]: null }))}
             onPreviewImage={(a) => void openImagePreview(a)}
             onOpenLink={openInBrowser}
+            onBusyChange={(busy) => sideChatIdleRef.current.setBusy(id, busy)}
             accessMode={accessMode}
             onAccessModeChange={changeAccessMode}
             planMode={planMode}
