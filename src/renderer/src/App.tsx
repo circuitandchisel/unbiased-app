@@ -1767,6 +1767,7 @@ export function App() {
   }
 
   const [navOpen, setNavOpen] = useState(() => localStorage.getItem("navOpen") !== "false");
+  const NAV_RAIL_WIDTH = 60;
   // Nav width is user-draggable within [180, 400]px, persisted.
   const NAV_MIN = 180;
   const NAV_MAX = 400;
@@ -1810,7 +1811,7 @@ export function App() {
         return;
       }
       if (!draggingRef.current) return;
-      const contentLeft = navOpenRef.current ? navWidthRef.current : 0;
+      const contentLeft = navOpenRef.current ? navWidthRef.current : NAV_RAIL_WIDTH;
       const contentWidth = Math.max(window.innerWidth - contentLeft, 1);
       const frac = (window.innerWidth - e.clientX) / contentWidth;
       setSideFrac(Math.min(Math.max(frac, 0.25), 0.7));
@@ -2006,6 +2007,8 @@ export function App() {
   async function openProjectDialog() {
     const { path, name } = await window.unbiased.chooseProject();
     if (!path || !name) return; // cancelled
+    setScheduledOpen(false);
+    setConnectorsOpen(false);
     snapshotSideView();
     setActiveProject({ name, path });
     setActiveThreadId(null);
@@ -2739,8 +2742,8 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || panelMode === "agentmirror");
-  const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : 0) + 320 + 300 + 8;
-  const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : 0)) * 0.65));
+  const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : NAV_RAIL_WIDTH) + 320 + 300 + 8;
+  const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : NAV_RAIL_WIDTH)) * 0.65));
   const focusMainComposer = () =>
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-pane-id="main"]')?.focus());
   const appCommandRef = useRef<(command: string) => void>(() => {});
@@ -3327,6 +3330,64 @@ export function App() {
         <ChatFooter status={status} busy={mainBusy} />
       </nav>
       )}
+      {!navOpen && (
+        <nav
+          className="u-sidebar"
+          aria-label="Collapsed sidebar"
+          style={{ width: NAV_RAIL_WIDTH, flexShrink: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 2 }}
+        >
+          <div style={{ padding: "16px 10px 0" }}>
+            <SidebarRailButton label="Expand sidebar" onClick={toggleNav}>
+              <PanelIcon />
+            </SidebarRailButton>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "15px 10px 12px" }}>
+            <SidebarRailButton label="New chat" onClick={() => void newChat()}>
+              <NewChatIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Open project" onClick={() => void openProjectDialog()}>
+              <FolderPlusIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Connectors" active={connectorsOpen} onClick={() => { setScheduledOpen(false); setConnectorsOpen(true); }}>
+              <PlugIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Scheduled" active={scheduledOpen} badge={missedCount} onClick={() => { setConnectorsOpen(false); setScheduledOpen(true); }}>
+              <ClockIcon />
+            </SidebarRailButton>
+          </div>
+          <div className="u-sidebar-bottom" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "8px 10px" }}>
+            {update && (
+              <SidebarRailButton
+                label={updateStaged ? "Install update" : "Download update"}
+                onClick={() => void (updateStaged ? window.unbiased.applyUpdate() : window.unbiased.downloadUpdate())}
+              >
+                <DownloadIcon />
+              </SidebarRailButton>
+            )}
+            <SidebarRailButton
+              label="What's new"
+              badge={changelogUnread}
+              onClick={() => {
+                localStorage.setItem("changelogSeen", releases[0]?.version ?? "");
+                setChangelogUnread(false);
+                setShowChangelog(true);
+              }}
+            >
+              <BellIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Settings" onClick={() => setShowSettings(true)}>
+              <GearIcon />
+            </SidebarRailButton>
+            <span
+              title={status.state === "connected" ? `Connected to Pareto · engine ${status.engineVersion}${mainBusy ? " · thinking" : ""}` : status.state === "starting" ? "Starting engine" : status.detail}
+              aria-label={status.state === "connected" ? "Engine connected" : status.state === "starting" ? "Engine starting" : "Engine disconnected"}
+              style={{ width: 40, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              <span style={{ width: 7, height: 7, borderRadius: 4, background: status.state === "connected" ? colors.ok : status.state === "starting" ? colors.accent : colors.err }} />
+            </span>
+          </div>
+        </nav>
+      )}
       {navOpen && (
         <div
           onMouseDown={() => {
@@ -3385,13 +3446,11 @@ export function App() {
             instead of the whole window: the nav stays put and you leave the
             way you leave a chat — by clicking somewhere else in it. */}
         {connectorsOpen ? (
-          <ConnectorsView navOpen={navOpen} onToggleNav={toggleNav} />
+          <ConnectorsView />
         ) : scheduledOpen ? (
           <ScheduledView
             defaultProject={activeProjectPath ?? null}
             projects={sidebar.projects}
-            navOpen={navOpen}
-            onToggleNav={toggleNav}
             focusKey={scheduledFocus}
             onFocusHandled={() => setScheduledFocus(null)}
             onOpenThread={(id) => {
@@ -3424,11 +3483,6 @@ export function App() {
           }}
         >
           <HeaderEdge />
-          {!navOpen && (
-            <IconButton title="Show sidebar" onClick={toggleNav}>
-              <PanelIcon />
-            </IconButton>
-          )}
           <span
             style={{
               fontSize: 14,
@@ -11598,7 +11652,7 @@ function ConnectorsPanel({ onClose, onOpenFull }: { onClose: () => void; onOpenF
  */
 let connectorsCache: ConnectorInfo[] = [];
 
-function ConnectorsView({ navOpen, onToggleNav }: { navOpen: boolean; onToggleNav: () => void }) {
+function ConnectorsView() {
   const [items, setItems] = useState<ConnectorInfo[]>(connectorsCache);
   // Only the very first visit of a session has nothing to show.
   const [loading, setLoading] = useState(connectorsCache.length === 0);
@@ -11723,11 +11777,6 @@ function ConnectorsView({ navOpen, onToggleNav }: { navOpen: boolean; onToggleNa
         }}
       >
         <HeaderEdge />
-        {!navOpen && (
-          <IconButton title="Show sidebar" onClick={onToggleNav}>
-            <PanelIcon />
-          </IconButton>
-        )}
         <span style={{ fontSize: 14, fontWeight: 500, color: colors.fg, letterSpacing: "var(--track-body)" }}>
           Connectors
         </span>
@@ -12202,16 +12251,12 @@ function ScheduledView({
   defaultProject,
   projects,
   onOpenThread,
-  navOpen,
-  onToggleNav,
   focusKey,
   onFocusHandled,
 }: {
   defaultProject: string | null;
   projects: ProjectInfo[];
   onOpenThread: (threadId: string) => void;
-  navOpen: boolean;
-  onToggleNav: () => void;
   focusKey?: string | null;
   onFocusHandled?: () => void;
 }) {
@@ -12400,8 +12445,7 @@ function ScheduledView({
     // inside it scroll, and everything below the fold painted on the bare
     // white body. Measured live: a 950px window, this div at 1084px.
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-      {/* The same chrome a conversation gets — sidebar toggle when hidden, then the title
-          — so this reads as another place in the app rather than a mode you
+      {/* The same chrome a conversation gets — so this reads as another place in the app rather than a mode you
           have been dropped into. No back button: the nav is right there, and
           a chat does not have one either. */}
       <header
@@ -12416,11 +12460,6 @@ function ScheduledView({
         }}
       >
         <HeaderEdge />
-        {!navOpen && (
-          <IconButton title="Show sidebar" onClick={onToggleNav}>
-            <PanelIcon />
-          </IconButton>
-        )}
         <span
           style={{
             fontSize: 14,
@@ -16420,6 +16459,68 @@ function SidebarAction({
     >
       {icon}
       {children}
+    </button>
+  );
+}
+
+function SidebarRailButton({
+  label,
+  onClick,
+  active = false,
+  badge = false,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  badge?: number | boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className="u-sidebar-row"
+      data-active={active}
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        padding: 0,
+        border: "none",
+        borderRadius: 9,
+        color: active ? colors.fg : "var(--fg-soft)",
+        cursor: "pointer",
+      }}
+    >
+      <span style={{ display: "flex", transform: "scale(1.15)" }}>{children}</span>
+      {badge && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 3,
+            right: 3,
+            minWidth: 6,
+            height: 6,
+            padding: typeof badge === "number" ? "1px 2px" : 0,
+            borderRadius: 999,
+            background: colors.accent,
+            color: "var(--accent-fg)",
+            fontSize: 9,
+            lineHeight: 1,
+            fontWeight: 600,
+          }}
+        >
+          {typeof badge === "number" ? (badge > 9 ? "9+" : badge) : null}
+        </span>
+      )}
     </button>
   );
 }
