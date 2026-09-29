@@ -23,6 +23,9 @@ import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
+import { Check, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
+import { ConversationDrafts } from "./conversation-drafts";
+import { SideChatIdleTracker } from "./side-chat-idle";
 
 type EngineStatus =
   | { state: "starting" }
@@ -491,6 +494,7 @@ type ScheduledTaskView = {
 declare global {
   interface Window {
     unbiased: {
+      onAppCommand: (cb: (command: string) => void) => () => void;
       getEngineStatus: () => Promise<EngineStatus>;
       onEngineStatus: (cb: (status: EngineStatus) => void) => () => void;
       checkUpdate: () => Promise<UpdateInfo | { none: true }>;
@@ -730,8 +734,10 @@ declare global {
       ) => Promise<{ ok: boolean; error?: string }>;
       revealProject: (path: string) => Promise<{ ok: boolean }>;
       readFile: (path: string) => Promise<{ fullPath: string; relPath?: string; content?: string; error?: string }>;
+      revealFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
+      saveFileCopy: (path: string) => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
       fileExists: (path: string) => Promise<{ exists: boolean }>;
-      readImage: (path: string) => Promise<{ dataUrl?: string; error?: string }>;
+      readImage: (path: string) => Promise<{ dataUrl?: string; fullPath?: string; error?: string }>;
       listDir: (dir?: string) => Promise<{ dir: string; entries: DirEntry[]; error?: string }>;
       searchRefs: (word: string) => Promise<{ results: RefHit[]; truncated?: boolean; error?: string }>;
       blameLine: (file: string, line: number) => Promise<BlameInfo>;
@@ -955,8 +961,8 @@ function themeVars(t: ThemeConfig): Record<string, string> {
     "--dim": mixHex(t.surface, t.ink, 0.52),
     // Between fg and dim: sidebar thread titles, Codex-style.
     "--fg-soft": mixHex(t.surface, t.ink, 0.78),
-    // Assistant prose: a step softer than pure fg, like Codex replies.
-    "--fg-msg": mixHex(t.surface, t.ink, 0.88),
+    // Assistant prose stays readable without competing with controls and headings.
+    "--fg-msg": mixHex(t.surface, t.ink, 0.84),
     "--gutter": m(0.25),
     "--font-ui": `${t.fonts.ui}, -apple-system, system-ui, sans-serif`,
     "--font-code": `${t.fonts.code}, ui-monospace, Menlo, monospace`,
@@ -1669,17 +1675,25 @@ export function App() {
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
   }>({ entries: [], nonce: 0 });
+  const mainDraftsRef = useRef<ConversationDrafts<Attachment> | null>(null);
+  if (!mainDraftsRef.current) mainDraftsRef.current = new ConversationDrafts(null, 0);
+  useEffect(() => {
+    if (authed === "out") mainDraftsRef.current = new ConversationDrafts(null, 0);
+    // A signed-out profile must not retain unsent text for the next account.
+  }, [authed]);
   // sideOpen = the whole right panel is visible; sideChatEnabled = the chat
   // tab exists in it. Kept separate so opening a file/image preview doesn't
   // drag the side chat along with it. Neither restores across launches —
   // the app always starts with the panel closed.
   const [sideOpen, setSideOpen] = useState(false);
+  const sidePanelRef = useRef<HTMLDivElement>(null);
   // Side-chat tabs: each entry is an engine pane id ("side:<n>"), each tab
   // its own ephemeral fork of the main conversation. Context chips are per
   // tab. sideNonce remounts them all when the main conversation changes.
   const [sideChats, setSideChats] = useState<string[]>([]);
   const [sideContexts, setSideContexts] = useState<Record<string, string | null>>({});
   const [sideNonce, setSideNonce] = useState(0);
+  const sideChatIdleRef = useRef(new SideChatIdleTracker());
   // Text handed to the MAIN composer from outside it — the embedded
   // browser's "Add … to chat" context-menu items land here and are
   // consumed into annotation chips by the same contextChip mechanism
@@ -1754,6 +1768,12 @@ export function App() {
     const stored = Number(localStorage.getItem("navWidth"));
     return stored >= NAV_MIN && stored <= NAV_MAX ? stored : 248;
   });
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const update = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
   // The main/side split is a FRACTION of the content area (not pixels), so
   // collapsing the nav or resizing the window scales both panes in ratio.
   const [sideFrac, setSideFrac] = useState(() => {
@@ -1940,7 +1960,10 @@ export function App() {
       setBrowserTitles({});
       // Matching closeSideChat: the engine drops each ephemeral pane, so the
       // fork of the previous conversation doesn't linger under the cap.
-      for (const id of sideChatsRef.current) void window.unbiased.resetSideChat(id);
+      for (const id of sideChatsRef.current) {
+        sideChatIdleRef.current.close(id);
+        void window.unbiased.resetSideChat(id);
+      }
       setSideChats([]);
       setPanelMode("launcher");
       setSideOpenPersisted(false);
@@ -2116,6 +2139,7 @@ export function App() {
   async function deleteThread(id: string) {
     sidePanelSnapshots.current.delete(id);
     await window.unbiased.deleteThread(id);
+    mainDraftsRef.current?.deleteThread(id);
     if (id === activeThreadId) {
       setActiveThreadId(null);
       setMainStarted(false);
@@ -2440,11 +2464,13 @@ export function App() {
   function openSideChatTab() {
     setSidePlusOpen(false);
     if (sideChats.length >= MAX_TABS_PER_KIND) {
+      sideChatIdleRef.current.use(sideChats[sideChats.length - 1]);
       setPanelMode(sideChats[sideChats.length - 1]);
       setSideOpenPersisted(true);
       return;
     }
     const id = `side:${tabIdRef.current++}`;
+    sideChatIdleRef.current.use(id);
     setSideChats((cs) => [...cs, id]);
     setPanelMode(id);
     setSideOpenPersisted(true);
@@ -2567,6 +2593,7 @@ export function App() {
       id = `side:${tabIdRef.current++}`;
       setSideChats((cs) => [...cs, id]);
     }
+    sideChatIdleRef.current.use(id);
     setSideContexts((m) => ({ ...m, [id]: text }));
     setPanelMode(id);
     setSideOpenPersisted(true);
@@ -2594,7 +2621,7 @@ export function App() {
     addFileTab({
       name: a.name,
       relPath: a.name,
-      fullPath: a.path,
+      fullPath: result.fullPath ?? a.path,
       imageSrc: result.dataUrl,
       error: result.error,
     });
@@ -2605,7 +2632,7 @@ export function App() {
     const name = pathText.split("/").filter(Boolean).pop() ?? pathText;
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(name)) {
       const r = await window.unbiased.readImage(pathText);
-      return { name, relPath: name, fullPath: pathText, imageSrc: r.dataUrl, error: r.error };
+      return { name, relPath: name, fullPath: r.fullPath ?? pathText, imageSrc: r.dataUrl, error: r.error };
     }
     const result = await window.unbiased.readFile(pathText);
     return {
@@ -2616,6 +2643,20 @@ export function App() {
       line,
       error: result.error,
     };
+  }
+
+  async function refreshOpenFile(id: number, file: OpenFileInfo): Promise<OpenFileInfo> {
+    const info = await loadFileInfo(file.fullPath, file.line);
+    setOpenFiles((fs) => fs.map((f) =>
+      f.id === id && f.info.fullPath === file.fullPath ? { ...f, info } : f,
+    ));
+    return info;
+  }
+
+  async function refreshTreeFile(tabId: number, file: OpenFileInfo): Promise<OpenFileInfo> {
+    const info = await loadFileInfo(file.fullPath, file.line);
+    setTreeFiles((files) => files[tabId]?.fullPath === file.fullPath ? { ...files, [tabId]: info } : files);
+    return info;
   }
 
   async function openFileInPanel(pathText: string, line?: number) {
@@ -2632,6 +2673,7 @@ export function App() {
   // the ephemeral pane (matching every other tab kind, and freeing the
   // slot under the cap).
   function closeSideChat(id: string) {
+    sideChatIdleRef.current.close(id);
     setSideChats((cs) => cs.filter((x) => x !== id));
     setSideContexts((m) => {
       const rest = { ...m };
@@ -2640,6 +2682,23 @@ export function App() {
     });
     void window.unbiased.resetSideChat(id);
   }
+
+  useEffect(() => {
+    if (sideChats.length === 0) return;
+    const closeIdleChats = () => {
+      for (const id of sideChatIdleRef.current.expired()) closeSideChat(id);
+    };
+    const timer = window.setInterval(closeIdleChats, 60_000);
+    window.addEventListener("focus", closeIdleChats);
+    document.addEventListener("visibilitychange", closeIdleChats);
+    closeIdleChats();
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", closeIdleChats);
+      document.removeEventListener("visibilitychange", closeIdleChats);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sideChats]);
 
   const connected = status.state === "connected";
   // The engine's list plus any thread it does not know about yet, so a chat
@@ -2672,6 +2731,38 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || panelMode === "agentmirror");
+  const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : 0) + 320 + 300 + 8;
+  const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : 0)) * 0.65));
+  const focusMainComposer = () =>
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-pane-id="main"]')?.focus());
+  const appCommandRef = useRef<(command: string) => void>(() => {});
+  appCommandRef.current = (command) => {
+    if (authed !== "in") return;
+    switch (command) {
+      case "new-chat":
+        setShowSettings(false);
+        void newChat().then(focusMainComposer);
+        break;
+      case "toggle-sidebar":
+        toggleNav();
+        break;
+      case "show-main-chat":
+        setShowSettings(false);
+        setScheduledOpen(false);
+        setConnectorsOpen(false);
+        setSideOpenPersisted(false);
+        focusMainComposer();
+        break;
+      case "show-side-panel":
+        setShowSettings(false);
+        setScheduledOpen(false);
+        setConnectorsOpen(false);
+        setSideOpenPersisted(true);
+        requestAnimationFrame(() => sidePanelRef.current?.focus());
+        break;
+    }
+  };
+  useEffect(() => window.unbiased.onAppCommand((command) => appCommandRef.current(command)), []);
   // Git operations target the conversation's actual checkout — the
   // worktree when isolated, else the project directory. (Referenced by
   // the branch-switcher handlers above; they run post-render.)
@@ -2785,6 +2876,7 @@ export function App() {
         ...themeVars(theme),
         height: "100vh",
         display: "flex",
+        position: "relative",
         background: colors.bg,
         color: colors.fg,
         fontFamily: "var(--font-ui)",
@@ -3227,15 +3319,36 @@ export function App() {
             document.body.style.userSelect = "none";
             document.body.style.cursor = "col-resize";
           }}
-          title="Drag to resize"
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 40 : 10;
+            const next = e.key === "ArrowLeft" ? navWidth - step
+              : e.key === "ArrowRight" ? navWidth + step
+              : e.key === "Home" ? NAV_MIN
+              : e.key === "End" ? NAV_MAX
+              : null;
+            if (next === null) return;
+            e.preventDefault();
+            const width = Math.min(Math.max(next, NAV_MIN), NAV_MAX);
+            setNavWidth(width);
+            localStorage.setItem("navWidth", String(width));
+          }}
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={NAV_MIN}
+          aria-valuemax={NAV_MAX}
+          aria-valuenow={navWidth}
+          tabIndex={0}
+          title="Drag or use arrow keys to resize"
           // Invisible grab strip straddling the nav's border; the nav's own
           // borderRight draws the line, so this adds no visual weight.
           style={{
-            width: 5,
+            width: 10,
             flexShrink: 0,
             cursor: "col-resize",
             background: "transparent",
             marginLeft: -5,
+            marginRight: -5,
             zIndex: 5,
           }}
         />
@@ -3247,7 +3360,7 @@ export function App() {
           // zero basis, a column whose panel is hidden claims only its old
           // share of the row and leaves the rest of the window empty — the
           // page ends up pinned left with black beside it.
-          flex: sideVisible ? `${1 - sideFrac} 1 0%` : "1 1 0%",
+          flex: sideVisible && !sideOverlay ? `${1 - sideFrac} 1 0%` : "1 1 0%",
           minWidth: 320,
           display: "flex",
           flexDirection: "column",
@@ -3686,6 +3799,7 @@ export function App() {
           connected={connected}
           reset={mainReset}
           threadId={activeThreadId}
+          composerDrafts={mainDraftsRef.current}
           persistTranscript
           planMode={planMode}
           onTogglePlanMode={togglePlanMode}
@@ -4070,16 +4184,37 @@ export function App() {
         )}
       </div>
 
-      {sideVisible && (
+      {sideVisible && !sideOverlay && (
         <div
           onMouseDown={() => {
             draggingRef.current = true;
             document.body.style.userSelect = "none";
             document.body.style.cursor = "col-resize";
           }}
-          title="Drag to resize"
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 0.1 : 0.03;
+            const next = e.key === "ArrowLeft" ? sideFrac + step
+              : e.key === "ArrowRight" ? sideFrac - step
+              : e.key === "Home" ? 0.7
+              : e.key === "End" ? 0.25
+              : null;
+            if (next === null) return;
+            e.preventDefault();
+            const fraction = Math.min(Math.max(next, 0.25), 0.7);
+            setSideFrac(fraction);
+            localStorage.setItem("sideFrac", String(fraction));
+          }}
+          role="separator"
+          aria-label="Resize side panel"
+          aria-orientation="vertical"
+          aria-valuemin={30}
+          aria-valuemax={75}
+          aria-valuenow={Math.round((1 - sideFrac) * 100)}
+          aria-valuetext={`${Math.round((1 - sideFrac) * 100)}% side panel width`}
+          tabIndex={0}
+          title="Drag or use arrow keys to resize"
           style={{
-            width: 5,
+            width: 8,
             flexShrink: 0,
             cursor: "col-resize",
             background: "transparent",
@@ -4090,12 +4225,26 @@ export function App() {
       {/* Always mounted so the side conversation survives hide/show; only
           its visibility toggles. */}
         <div
+          ref={sidePanelRef}
+          role="region"
+          aria-label="Side panel"
+          tabIndex={-1}
           style={{
-            flex: sideVisible ? `${sideFrac} 1 0%` : "0 0 0%",
+            flex: sideVisible && !sideOverlay ? `${sideFrac} 1 0%` : "0 0 0%",
             minWidth: sideVisible ? 300 : 0,
             display: sideVisible ? "flex" : "none",
             flexDirection: "column",
             background: "var(--nav-bg)",
+            ...(sideOverlay ? {
+              position: "absolute" as const,
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: sideOverlayWidth,
+              borderLeft: `1px solid ${colors.border}`,
+              boxShadow: "-8px 0 24px rgba(0,0,0,0.25)",
+              zIndex: 5,
+            } : {}),
           }}
         >
           <header
@@ -4107,6 +4256,7 @@ export function App() {
               flexShrink: 0,
             }}
           >
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flex: tabOrder.length > 0 ? "1 1 auto" : "0 0 auto", minWidth: 0, overflowX: "auto" }}>
             {tabOrder.map((t) => {
               const agent = t.startsWith("agent:")
                 ? openAgents.find((a) => `agent:${a.threadId}` === t)
@@ -4167,42 +4317,49 @@ export function App() {
                                   aria: "Close terminal",
                                 };
               return (
-                <button
+                <div
                   key={t}
-                  onClick={() => setPanelMode(t)}
-                  title={cfg.title}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 8,
                     background: panelMode === t ? colors.panel : "transparent",
                     color: panelMode === t ? colors.fg : colors.dim,
-                    border: "none",
                     borderRadius: 8,
-                    padding: "6px 12px",
-                    fontSize: 13,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    minWidth: 0,
-                    ...(t.startsWith("file:") ? { maxWidth: 220 } : {}),
+                    minWidth: 90,
+                    maxWidth: 220,
+                    flexShrink: 0,
                   }}
                 >
-                  {cfg.icon}
-                  <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cfg.label}</span>
-                  <span
-                    role="button"
-                    aria-label={cfg.aria}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      cfg.close();
+                  <button
+                    onClick={() => {
+                      if (t.startsWith("side:")) sideChatIdleRef.current.use(t);
+                      setPanelMode(t);
                     }}
-                    style={{ display: "flex", color: colors.dim, marginLeft: 2 }}
+                    title={cfg.title ?? cfg.label}
+                    aria-current={panelMode === t ? "page" : undefined}
+                    data-nopress
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0,
+                      padding: "6px 4px 6px 12px", background: "transparent", border: "none",
+                      color: "inherit", fontSize: 13, fontFamily: "inherit", cursor: "pointer",
+                    }}
+                  >
+                    {cfg.icon}
+                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cfg.label}</span>
+                  </button>
+                  <button
+                    aria-label={cfg.aria}
+                    title={cfg.aria}
+                    onClick={cfg.close}
+                    data-nopress
+                    style={{ display: "flex", alignItems: "center", padding: "6px 8px 6px 4px", background: "transparent", border: "none", color: colors.dim, cursor: "pointer" }}
                   >
                     <CloseIcon />
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
+            </div>
             <span ref={sidePlusRef} style={{ position: "relative", display: "flex" }}>
               <IconButton title="Open side panel tab" onClick={() => setSidePlusOpen((o) => !o)}>
                 <PlusIcon />
@@ -4253,7 +4410,7 @@ export function App() {
                 </div>
               )}
             </span>
-            <span style={{ flex: 1 }} />
+            {tabOrder.length === 0 && <span style={{ flex: 1 }} />}
             {previewable && (
               <button
                 onClick={() => setPreviewOn((o) => !o)}
@@ -4276,6 +4433,11 @@ export function App() {
             {panelMode.startsWith("files:") && (
               <IconButton title={treeVisible ? "Hide file tree" : "Show file tree"} onClick={toggleTreeVisible}>
                 <FoldersIcon />
+              </IconButton>
+            )}
+            {sideOverlay && (
+              <IconButton title="Close side panel" onClick={() => setSideOpenPersisted(false)}>
+                <CloseIcon />
               </IconButton>
             )}
           </header>
@@ -4307,6 +4469,7 @@ export function App() {
                   file={f.info}
                   onOpenFile={(p, l) => void openFileInPanel(p, l)}
                   onOpenLink={openInBrowser}
+                  onRefresh={() => refreshOpenFile(f.id, f.info)}
                   preview={previewOn}
                 />
               ),
@@ -4341,6 +4504,7 @@ export function App() {
                     file={treeFile}
                     onOpenFile={(p, l) => void openFileInTree(tabId, p, l)}
                     onOpenLink={openInBrowser}
+                    onRefresh={() => refreshTreeFile(tabId, treeFile)}
                     preview={previewOn}
                   />
                 ) : (
@@ -4420,6 +4584,9 @@ export function App() {
           {sideChats.map((id) => (
           <div
             key={id}
+            onPointerDown={() => sideChatIdleRef.current.use(id)}
+            onKeyDown={() => sideChatIdleRef.current.use(id)}
+            onWheel={() => sideChatIdleRef.current.use(id)}
             style={{
               flex: 1,
               minHeight: 0,
@@ -4436,6 +4603,7 @@ export function App() {
             onContextClear={() => setSideContexts((m) => ({ ...m, [id]: null }))}
             onPreviewImage={(a) => void openImagePreview(a)}
             onOpenLink={openInBrowser}
+            onBusyChange={(busy) => sideChatIdleRef.current.setBusy(id, busy)}
             accessMode={accessMode}
             onAccessModeChange={changeAccessMode}
             planMode={planMode}
@@ -6832,18 +7000,19 @@ function buildMdComponents(
       </blockquote>
     ),
     p: (props: { children?: React.ReactNode }) => <p style={{ margin: "12px 0" }}>{props.children}</p>,
+    strong: (props: { children?: React.ReactNode }) => <strong style={{ fontWeight: 600 }}>{props.children}</strong>,
     h1: (props: { children?: React.ReactNode }) => (
-      <h1 style={{ fontSize: "1.5em", fontWeight: 650, margin: "28px 0 12px", color: "var(--fg)" }}>
+      <h1 style={{ fontSize: "1.5em", fontWeight: 600, margin: "28px 0 12px", color: "var(--fg)" }}>
         {props.children}
       </h1>
     ),
     h2: (props: { children?: React.ReactNode }) => (
-      <h2 style={{ fontSize: "1.35em", fontWeight: 650, margin: "26px 0 12px", color: "var(--fg)" }}>
+      <h2 style={{ fontSize: "1.35em", fontWeight: 600, margin: "26px 0 12px", color: "var(--fg)" }}>
         {props.children}
       </h2>
     ),
     h3: (props: { children?: React.ReactNode }) => (
-      <h3 style={{ fontSize: "1.15em", fontWeight: 600, margin: "22px 0 10px", color: "var(--fg)" }}>
+      <h3 style={{ fontSize: "1.15em", fontWeight: 550, margin: "22px 0 10px", color: "var(--fg)" }}>
         {props.children}
       </h3>
     ),
@@ -7271,14 +7440,94 @@ function FileViewer({
   file,
   onOpenFile,
   onOpenLink,
+  onRefresh,
   preview,
 }: {
   file: OpenFileInfo;
   onOpenFile?: (path: string, line?: number) => void;
   onOpenLink?: (url: string) => void;
+  onRefresh: () => Promise<OpenFileInfo>;
   preview?: boolean;
 }) {
   const content = file.content ?? "";
+  const canCopy = !file.error && file.content !== undefined;
+  const copyLabel = /\.(md|markdown)$/i.test(file.name) ? "Copy as Markdown" : "Copy contents";
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null);
+  const noticeTimer = useRef<number | null>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  function showNotice(message: string, error = false) {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    setNotice({ message, error });
+    noticeTimer.current = window.setTimeout(() => setNotice(null), error ? 4000 : 1600);
+  }
+  useEffect(() => () => {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+  }, []);
+  useEffect(() => {
+    setActionsOpen(false);
+    setNotice(null);
+  }, [file.fullPath]);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!actionsRef.current?.contains(e.target as Node)) setActionsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setActionsOpen(false);
+        actionsRef.current?.querySelector<HTMLButtonElement>('[aria-label="File actions"]')?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [actionsOpen]);
+
+  async function copyContents() {
+    if (!canCopy) return;
+    setActionsOpen(false);
+    try {
+      await navigator.clipboard.writeText(content);
+      showNotice("Copied");
+    } catch {
+      showNotice("Could not copy this file.", true);
+    }
+  }
+
+  async function revealFile() {
+    setActionsOpen(false);
+    try {
+      const result = await window.unbiased.revealFile(file.fullPath);
+      if (!result.ok) showNotice(result.error ?? "Could not show this file in Finder.", true);
+    } catch {
+      showNotice("Could not show this file in Finder.", true);
+    }
+  }
+
+  async function saveCopy() {
+    setActionsOpen(false);
+    try {
+      const result = await window.unbiased.saveFileCopy(file.fullPath);
+      if (result.canceled) return;
+      showNotice(result.ok ? "Copy saved" : result.error ?? "Could not save a copy.", !result.ok);
+    } catch {
+      showNotice("Could not save a copy.", true);
+    }
+  }
+
+  async function refreshFile() {
+    setActionsOpen(false);
+    try {
+      const updated = await onRefresh();
+      showNotice(updated.error ?? "Refreshed", !!updated.error);
+    } catch {
+      showNotice("Could not refresh this file.", true);
+    }
+  }
   // The preview component map memoizes per file — the link handler rides a
   // ref so the memo never closes over a stale prop.
   const onOpenLinkRef = useRef(onOpenLink);
@@ -7513,6 +7762,7 @@ function FileViewer({
 
   function onCrumbClick(i: number, e: React.MouseEvent<HTMLElement>) {
     if (!onOpenFile) return;
+    setActionsOpen(false);
     const selfAbs = "/" + fullSegs.slice(0, segOffset + i + 1).join("/");
     const parentSegs = fullSegs.slice(0, segOffset + i);
     // Root crumb: no parent to list siblings from — list the crumb itself.
@@ -7523,38 +7773,69 @@ function FileViewer({
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
       <div ref={headerRef} style={{ position: "relative", borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
-        <div
-          style={{
-            padding: "10px 16px",
-            fontSize: 12.5,
-            color: colors.dim,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-          title={file.fullPath}
-        >
-          {crumbs.map((c, i) => (
-            <span key={i}>
-              {i > 0 && <span style={{ margin: "0 6px", color: "var(--gutter)" }}>›</span>}
+        <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+          <div
+            style={{
+              padding: "10px 16px",
+              fontSize: 12.5,
+              color: colors.dim,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              flex: 1,
+              minWidth: 0,
+            }}
+            title={file.fullPath}
+          >
+            {crumbs.map((c, i) => (
+              <span key={i}>
+                {i > 0 && <span style={{ margin: "0 6px", color: "var(--gutter)" }}>›</span>}
+                <button
+                  onClick={(e) => onCrumbClick(i, e)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    fontFamily: "inherit",
+                    fontSize: "inherit",
+                    color: i === crumbs.length - 1 ? colors.fg : colors.dim,
+                    cursor: onOpenFile ? "pointer" : "default",
+                  }}
+                >
+                  {c}
+                </button>
+              </span>
+            ))}
+          </div>
+          <div ref={actionsRef} style={{ position: "relative", display: "flex", alignItems: "center", gap: 2, paddingRight: 10, flexShrink: 0 }}>
+            {canCopy && (
               <button
-                onClick={(e) => onCrumbClick(i, e)}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
-                  fontFamily: "inherit",
-                  fontSize: "inherit",
-                  color: i === crumbs.length - 1 ? colors.fg : colors.dim,
-                  cursor: onOpenFile ? "pointer" : "default",
-                }}
+                onClick={() => void copyContents()}
+                title={copyLabel}
+                aria-label={copyLabel}
+                style={{ display: "flex", padding: 5, border: "none", background: "transparent", color: notice?.message === "Copied" ? colors.ok : colors.dim, cursor: "pointer" }}
               >
-                {c}
+                {notice?.message === "Copied" ? <Check size={15} /> : <Copy size={15} />}
               </button>
-            </span>
-          ))}
+            )}
+            <IconButton title="File actions" onClick={() => { setCrumbMenu(null); setActionsOpen((open) => !open); }}>
+              <MoreHorizontal size={17} />
+            </IconButton>
+            {actionsOpen && (
+              <div
+                role="group"
+                aria-label="File actions"
+                style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, width: 212, padding: 5, background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", zIndex: 30 }}
+              >
+                {canCopy && <MenuItem compact icon={<Copy size={15} />} label={copyLabel} onClick={() => void copyContents()} />}
+                <MenuItem compact icon={<FolderOpen size={15} />} label="Show in Finder" onClick={() => void revealFile()} />
+                <MenuItem compact icon={<Download size={15} />} label="Save a Copy…" onClick={() => void saveCopy()} />
+                <MenuItem compact icon={<RefreshCw size={15} />} label="Refresh" onClick={() => void refreshFile()} />
+              </div>
+            )}
+          </div>
         </div>
         {crumbMenu && onOpenFile && (
           <div
@@ -7584,6 +7865,11 @@ function FileViewer({
           </div>
         )}
       </div>
+      {notice && (
+        <div role="status" style={{ position: "absolute", right: 12, bottom: 12, zIndex: 40, maxWidth: "min(280px, calc(100% - 24px))", background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 6, padding: "7px 10px", color: notice.error ? colors.err : colors.fg, fontSize: 12.5, boxShadow: "0 4px 16px rgba(0,0,0,0.25)" }}>
+          {notice.message}
+        </div>
+      )}
       {file.error ? (
         <div style={{ padding: 24, color: colors.err, fontSize: 13 }}>{file.error}</div>
       ) : preview && /\.svg$/i.test(file.name) ? (
@@ -7946,6 +8232,7 @@ function ChatPane({
   draftSeed,
   composerHeader,
   threadId,
+  composerDrafts,
   persistTranscript,
   onOpenAgent,
   onOpenScheduled,
@@ -7992,6 +8279,7 @@ function ChatPane({
   // The engine thread this pane shows (resumed threads); fresh chats learn
   // their id from the first send. Drives the transcript cache.
   threadId?: string | null;
+  composerDrafts?: ConversationDrafts<Attachment>;
   persistTranscript?: boolean;
   // Opens a sub-agent's conversation in the side panel (lifecycle rows).
   onOpenAgent?: (a: { threadId: string; name: string }) => void;
@@ -8002,7 +8290,10 @@ function ChatPane({
   onOpenSkills?: () => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>(reset.entries);
-  const [draft, setDraft] = useState("");
+  const localDraftsRef = useRef<ConversationDrafts<Attachment> | null>(null);
+  if (!localDraftsRef.current) localDraftsRef.current = new ConversationDrafts(threadId ?? null, reset.nonce);
+  const drafts = composerDrafts ?? localDraftsRef.current;
+  const [draft, setDraft] = useState(() => drafts.current().text);
   // A one-turn preference, like Codex's Computer composer option. Computer
   // tools remain registered for every thread so natural-language desktop
   // requests still work without explicitly selecting this first.
@@ -8040,10 +8331,27 @@ function ChatPane({
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
+  const changeDraft = (text: string) => {
+    drafts.setText(text);
+    setDraft(text);
+  };
+  const changeAttachments = (
+    update: Attachment[] | ((current: Attachment[]) => Attachment[]),
+    identity = drafts.identity(),
+  ) => {
+    const next = drafts.updateAttachments(identity, update);
+    if (next) setAttachments(next);
+  };
+  useLayoutEffect(() => {
+    const saved = drafts.transition(threadId ?? null, reset.nonce);
+    if (!saved) return;
+    setDraft(saved.text);
+    setAttachments(saved.attachments);
+  }, [drafts, threadId, reset.nonce]);
 
   useEffect(() => {
-    if (draftSeed) setDraft(draftSeed.text);
+    if (draftSeed) changeDraft(draftSeed.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftSeed?.nonce]);
   // Annotations staged for the next send: transcript excerpts, each with an
@@ -8129,15 +8437,16 @@ function ChatPane({
       .map((f) => window.unbiased.pathForDroppedFile(f))
       .filter(Boolean);
     if (paths.length === 0) return;
+    const origin = drafts.identity();
     const res = await window.unbiased.attachPaths(paths);
     if (!res.attachments?.length) return;
     // De-duplicate against what is already staged — dropping the same file
     // twice should not queue it twice.
-    setAttachments((list) => {
+    changeAttachments((list) => {
       const seen = new Set(list.map((a) => a.path));
       return [...list, ...res.attachments.filter((a) => !seen.has(a.path))];
-    });
-    taRef.current?.focus();
+    }, origin);
+    if (drafts.identity() === origin) taRef.current?.focus();
   }
 
   function openPlusMenu() {
@@ -8170,20 +8479,22 @@ function ChatPane({
     };
   }, [modeOpen]);
 
-  function stageAttachment(a: Attachment) {
-    setAttachments((list) => (list.some((x) => x.path === a.path) ? list : [...list, a]));
+  function stageAttachment(a: Attachment, origin = drafts.identity()) {
+    changeAttachments((list) => (list.some((x) => x.path === a.path) ? list : [...list, a]), origin);
   }
 
   async function addAttachments() {
     setPlusOpen(false);
+    const origin = drafts.identity();
     const { attachments: picked } = await window.unbiased.chooseAttachments();
-    picked.forEach(stageAttachment);
+    picked.forEach((a) => stageAttachment(a, origin));
   }
 
   async function attachClipboardImage() {
     setPlusOpen(false);
+    const origin = drafts.identity();
     const { attachment } = await window.unbiased.clipboardImage();
-    if (attachment) stageAttachment(attachment);
+    if (attachment) stageAttachment(attachment, origin);
   }
   const [busy, setBusyState] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -8894,8 +9205,8 @@ function ChatPane({
     ).trimEnd();
     const wire = message;
     const sentAttachments = attachments;
-    setDraft("");
-    setAttachments([]);
+    changeDraft("");
+    changeAttachments([]);
     setAnnotations([]);
     const msg: QueuedMsg = {
       id: nextQueueIdRef.current++,
@@ -8936,8 +9247,8 @@ function ChatPane({
 
   function editQueued(q: QueuedMsg) {
     setQueue((list) => list.filter((x) => x.id !== q.id));
-    setDraft(q.text);
-    setAttachments(q.attachments);
+    changeDraft(q.text);
+    changeAttachments(q.attachments);
     if (q.annotations) setAnnotations(q.annotations);
     setComputerSelected(!!q.computer);
   }
@@ -9790,7 +10101,7 @@ function ChatPane({
                 <button
                   onClick={() => {
                     onTogglePlanMode();
-                    setDraft("");
+                    changeDraft("");
                   }}
                   style={{
                     display: "flex",
@@ -9886,7 +10197,7 @@ function ChatPane({
           {attachments.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10, paddingTop: 4 }}>
               {attachments.map((a) => {
-                const remove = () => setAttachments((list) => list.filter((x) => x.path !== a.path));
+                const remove = () => changeAttachments((list) => list.filter((x) => x.path !== a.path));
                 return a.kind === "image" && a.thumb ? (
                   <span key={a.path} title={a.path} style={{ position: "relative", display: "flex" }}>
                     <img
@@ -10008,18 +10319,18 @@ function ChatPane({
             </div>
           )}
           <textarea
+            data-pane-id={paneId}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => changeDraft(e.target.value)}
             onKeyDown={(e) => {
-              // ⌘Enter queues explicitly; plain Enter sends (which also
-              // queues automatically while a turn is running).
+              // Enter sends immediately when idle and queues while a turn runs.
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 // A matching slash command takes Enter before sending.
                 const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : null;
                 if (q !== null && "plan".startsWith(q)) {
                   onTogglePlanMode();
-                  setDraft("");
+                  changeDraft("");
                   return;
                 }
                 void submit();
@@ -10044,13 +10355,14 @@ function ChatPane({
               const el = e.currentTarget;
               const start = el.selectionStart ?? draft.length;
               const end = el.selectionEnd ?? start;
-              setDraft(draft.slice(0, start) + bare + draft.slice(end));
+              changeDraft(draft.slice(0, start) + bare + draft.slice(end));
               // React restores the caret to the end of the value; put it back
               // after what was inserted, so typing continues where you paused.
               const caret = start + bare.length;
               requestAnimationFrame(() => taRef.current?.setSelectionRange(caret, caret));
             }}
             placeholder={!connected ? "Engine starting…" : entries.length > 0 ? chatPlaceholder : "Do anything"}
+            title={busy || compacting ? "Enter queues a message while Pareto is working" : "Enter sends a message"}
             disabled={!connected}
             ref={taRef}
             rows={2}
@@ -10070,8 +10382,8 @@ function ChatPane({
               overflowY: "auto",
             }}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+            <span style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, minWidth: 0 }}>
               <span ref={plusRef} style={{ position: "relative", display: "flex" }}>
                 <button
                   onClick={() => (plusOpen ? setPlusOpen(false) : void openPlusMenu())}
@@ -10165,7 +10477,7 @@ function ChatPane({
                 </button>
               </span>
             </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexShrink: 0 }}>
             {ctxUsage && ctxUsage.percent !== null && (
               <span ref={usageRef} style={{ position: "relative", display: "flex" }}>
                 <button
@@ -10415,7 +10727,6 @@ function ChatPane({
                   >
                     {[
                       { label: "Send", keys: "⏎" },
-                      { label: "Queue", keys: "⌘⏎" },
                     ].map((o) => (
                       <div
                         key={o.label}

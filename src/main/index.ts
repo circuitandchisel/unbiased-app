@@ -15,11 +15,12 @@ import {
 } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import type { NativeImage } from "electron";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { homedir, hostname } from "node:os";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
 import { startSecretProxy, type SecretConnector } from "./oauth-proxy";
 import {
   CATALOGUE_CACHE_VERSION,
@@ -5388,6 +5389,38 @@ function send(channel: string, payload: unknown): void {
   win?.webContents.send(channel, redactSecrets(payload));
 }
 
+function installAppMenu(): void {
+  const command = (name: string) => () => send("app:menu-command", name);
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
+    {
+      label: "File",
+      submenu: [
+        { label: "New Chat", accelerator: "CommandOrControl+N", click: command("new-chat") },
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        { label: "Show Main Chat", accelerator: "CommandOrControl+1", click: command("show-main-chat") },
+        { label: "Show Side Panel", accelerator: "CommandOrControl+2", click: command("show-side-panel") },
+        { label: "Toggle Sidebar", accelerator: "CommandOrControl+B", click: command("toggle-sidebar") },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 /** Launcher icon (rasterized from resources/icon.svg). In development it
  *  lives in the repo; packaged builds must ship it via extraResources. */
 function resolveIconPath(): string {
@@ -10555,6 +10588,37 @@ app.whenReady().then(async () => {
     }
   });
 
+  const fileActionPath = (rawPath: unknown): string => {
+    if (typeof rawPath !== "string" || !rawPath) throw new Error("A local file path is required.");
+    const base = mainCwd ?? pendingCwd ?? app.getPath("home");
+    return localFileForAction(isAbsolute(rawPath) ? rawPath : join(base, rawPath));
+  };
+
+  ipcMain.handle("file:reveal", (_e, rawPath: unknown) => {
+    try {
+      shell.showItemInFolder(fileActionPath(rawPath));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: fileActionError(error) };
+    }
+  });
+
+  ipcMain.handle("file:save-copy", async (_e, rawPath: unknown) => {
+    try {
+      const source = fileActionPath(rawPath);
+      const options = {
+        defaultPath: join(app.getPath("downloads"), basename(source)),
+        buttonLabel: "Save Copy",
+      };
+      const choice = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+      if (choice.canceled || !choice.filePath) return { ok: false, canceled: true };
+      await saveLocalFileCopy(source, choice.filePath);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: fileActionError(error) };
+    }
+  });
+
   // Existence probe for inline file chips: same resolution as file:read,
   // so a chip only renders as a link when clicking it would actually work.
   ipcMain.handle("file:exists", (_e, rawPath: string) => {
@@ -11043,13 +11107,16 @@ app.whenReady().then(async () => {
   // Full-size image as a data URL for the side panel's preview tab (the
   // renderer can't load file:// under its CSP; data: is allowed).
   ipcMain.handle("file:read-image", (_e, path: string) => {
+    if (typeof path !== "string" || !path) return { error: "A file path is required." };
+    const base = mainCwd ?? pendingCwd ?? app.getPath("home");
+    const fullPath = isAbsolute(path) ? path : join(base, path);
     try {
-      if (statSync(path).size > 15_000_000) return { error: "Image is larger than 15 MB" };
-      const img = nativeImage.createFromPath(path);
-      if (img.isEmpty()) return { error: "Could not read image" };
-      return { dataUrl: img.toDataURL() };
+      if (statSync(fullPath).size > 15_000_000) return { fullPath, error: "Image is larger than 15 MB" };
+      const img = nativeImage.createFromPath(fullPath);
+      if (img.isEmpty()) return { fullPath, error: "Could not read image" };
+      return { fullPath, dataUrl: img.toDataURL() };
     } catch {
-      return { error: `Could not open ${path}` };
+      return { fullPath, error: `Could not open ${path}` };
     }
   });
 
@@ -11269,6 +11336,7 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+  installAppMenu();
   void completeDevAccessibilityRecovery();
   // Check for updates shortly after launch (let the window settle first),
   // then on a slow timer — a desktop app can stay open for days.

@@ -11,6 +11,10 @@ function subscribe(channel: string, cb: (payload: unknown) => void): () => void 
 }
 
 contextBridge.exposeInMainWorld("unbiased", {
+  onAppCommand: (cb: (command: string) => void) =>
+    subscribe("app:menu-command", (payload) => {
+      if (typeof payload === "string") cb(payload);
+    }),
   getEngineStatus: () => ipcRenderer.invoke("engine:status"),
   onEngineStatus: (cb: (status: unknown) => void) => subscribe("engine:status", cb),
 
@@ -162,6 +166,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   updateProject: (path: string, record: unknown) => ipcRenderer.invoke("project:update", { path, record }),
   revealProject: (path: string) => ipcRenderer.invoke("project:reveal", path),
   readFile: (path: string) => ipcRenderer.invoke("file:read", path),
+  revealFile: (path: string) => ipcRenderer.invoke("file:reveal", path),
+  saveFileCopy: (path: string) => ipcRenderer.invoke("file:save-copy", path),
   fileExists: (path: string) => ipcRenderer.invoke("file:exists", path),
   readImage: (path: string) => ipcRenderer.invoke("file:read-image", path),
   listDir: (dir?: string) => ipcRenderer.invoke("fs:list", dir),
