@@ -3337,7 +3337,7 @@ export function App() {
         >
           <div style={{ padding: "16px 10px 0" }}>
             <SidebarRailButton label="Expand sidebar" onClick={toggleNav}>
-              <PanelIcon />
+              <SideChatIcon size={16} />
             </SidebarRailButton>
           </div>
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "15px 10px 12px" }}>
