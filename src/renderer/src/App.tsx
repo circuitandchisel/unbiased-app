@@ -491,6 +491,7 @@ type ScheduledTaskView = {
 declare global {
   interface Window {
     unbiased: {
+      onAppCommand: (cb: (command: string) => void) => () => void;
       getEngineStatus: () => Promise<EngineStatus>;
       onEngineStatus: (cb: (status: EngineStatus) => void) => () => void;
       checkUpdate: () => Promise<UpdateInfo | { none: true }>;
@@ -955,8 +956,8 @@ function themeVars(t: ThemeConfig): Record<string, string> {
     "--dim": mixHex(t.surface, t.ink, 0.52),
     // Between fg and dim: sidebar thread titles, Codex-style.
     "--fg-soft": mixHex(t.surface, t.ink, 0.78),
-    // Assistant prose: a step softer than pure fg, like Codex replies.
-    "--fg-msg": mixHex(t.surface, t.ink, 0.88),
+    // Assistant prose stays readable without competing with controls and headings.
+    "--fg-msg": mixHex(t.surface, t.ink, 0.84),
     "--gutter": m(0.25),
     "--font-ui": `${t.fonts.ui}, -apple-system, system-ui, sans-serif`,
     "--font-code": `${t.fonts.code}, ui-monospace, Menlo, monospace`,
@@ -1674,6 +1675,7 @@ export function App() {
   // drag the side chat along with it. Neither restores across launches —
   // the app always starts with the panel closed.
   const [sideOpen, setSideOpen] = useState(false);
+  const sidePanelRef = useRef<HTMLDivElement>(null);
   // Side-chat tabs: each entry is an engine pane id ("side:<n>"), each tab
   // its own ephemeral fork of the main conversation. Context chips are per
   // tab. sideNonce remounts them all when the main conversation changes.
@@ -1754,6 +1756,12 @@ export function App() {
     const stored = Number(localStorage.getItem("navWidth"));
     return stored >= NAV_MIN && stored <= NAV_MAX ? stored : 248;
   });
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const update = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
   // The main/side split is a FRACTION of the content area (not pixels), so
   // collapsing the nav or resizing the window scales both panes in ratio.
   const [sideFrac, setSideFrac] = useState(() => {
@@ -2672,6 +2680,38 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || panelMode === "agentmirror");
+  const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : 0) + 320 + 300 + 8;
+  const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : 0)) * 0.65));
+  const focusMainComposer = () =>
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-pane-id="main"]')?.focus());
+  const appCommandRef = useRef<(command: string) => void>(() => {});
+  appCommandRef.current = (command) => {
+    if (authed !== "in") return;
+    switch (command) {
+      case "new-chat":
+        setShowSettings(false);
+        void newChat().then(focusMainComposer);
+        break;
+      case "toggle-sidebar":
+        toggleNav();
+        break;
+      case "show-main-chat":
+        setShowSettings(false);
+        setScheduledOpen(false);
+        setConnectorsOpen(false);
+        setSideOpenPersisted(false);
+        focusMainComposer();
+        break;
+      case "show-side-panel":
+        setShowSettings(false);
+        setScheduledOpen(false);
+        setConnectorsOpen(false);
+        setSideOpenPersisted(true);
+        requestAnimationFrame(() => sidePanelRef.current?.focus());
+        break;
+    }
+  };
+  useEffect(() => window.unbiased.onAppCommand((command) => appCommandRef.current(command)), []);
   // Git operations target the conversation's actual checkout — the
   // worktree when isolated, else the project directory. (Referenced by
   // the branch-switcher handlers above; they run post-render.)
@@ -2785,6 +2825,7 @@ export function App() {
         ...themeVars(theme),
         height: "100vh",
         display: "flex",
+        position: "relative",
         background: colors.bg,
         color: colors.fg,
         fontFamily: "var(--font-ui)",
@@ -3227,15 +3268,36 @@ export function App() {
             document.body.style.userSelect = "none";
             document.body.style.cursor = "col-resize";
           }}
-          title="Drag to resize"
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 40 : 10;
+            const next = e.key === "ArrowLeft" ? navWidth - step
+              : e.key === "ArrowRight" ? navWidth + step
+              : e.key === "Home" ? NAV_MIN
+              : e.key === "End" ? NAV_MAX
+              : null;
+            if (next === null) return;
+            e.preventDefault();
+            const width = Math.min(Math.max(next, NAV_MIN), NAV_MAX);
+            setNavWidth(width);
+            localStorage.setItem("navWidth", String(width));
+          }}
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={NAV_MIN}
+          aria-valuemax={NAV_MAX}
+          aria-valuenow={navWidth}
+          tabIndex={0}
+          title="Drag or use arrow keys to resize"
           // Invisible grab strip straddling the nav's border; the nav's own
           // borderRight draws the line, so this adds no visual weight.
           style={{
-            width: 5,
+            width: 10,
             flexShrink: 0,
             cursor: "col-resize",
             background: "transparent",
             marginLeft: -5,
+            marginRight: -5,
             zIndex: 5,
           }}
         />
@@ -3247,7 +3309,7 @@ export function App() {
           // zero basis, a column whose panel is hidden claims only its old
           // share of the row and leaves the rest of the window empty — the
           // page ends up pinned left with black beside it.
-          flex: sideVisible ? `${1 - sideFrac} 1 0%` : "1 1 0%",
+          flex: sideVisible && !sideOverlay ? `${1 - sideFrac} 1 0%` : "1 1 0%",
           minWidth: 320,
           display: "flex",
           flexDirection: "column",
@@ -4070,16 +4132,37 @@ export function App() {
         )}
       </div>
 
-      {sideVisible && (
+      {sideVisible && !sideOverlay && (
         <div
           onMouseDown={() => {
             draggingRef.current = true;
             document.body.style.userSelect = "none";
             document.body.style.cursor = "col-resize";
           }}
-          title="Drag to resize"
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 0.1 : 0.03;
+            const next = e.key === "ArrowLeft" ? sideFrac + step
+              : e.key === "ArrowRight" ? sideFrac - step
+              : e.key === "Home" ? 0.7
+              : e.key === "End" ? 0.25
+              : null;
+            if (next === null) return;
+            e.preventDefault();
+            const fraction = Math.min(Math.max(next, 0.25), 0.7);
+            setSideFrac(fraction);
+            localStorage.setItem("sideFrac", String(fraction));
+          }}
+          role="separator"
+          aria-label="Resize side panel"
+          aria-orientation="vertical"
+          aria-valuemin={30}
+          aria-valuemax={75}
+          aria-valuenow={Math.round((1 - sideFrac) * 100)}
+          aria-valuetext={`${Math.round((1 - sideFrac) * 100)}% side panel width`}
+          tabIndex={0}
+          title="Drag or use arrow keys to resize"
           style={{
-            width: 5,
+            width: 8,
             flexShrink: 0,
             cursor: "col-resize",
             background: "transparent",
@@ -4090,12 +4173,26 @@ export function App() {
       {/* Always mounted so the side conversation survives hide/show; only
           its visibility toggles. */}
         <div
+          ref={sidePanelRef}
+          role="region"
+          aria-label="Side panel"
+          tabIndex={-1}
           style={{
-            flex: sideVisible ? `${sideFrac} 1 0%` : "0 0 0%",
+            flex: sideVisible && !sideOverlay ? `${sideFrac} 1 0%` : "0 0 0%",
             minWidth: sideVisible ? 300 : 0,
             display: sideVisible ? "flex" : "none",
             flexDirection: "column",
             background: "var(--nav-bg)",
+            ...(sideOverlay ? {
+              position: "absolute" as const,
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: sideOverlayWidth,
+              borderLeft: `1px solid ${colors.border}`,
+              boxShadow: "-8px 0 24px rgba(0,0,0,0.25)",
+              zIndex: 5,
+            } : {}),
           }}
         >
           <header
@@ -4107,6 +4204,7 @@ export function App() {
               flexShrink: 0,
             }}
           >
+            <div style={{ display: "flex", alignItems: "center", gap: 4, flex: tabOrder.length > 0 ? "1 1 auto" : "0 0 auto", minWidth: 0, overflowX: "auto" }}>
             {tabOrder.map((t) => {
               const agent = t.startsWith("agent:")
                 ? openAgents.find((a) => `agent:${a.threadId}` === t)
@@ -4167,42 +4265,46 @@ export function App() {
                                   aria: "Close terminal",
                                 };
               return (
-                <button
+                <div
                   key={t}
-                  onClick={() => setPanelMode(t)}
-                  title={cfg.title}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 8,
                     background: panelMode === t ? colors.panel : "transparent",
                     color: panelMode === t ? colors.fg : colors.dim,
-                    border: "none",
                     borderRadius: 8,
-                    padding: "6px 12px",
-                    fontSize: 13,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    minWidth: 0,
-                    ...(t.startsWith("file:") ? { maxWidth: 220 } : {}),
+                    minWidth: 90,
+                    maxWidth: 220,
+                    flexShrink: 0,
                   }}
                 >
-                  {cfg.icon}
-                  <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cfg.label}</span>
-                  <span
-                    role="button"
-                    aria-label={cfg.aria}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      cfg.close();
+                  <button
+                    onClick={() => setPanelMode(t)}
+                    title={cfg.title ?? cfg.label}
+                    aria-current={panelMode === t ? "page" : undefined}
+                    data-nopress
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0,
+                      padding: "6px 4px 6px 12px", background: "transparent", border: "none",
+                      color: "inherit", fontSize: 13, fontFamily: "inherit", cursor: "pointer",
                     }}
-                    style={{ display: "flex", color: colors.dim, marginLeft: 2 }}
+                  >
+                    {cfg.icon}
+                    <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cfg.label}</span>
+                  </button>
+                  <button
+                    aria-label={cfg.aria}
+                    title={cfg.aria}
+                    onClick={cfg.close}
+                    data-nopress
+                    style={{ display: "flex", alignItems: "center", padding: "6px 8px 6px 4px", background: "transparent", border: "none", color: colors.dim, cursor: "pointer" }}
                   >
                     <CloseIcon />
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
+            </div>
             <span ref={sidePlusRef} style={{ position: "relative", display: "flex" }}>
               <IconButton title="Open side panel tab" onClick={() => setSidePlusOpen((o) => !o)}>
                 <PlusIcon />
@@ -4253,7 +4355,7 @@ export function App() {
                 </div>
               )}
             </span>
-            <span style={{ flex: 1 }} />
+            {tabOrder.length === 0 && <span style={{ flex: 1 }} />}
             {previewable && (
               <button
                 onClick={() => setPreviewOn((o) => !o)}
@@ -4276,6 +4378,11 @@ export function App() {
             {panelMode.startsWith("files:") && (
               <IconButton title={treeVisible ? "Hide file tree" : "Show file tree"} onClick={toggleTreeVisible}>
                 <FoldersIcon />
+              </IconButton>
+            )}
+            {sideOverlay && (
+              <IconButton title="Close side panel" onClick={() => setSideOpenPersisted(false)}>
+                <CloseIcon />
               </IconButton>
             )}
           </header>
@@ -6832,18 +6939,19 @@ function buildMdComponents(
       </blockquote>
     ),
     p: (props: { children?: React.ReactNode }) => <p style={{ margin: "12px 0" }}>{props.children}</p>,
+    strong: (props: { children?: React.ReactNode }) => <strong style={{ fontWeight: 600 }}>{props.children}</strong>,
     h1: (props: { children?: React.ReactNode }) => (
-      <h1 style={{ fontSize: "1.5em", fontWeight: 650, margin: "28px 0 12px", color: "var(--fg)" }}>
+      <h1 style={{ fontSize: "1.5em", fontWeight: 600, margin: "28px 0 12px", color: "var(--fg)" }}>
         {props.children}
       </h1>
     ),
     h2: (props: { children?: React.ReactNode }) => (
-      <h2 style={{ fontSize: "1.35em", fontWeight: 650, margin: "26px 0 12px", color: "var(--fg)" }}>
+      <h2 style={{ fontSize: "1.35em", fontWeight: 600, margin: "26px 0 12px", color: "var(--fg)" }}>
         {props.children}
       </h2>
     ),
     h3: (props: { children?: React.ReactNode }) => (
-      <h3 style={{ fontSize: "1.15em", fontWeight: 600, margin: "22px 0 10px", color: "var(--fg)" }}>
+      <h3 style={{ fontSize: "1.15em", fontWeight: 550, margin: "22px 0 10px", color: "var(--fg)" }}>
         {props.children}
       </h3>
     ),
@@ -10008,11 +10116,11 @@ function ChatPane({
             </div>
           )}
           <textarea
+            data-pane-id={paneId}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              // ⌘Enter queues explicitly; plain Enter sends (which also
-              // queues automatically while a turn is running).
+              // Enter sends immediately when idle and queues while a turn runs.
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 // A matching slash command takes Enter before sending.
@@ -10051,6 +10159,7 @@ function ChatPane({
               requestAnimationFrame(() => taRef.current?.setSelectionRange(caret, caret));
             }}
             placeholder={!connected ? "Engine starting…" : entries.length > 0 ? chatPlaceholder : "Do anything"}
+            title={busy || compacting ? "Enter queues a message while Pareto is working" : "Enter sends a message"}
             disabled={!connected}
             ref={taRef}
             rows={2}
@@ -10070,8 +10179,8 @@ function ChatPane({
               overflowY: "auto",
             }}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+            <span style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, minWidth: 0 }}>
               <span ref={plusRef} style={{ position: "relative", display: "flex" }}>
                 <button
                   onClick={() => (plusOpen ? setPlusOpen(false) : void openPlusMenu())}
@@ -10165,7 +10274,7 @@ function ChatPane({
                 </button>
               </span>
             </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexShrink: 0 }}>
             {ctxUsage && ctxUsage.percent !== null && (
               <span ref={usageRef} style={{ position: "relative", display: "flex" }}>
                 <button
@@ -10415,7 +10524,6 @@ function ChatPane({
                   >
                     {[
                       { label: "Send", keys: "⏎" },
-                      { label: "Queue", keys: "⌘⏎" },
                     ].map((o) => (
                       <div
                         key={o.label}

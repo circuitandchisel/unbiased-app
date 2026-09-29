@@ -11,6 +11,10 @@ function subscribe(channel: string, cb: (payload: unknown) => void): () => void 
 }
 
 contextBridge.exposeInMainWorld("unbiased", {
+  onAppCommand: (cb: (command: string) => void) =>
+    subscribe("app:menu-command", (payload) => {
+      if (typeof payload === "string") cb(payload);
+    }),
   getEngineStatus: () => ipcRenderer.invoke("engine:status"),
   onEngineStatus: (cb: (status: unknown) => void) => subscribe("engine:status", cb),
 

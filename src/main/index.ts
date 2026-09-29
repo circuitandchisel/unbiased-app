@@ -5388,6 +5388,38 @@ function send(channel: string, payload: unknown): void {
   win?.webContents.send(channel, redactSecrets(payload));
 }
 
+function installAppMenu(): void {
+  const command = (name: string) => () => send("app:menu-command", name);
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
+    {
+      label: "File",
+      submenu: [
+        { label: "New Chat", accelerator: "CommandOrControl+N", click: command("new-chat") },
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        { label: "Show Main Chat", accelerator: "CommandOrControl+1", click: command("show-main-chat") },
+        { label: "Show Side Panel", accelerator: "CommandOrControl+2", click: command("show-side-panel") },
+        { label: "Toggle Sidebar", accelerator: "CommandOrControl+B", click: command("toggle-sidebar") },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 /** Launcher icon (rasterized from resources/icon.svg). In development it
  *  lives in the repo; packaged builds must ship it via extraResources. */
 function resolveIconPath(): string {
@@ -11269,6 +11301,7 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+  installAppMenu();
   void completeDevAccessibilityRecovery();
   // Check for updates shortly after launch (let the window settle first),
   // then on a slow timer — a desktop app can stay open for days.
