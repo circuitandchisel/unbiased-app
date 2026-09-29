@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
 // The changelog SHIPS with the build so the Updates tab works offline and on
 // first run, and is superseded at runtime by whatever the releases repo has —
@@ -23,9 +24,12 @@ import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
-import { Check, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
+import { Bot, Check, ChevronLeft, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
+import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
+import { finalAssistantIndices } from "./transcript-actions";
+import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
 
 type EngineStatus =
   | { state: "starting" }
@@ -46,7 +50,7 @@ type CommandItem = {
 };
 
 type Entry =
-  | { kind: "user"; text: string; annotations?: SentAnnotation[]; attachments?: Attachment[] }
+  | { kind: "user"; text: string; at?: number; annotations?: SentAnnotation[]; attachments?: Attachment[] }
   | { kind: "compaction" }
   | {
       kind: "assistant";
@@ -770,6 +774,8 @@ declare global {
       changelogReleases: () => Promise<{ releases: ChangelogRelease[] }>;
       updatePrefs: () => Promise<{ autoDownload: boolean; version: string; lastCheckedAt: number | null }>;
       setUpdatePrefs: (p: { autoDownload: boolean }) => Promise<{ ok: boolean }>;
+      agentStyle: () => Promise<AgentStylePrefs>;
+      setAgentStyle: (prefs: AgentStylePrefs) => Promise<{ ok: boolean; prefs: AgentStylePrefs }>;
       openBrowser: (p: { id: number; url?: string }) => Promise<{ ok: boolean }>;
       setBrowserBounds: (b: { id: number; x: number; y: number; width: number; height: number }) => Promise<void>;
       setBrowserVisible: (p: { id: number; visible: boolean }) => Promise<void>;
@@ -1761,6 +1767,7 @@ export function App() {
   }
 
   const [navOpen, setNavOpen] = useState(() => localStorage.getItem("navOpen") !== "false");
+  const NAV_RAIL_WIDTH = 60;
   // Nav width is user-draggable within [180, 400]px, persisted.
   const NAV_MIN = 180;
   const NAV_MAX = 400;
@@ -1804,7 +1811,7 @@ export function App() {
         return;
       }
       if (!draggingRef.current) return;
-      const contentLeft = navOpenRef.current ? navWidthRef.current : 0;
+      const contentLeft = navOpenRef.current ? navWidthRef.current : NAV_RAIL_WIDTH;
       const contentWidth = Math.max(window.innerWidth - contentLeft, 1);
       const frac = (window.innerWidth - e.clientX) / contentWidth;
       setSideFrac(Math.min(Math.max(frac, 0.25), 0.7));
@@ -2000,6 +2007,8 @@ export function App() {
   async function openProjectDialog() {
     const { path, name } = await window.unbiased.chooseProject();
     if (!path || !name) return; // cancelled
+    setScheduledOpen(false);
+    setConnectorsOpen(false);
     snapshotSideView();
     setActiveProject({ name, path });
     setActiveThreadId(null);
@@ -2089,7 +2098,9 @@ export function App() {
     // the corrected fold structure, and the cache may predate it. The cache
     // still wins whenever it genuinely holds more (failure rows, annotation
     // cards — renderer-only content history cannot reconstruct).
-    let entries = cached.entries && cachedRichness > historyRichness ? cached.entries : history;
+    let entries = cached.entries && cachedRichness > historyRichness
+      ? hydrateTranscriptTimes(cached.entries, history)
+      : history;
     if (res.running && res.streamText) {
       // The reply is still streaming. Main accumulated the full partial
       // text; a shorter prefix of it may already sit in the cached
@@ -2731,8 +2742,8 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || panelMode === "agentmirror");
-  const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : 0) + 320 + 300 + 8;
-  const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : 0)) * 0.65));
+  const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : NAV_RAIL_WIDTH) + 320 + 300 + 8;
+  const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : NAV_RAIL_WIDTH)) * 0.65));
   const focusMainComposer = () =>
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-pane-id="main"]')?.focus());
   const appCommandRef = useRef<(command: string) => void>(() => {});
@@ -2894,10 +2905,16 @@ export function App() {
           zIndex: 2,
         }}
       >
-        <div style={{ padding: "16px 14px 8px" }}>
-          <div style={{ display: "flex", marginBottom: 15, padding: "2px 2px" }}>
+        <div style={{ padding: "16px 14px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "2px 2px" }}>
             <Wordmark height={15} />
+            <IconButton title="Hide sidebar" onClick={toggleNav}>
+              <PanelIcon />
+            </IconButton>
           </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <div style={{ padding: "15px 14px 8px" }}>
           <SidebarAction onClick={() => void newChat()} disabled={false} icon={<NewChatIcon />}>
             New chat
           </SidebarAction>
@@ -2945,7 +2962,7 @@ export function App() {
             </span>
           </SidebarAction>
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "2px 8px 16px" }}>
+        <div style={{ padding: "2px 8px 16px" }}>
           {sidebarView.projects.length === 0 && sidebarView.recents.length === 0 && (
             <div style={{ color: colors.dim, fontSize: 12, padding: "8px 8px" }}>No conversations yet</div>
           )}
@@ -2972,7 +2989,7 @@ export function App() {
               }
               title="Create project"
               aria-label="Create project"
-              className="u-sidebar-icon-button"
+              className="u-sidebar-icon-button u-projects-add"
               style={{
                 background: "transparent",
                 border: "none",
@@ -3252,6 +3269,7 @@ export function App() {
             />
           ))}
         </div>
+        </div>
         {update && (
           <UpdateBanner
             version={update.version}
@@ -3309,8 +3327,58 @@ export function App() {
             )}
           </button>
         </div>
-        <ChatFooter status={status} busy={mainBusy} />
       </nav>
+      )}
+      {!navOpen && (
+        <nav
+          className="u-sidebar"
+          aria-label="Collapsed sidebar"
+          style={{ width: NAV_RAIL_WIDTH, flexShrink: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 2 }}
+        >
+          <div style={{ padding: "16px 10px 0" }}>
+            <SidebarRailButton label="Expand sidebar" onClick={toggleNav}>
+              <SideChatIcon size={16} />
+            </SidebarRailButton>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "15px 10px 12px" }}>
+            <SidebarRailButton label="New chat" onClick={() => void newChat()}>
+              <NewChatIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Open project" onClick={() => void openProjectDialog()}>
+              <FolderPlusIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Connectors" active={connectorsOpen} onClick={() => { setScheduledOpen(false); setConnectorsOpen(true); }}>
+              <PlugIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Scheduled" active={scheduledOpen} badge={missedCount} onClick={() => { setConnectorsOpen(false); setScheduledOpen(true); }}>
+              <ClockIcon />
+            </SidebarRailButton>
+          </div>
+          <div className="u-sidebar-bottom" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "8px 10px" }}>
+            {update && (
+              <SidebarRailButton
+                label={updateStaged ? "Install update" : "Download update"}
+                onClick={() => void (updateStaged ? window.unbiased.applyUpdate() : window.unbiased.downloadUpdate())}
+              >
+                <DownloadIcon />
+              </SidebarRailButton>
+            )}
+            <SidebarRailButton
+              label="What's new"
+              badge={changelogUnread}
+              onClick={() => {
+                localStorage.setItem("changelogSeen", releases[0]?.version ?? "");
+                setChangelogUnread(false);
+                setShowChangelog(true);
+              }}
+            >
+              <BellIcon />
+            </SidebarRailButton>
+            <SidebarRailButton label="Settings" onClick={() => setShowSettings(true)}>
+              <GearIcon />
+            </SidebarRailButton>
+          </div>
+        </nav>
       )}
       {navOpen && (
         <div
@@ -3370,13 +3438,11 @@ export function App() {
             instead of the whole window: the nav stays put and you leave the
             way you leave a chat — by clicking somewhere else in it. */}
         {connectorsOpen ? (
-          <ConnectorsView navOpen={navOpen} onToggleNav={toggleNav} />
+          <ConnectorsView />
         ) : scheduledOpen ? (
           <ScheduledView
             defaultProject={activeProjectPath ?? null}
             projects={sidebar.projects}
-            navOpen={navOpen}
-            onToggleNav={toggleNav}
             focusKey={scheduledFocus}
             onFocusHandled={() => setScheduledFocus(null)}
             onOpenThread={(id) => {
@@ -3409,9 +3475,6 @@ export function App() {
           }}
         >
           <HeaderEdge />
-          <IconButton title={navOpen ? "Hide sidebar" : "Show sidebar"} onClick={toggleNav}>
-            <PanelIcon />
-          </IconButton>
           <span
             style={{
               fontSize: 14,
@@ -9170,7 +9233,7 @@ function ChatPane({
     producedRef.current = false;
     turnStartedAtRef.current = Date.now();
     setEntries((es) => {
-      const next: Entry[] = [...es, { kind: "user", text: q.text, annotations: q.annotations, attachments: q.attachments }];
+      const next: Entry[] = [...es, { kind: "user", text: q.text, at: Date.now(), annotations: q.annotations, attachments: q.attachments }];
       turnStartIndexRef.current = next.length;
       return next;
     });
@@ -9438,15 +9501,13 @@ function ChatPane({
     () => buildMdComponents(onOpenFileRef, (href) => onOpenLinkRef.current?.(href)),
     [],
   );
+  const copyableAssistantIndices = useMemo(() => finalAssistantIndices(entries), [entries]);
+  const datedUserIndices = useMemo(() => dayMarkerIndices(entries), [entries]);
 
-  // `nested` = rendered inside a "Worked for Ns" group. It used to be inferred
-  // from isLast being false, which held only while the action row required
-  // isLast to be TRUE; now that every settled reply shows one, the group's
-  // intermediate narration has to be excluded explicitly or each line of it
-  // sprouts a copy button.
+  // `nested` excludes narration inside a "Worked for Ns" group.
   const renderBlock = (
     block: DisplayBlock,
-    isLast = false,
+    showActions = false,
     nested = false,
     /** This block directly follows a "Worked for Ns" fold — the answer it
      *  introduces pulls up against it instead of taking full turn spacing. */
@@ -9685,17 +9746,9 @@ function ChatPane({
               )}
             </div>
           )}
-          {/* Every settled reply gets its action row, not just the newest one:
-              wanting to copy an answer from earlier in a conversation is at
-              least as common as copying the last one, and the timestamp is the
-              only record of when a turn landed.
-
-              Two exclusions. The reply still streaming: a copy button on half
-              an answer copies half an answer, and its timestamp does not exist
-              yet. And anything folded into a work group, which `nested`
-              carries — that content is intermediate narration, and a copy row
-              per line of it would bury the group it belongs to. */}
-          {e.text && !nested && !busy && (
+          {/* Keep one action row per settled turn, even when interruption
+              leaves its intermediate narration visible. */}
+          {e.text && !nested && showActions && !busy && (
             <AssistantActions text={e.text} at={e.at} />
           )}
         </div>
@@ -9878,7 +9931,16 @@ function ChatPane({
           {toDisplayBlocks(entries).map((b, i, arr) => {
             const prev = arr[i - 1];
             const afterWork = prev?.kind === "entry" && prev.entry.kind === "work";
-            return renderBlock(b, i === arr.length - 1, false, afterWork);
+            return (
+              <Fragment key={b.key}>
+                {b.kind === "entry" && b.entry.kind === "user" && b.entry.at !== undefined && datedUserIndices.has(b.key) && (
+                  <div style={{ textAlign: "center", margin: "28px 0 18px", color: colors.dim, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
+                    {formatConversationDayMarker(b.entry.at)}
+                  </div>
+                )}
+                {renderBlock(b, copyableAssistantIndices.has(b.key), false, afterWork)}
+              </Fragment>
+            );
           })}
           {compacting && (
             <div style={{ display: "flex", justifyContent: "flex-start", margin: "10px 0" }}>
@@ -9954,8 +10016,8 @@ function ChatPane({
             maxWidth: 768,
             margin: "0 auto",
             background: colors.panel,
-            borderRadius: 16,
-            padding: "12px 14px 10px",
+            borderRadius: 28,
+            padding: "16px 18px 14px",
           }}
         >
           {plusOpen && (
@@ -11323,7 +11385,7 @@ const TASK_TEMPLATES: { name: string; schedule: ScheduleSpec; prompt: string; bl
  * has its own list, search, filters and creation flow. A modal frames all of
  * that as an interruption and caps it at 620px while the content wants a page.
  * The nav is not kept visible for the same reason Settings does not keep it —
- * you are somewhere else, and "← Back to app" is the way out.
+ * you are somewhere else, and "Back to app" is the way out.
  *
  * Still not built: describing a task in prose and having the agent derive the
  * schedule. That needs a model round-trip that can fail, and it is a feature
@@ -11582,7 +11644,7 @@ function ConnectorsPanel({ onClose, onOpenFull }: { onClose: () => void; onOpenF
  */
 let connectorsCache: ConnectorInfo[] = [];
 
-function ConnectorsView({ navOpen, onToggleNav }: { navOpen: boolean; onToggleNav: () => void }) {
+function ConnectorsView() {
   const [items, setItems] = useState<ConnectorInfo[]>(connectorsCache);
   // Only the very first visit of a session has nothing to show.
   const [loading, setLoading] = useState(connectorsCache.length === 0);
@@ -11707,9 +11769,6 @@ function ConnectorsView({ navOpen, onToggleNav }: { navOpen: boolean; onToggleNa
         }}
       >
         <HeaderEdge />
-        <IconButton title={navOpen ? "Hide sidebar" : "Show sidebar"} onClick={onToggleNav}>
-          <PanelIcon />
-        </IconButton>
         <span style={{ fontSize: 14, fontWeight: 500, color: colors.fg, letterSpacing: "var(--track-body)" }}>
           Connectors
         </span>
@@ -12184,16 +12243,12 @@ function ScheduledView({
   defaultProject,
   projects,
   onOpenThread,
-  navOpen,
-  onToggleNav,
   focusKey,
   onFocusHandled,
 }: {
   defaultProject: string | null;
   projects: ProjectInfo[];
   onOpenThread: (threadId: string) => void;
-  navOpen: boolean;
-  onToggleNav: () => void;
   focusKey?: string | null;
   onFocusHandled?: () => void;
 }) {
@@ -12382,8 +12437,7 @@ function ScheduledView({
     // inside it scroll, and everything below the fold painted on the bare
     // white body. Measured live: a 950px window, this div at 1084px.
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-      {/* The same chrome a conversation gets — sidebar toggle, then the title
-          — so this reads as another place in the app rather than a mode you
+      {/* The same chrome a conversation gets — so this reads as another place in the app rather than a mode you
           have been dropped into. No back button: the nav is right there, and
           a chat does not have one either. */}
       <header
@@ -12398,9 +12452,6 @@ function ScheduledView({
         }}
       >
         <HeaderEdge />
-        <IconButton title={navOpen ? "Hide sidebar" : "Show sidebar"} onClick={onToggleNav}>
-          <PanelIcon />
-        </IconButton>
         <span
           style={{
             fontSize: 14,
@@ -15163,7 +15214,32 @@ function SettingsView({
   onSignOut: () => void;
   releases: ChangelogRelease[];
 }) {
-  const [tab, setTab] = useState<"appearance" | "resources" | "account" | "updates">("appearance");
+  const [tab, setTab] = useState<"appearance" | "agent" | "resources" | "account" | "updates">("appearance");
+  const [agentPrefs, setAgentPrefs] = useState<AgentStylePrefs | null>(null);
+  const [agentPrefsSaving, setAgentPrefsSaving] = useState(false);
+  const [agentPrefsError, setAgentPrefsError] = useState<string | null>(null);
+  useEffect(() => {
+    if (tab !== "agent" || agentPrefs) return;
+    void window.unbiased.agentStyle().then(setAgentPrefs).catch(() => {
+      setAgentPrefsError("Could not load agent preferences.");
+    });
+  }, [tab, agentPrefs]);
+
+  async function changeAgentPref(key: keyof AgentStylePrefs, value: string) {
+    if (!agentPrefs || agentPrefsSaving) return;
+    const next = parseAgentStylePrefs({ ...agentPrefs, [key]: value });
+    setAgentPrefsSaving(true);
+    setAgentPrefsError(null);
+    try {
+      const result = await window.unbiased.setAgentStyle(next);
+      if (result.ok) setAgentPrefs(result.prefs);
+      else setAgentPrefsError("Could not save agent preferences.");
+    } catch {
+      setAgentPrefsError("Could not save agent preferences.");
+    } finally {
+      setAgentPrefsSaving(false);
+    }
+  }
   const [updPrefs, setUpdPrefs] = useState<{
     autoDownload: boolean;
     version: string;
@@ -15309,7 +15385,8 @@ function SettingsView({
             fontFamily: "inherit",
           }}
         >
-          ← Back to app
+          <ChevronLeft size={16} strokeWidth={1.8} aria-hidden="true" />
+          Back to app
         </button>
 {(
           [
@@ -15317,6 +15394,7 @@ function SettingsView({
               group: "Personal",
               items: [
                 { id: "appearance", label: "Appearance", icon: <ContrastIcon /> },
+                { id: "agent", label: "Agent", icon: <Bot size={15} /> },
                 { id: "account", label: "Account", icon: <PersonIcon /> },
               ],
             },
@@ -15335,16 +15413,16 @@ function SettingsView({
               <button
                 key={item.id}
                 onClick={() => setTab(item.id)}
+                className="u-sidebar-row"
+                data-active={tab === item.id}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: 9,
                   width: "100%",
                   textAlign: "left",
-                  // Same selected treatment as the main sidebar — neutral
-                  // fill, accent in the rail — so "which section am I in"
-                  // looks the same everywhere in the app.
-                  background: tab === item.id ? "var(--chip)" : "transparent",
+                  // Keep the settings accent rail while the shared sidebar
+                  // row styles handle hover and selected backgrounds.
                   boxShadow: tab === item.id ? "inset 2px 0 0 0 var(--accent)" : "none",
                   fontWeight: tab === item.id ? 500 : 400,
                   color: tab === item.id ? colors.fg : colors.dim,
@@ -15465,6 +15543,33 @@ function SettingsView({
               )}
             </div>
             </Group>
+          </div>
+        ) : tab === "agent" ? (
+          <div style={{ maxWidth: 760, margin: "0 auto" }}>
+            <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "var(--track-title)", lineHeight: 1.15, margin: "0 0 28px" }}>Agent</h1>
+            <Group title="Responses">
+              <div style={{ border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.panel }}>
+                {([
+                  { key: "outputDetail", label: "Output detail", options: [["concise", "Brief", "The essentials, without the detour"], ["balanced", "Balanced", "Enough context to act with confidence"], ["detailed", "Thorough", "Explore examples and tradeoffs"]] },
+                  { key: "tone", label: "Agent tone", options: [["direct", "Direct", "Straight answers, little ceremony"], ["warm", "Warm", "Approachable without extra chatter"], ["formal", "Formal", "A polished, reserved voice"]] },
+                  { key: "explanations", label: "Explanations", options: [["plain", "Plain language", "Explain ideas without assuming expertise"], ["technical", "Technical", "Use precise terms for readers in the field"]] },
+                ] as const).map((setting, index, all) => (
+                  <div key={setting.key} style={{ ...rowStyle, borderBottom: index === all.length - 1 ? "none" : rowStyle.borderBottom, flexWrap: "wrap" }}>
+                    <label htmlFor={`agent-${setting.key}`}>{setting.label}</label>
+                    <FieldSelect
+                      id={`agent-${setting.key}`}
+                      value={agentPrefs?.[setting.key] ?? ""}
+                      disabled={!agentPrefs || agentPrefsSaving}
+                      options={setting.options.map(([value, label, description]) => ({ value, label, description }))}
+                      onChange={(value) => void changeAgentPref(setting.key, value)}
+                      triggerStyle={{ width: 170, maxWidth: "100%", padding: "7px 34px 7px 10px", border: `1px solid ${colors.border}`, borderRadius: 8, background: "var(--panel-2)", color: colors.fg, font: "inherit" }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </Group>
+            <p style={{ color: colors.dim, fontSize: 12.5, margin: "-18px 0 0 2px" }}>Changes apply when a chat starts or resumes.</p>
+            {agentPrefsError && <p role="alert" style={{ color: colors.err, fontSize: 12.5, marginTop: 12 }}>{agentPrefsError}</p>}
           </div>
         ) : tab === "account" ? (
           <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -15877,7 +15982,7 @@ function EnvRow({
   );
 }
 
-function Chevron({ open }: { open: boolean }) {
+function Chevron({ open, size = 12 }: { open: boolean; size?: number }) {
   return (
     <span
       style={{
@@ -15888,7 +15993,7 @@ function Chevron({ open }: { open: boolean }) {
         flexShrink: 0,
       }}
     >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
         <path d="M6 9l6 6 6-6" />
       </svg>
     </span>
@@ -16145,9 +16250,9 @@ const BUNDLED_CHANGELOG: ChangelogRelease[] = parseChangelogMd(changelogMd);
 
 function BellIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5.67725 12.458c0.25284 0.4714 0.75036 0.7921 1.32275 0.7921 0.5724 0 1.06991 -0.3207 1.32276 -0.7921" />
+      <path d="M4.2624 1.88396C4.98846 1.1579 5.97321 0.75 7.00002 0.75c1.0268 0 2.01154 0.4079 2.73761 1.13396 0.72607 0.72606 1.13397 1.71081 1.13397 2.73762 0 0.60416 0.0997 1.17186 0.2497 1.75253 0.042 0.13145 0.0883 0.25549 0.1381 0.37251 0.232 0.54577 0.8708 0.732 1.3475 1.08487 0.7115 0.52672 0.5739 1.65374 -0.0179 2.09132 0 0 -0.9555 0.82719 -5.58898 0.82719 -4.63354 0 -5.58902 -0.82719 -5.58902 -0.82719 -0.591783 -0.43758 -0.729337 -1.5646 -0.01786 -2.09132 0.47665 -0.35287 1.11545 -0.53906 1.34752 -1.08482 0.23132 -0.544 0.38778 -1.2399 0.38778 -2.12509 0 -1.02681 0.4079 -2.01156 1.13396 -2.73762Z" />
     </svg>
   );
 }
@@ -16250,13 +16355,17 @@ function ChangelogModal({
   );
 }
 
-function GearIcon() {
+function StreamlineSunIcon({ size = 15 }: { size?: number } = {}) {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12.8149 6.22077c0.5257 0.38646 0.5257 1.172 0 1.55846v0c-0.8698 0.63934 -1.3123 1.71184 -1.1492 2.77897v0c0.0988 0.6471 -0.4604 1.2063 -1.1075 1.1075v0c-1.06713 -0.1631 -2.13963 0.2794 -2.77897 1.1492v0c-0.38646 0.5257 -1.172 0.5257 -1.55846 0v0c-0.63934 -0.8698 -1.71184 -1.3123 -2.77896 -1.1492v0c-0.6471 0.0988 -1.20635 -0.4604 -1.10748 -1.1075v0c0.16303 -1.06713 -0.27941 -2.13963 -1.14922 -2.77897v0c-0.525758 -0.38646 -0.525758 -1.172 0 -1.55846v0c0.86981 -0.63934 1.31225 -1.71184 1.14922 -2.77896v0c-0.09887 -0.6471 0.46038 -1.20635 1.10748 -1.10748v0c1.06712 0.16303 2.13962 -0.27941 2.77896 -1.14922v0c0.38646 -0.525758 1.172 -0.525758 1.55846 0v0c0.63934 0.86981 1.71184 1.31225 2.77897 1.14922v0c0.6471 -0.09887 1.2063 0.46038 1.1075 1.10748v0c-0.1631 1.06712 0.2794 2.13962 1.1492 2.77896v0Z" />
+      <path d="M6.99976 9.54077c1.62609 0 2.54077 -0.91468 2.54077 -2.54077s-0.91468 -2.54077 -2.54077 -2.54077c-1.6261 0 -2.54078 0.91468 -2.54078 2.54077s0.91468 2.54077 2.54078 2.54077Z" />
     </svg>
   );
+}
+
+function GearIcon() {
+  return <StreamlineSunIcon />;
 }
 
 /**
@@ -16347,6 +16456,68 @@ function SidebarAction({
   );
 }
 
+function SidebarRailButton({
+  label,
+  onClick,
+  active = false,
+  badge = false,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  badge?: number | boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className="u-sidebar-row"
+      data-active={active}
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        padding: 0,
+        border: "none",
+        borderRadius: 9,
+        color: active ? colors.fg : "var(--fg-soft)",
+        cursor: "pointer",
+      }}
+    >
+      <span style={{ display: "flex", transform: "scale(1.15)" }}>{children}</span>
+      {badge && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: 3,
+            right: 3,
+            minWidth: 6,
+            height: 6,
+            padding: typeof badge === "number" ? "1px 2px" : 0,
+            borderRadius: 999,
+            background: colors.accent,
+            color: "var(--accent-fg)",
+            fontSize: 9,
+            lineHeight: 1,
+            fontWeight: 600,
+          }}
+        >
+          {typeof badge === "number" ? (badge > 9 ? "9+" : badge) : null}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function IconButton({
   title,
   onClick,
@@ -16397,7 +16568,7 @@ function AssistantActions({ text, at }: { text: string; at?: number }) {
             fontVariantNumeric: "tabular-nums",
           }}
         >
-          {new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          {formatConversationTime(at)}
         </span>
       )}
     </span>
@@ -16451,18 +16622,11 @@ function SectionLabel({
   collapsed?: boolean;
   onToggle?: () => void;
 }) {
-  // An overline, not another row. At 13.5/500 these labels carried the same
-  // visual weight as the project and chat rows beneath them, so the sidebar
-  // read as one flat list with no hierarchy. Small, uppercase and tracked-out
-  // is the standard treatment precisely because it reads as a *category*
-  // rather than a destination — and the wide tracking is what keeps 10.5px
-  // uppercase legible.
   const base: React.CSSProperties = {
     color: colors.dim,
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "var(--track-overline)",
+    fontSize: 14,
+    fontWeight: 400,
+    letterSpacing: "var(--track-body)",
     padding: "19px 8px 7px",
   };
   if (!onToggle) return <div style={base}>{children}</div>;
@@ -16485,25 +16649,28 @@ function SectionLabel({
       }}
     >
       {children}
-      <span
-        style={{
-          display: "inline-block",
-          fontSize: 11,
-          transform: collapsed ? "none" : "rotate(90deg)",
-          transition: "transform 120ms var(--ease-out)",
-        }}
-      >
-        ›
-      </span>
+      <Chevron open={!collapsed} size={14} />
     </button>
   );
 }
 
-/** Material Symbols edit_square — the new-chat glyph. */
+function FolderPlusIcon({ size = 15 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M10.7261 13.2501V8.44238" />
+      <path d="M8.32227 10.8464H13.13" />
+      <path d="M0.950835 4.41097c0.059285 0.5541 0.504935 0.99976 1.058765 1.06149 0.41137 0.04585 0.83373 0.08523 1.26436 0.08523 0.43063 0 0.853 -0.03938 1.26437 -0.08523 0.55382 -0.06173 0.99948 -0.50739 1.05876 -1.06149 0.04376 -0.40904 0.08072 -0.82899 0.08072 -1.25712 0 -0.42814 -0.03696 -0.84809 -0.08072 -1.25713 -0.05928 -0.5541 -0.50494 -0.999754 -1.05876 -1.061486C4.12696 0.789382 3.70459 0.75 3.27396 0.75c-0.43063 0 -0.85299 0.039382 -1.26436 0.085234 -0.55383 0.061732 -0.99948 0.507386 -1.058765 1.061486 -0.043763 0.40904 -0.080718 0.82899 -0.080718 1.25713 0 0.42813 0.036955 0.84808 0.080718 1.25712Z" />
+      <path d="M0.950835 12.1034c0.059285 0.5541 0.504935 0.9997 1.058765 1.0614 0.41137 0.0459 0.83373 0.0853 1.26436 0.0853 0.43063 0 0.853 -0.0394 1.26437 -0.0853 0.55382 -0.0617 0.99948 -0.5073 1.05876 -1.0614 0.04376 -0.4091 0.08072 -0.829 0.08072 -1.2572 0 -0.4281 -0.03696 -0.84806 -0.08072 -1.2571 -0.05928 -0.55409 -0.50494 -0.99975 -1.05876 -1.06148 -0.41137 -0.04586 -0.83374 -0.08524 -1.26437 -0.08524 -0.43063 0 -0.85299 0.03938 -1.26436 0.08524 -0.55383 0.06173 -0.99948 0.50739 -1.058765 1.06148 -0.043763 0.40904 -0.080718 0.829 -0.080718 1.2571 0 0.4282 0.036955 0.8481 0.080718 1.2572Z" />
+      <path d="M8.40298 4.41097c0.05929 0.5541 0.50494 0.99976 1.05877 1.06149 0.41136 0.04585 0.83375 0.08523 1.26435 0.08523 0.4306 0 0.853 -0.03938 1.2644 -0.08523 0.5538 -0.06173 0.9995 -0.50739 1.0587 -1.06149 0.0438 -0.40904 0.0808 -0.82899 0.0808 -1.25712 0 -0.42814 -0.037 -0.84809 -0.0808 -1.25713 -0.0592 -0.5541 -0.5049 -0.999754 -1.0587 -1.061486C11.5791 0.789382 11.1567 0.75 10.7261 0.75s-0.85299 0.039382 -1.26435 0.085234c-0.55383 0.061732 -0.99948 0.507386 -1.05877 1.061486 -0.04376 0.40904 -0.08071 0.82899 -0.08071 1.25713 0 0.42813 0.03695 0.84808 0.08071 1.25712Z" />
+    </svg>
+  );
+}
+
 function NewChatIcon({ size = 15 }: { size?: number } = {}) {
   return (
-    <svg width={size} height={size} viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true" style={{ flexShrink: 0 }}>
-      <path d="M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h357l-80 80H200v560h560v-278l80-80v358q0 33-23.5 56.5T760-120H200Zm280-360ZM360-360v-170l367-367q12-12 27-18t30-6q16 0 30.5 6t26.5 18l56 57q11 12 17 26.5t6 29.5q0 15-5.5 29.5T897-728L530-360H360Zm481-424-56-56 56 56ZM440-440h56l232-232-28-28-29-28-231 231v57Zm260-260-29-28 29 28 28 28-28-28Z" />
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M5.39 2.41c-0.87 0.04 -1.722 0.134 -2.553 0.23a2.094 2.094 0 0 0 -1.835 1.84C0.882 5.558 0.766 6.673 0.766 7.813c0 1.141 0.116 2.256 0.236 3.335 0.108 0.96 0.875 1.727 1.835 1.838 1.084 0.125 2.204 0.25 3.35 0.25 1.147 0 2.267 -0.125 3.351 -0.25a2.094 2.094 0 0 0 1.834 -1.838 38.96 38.96 0 0 0 0.212 -2.38" />
+      <path d="m10.108 1.303 -3.685 4.18 -0.504 2.375c-0.082 0.382 0.317 0.744 0.69 0.626l2.362 -0.742 3.806 -4.005c0.633 -0.665 0.522 -1.778 -0.243 -2.455 -0.747 -0.66 -1.833 -0.652 -2.426 0.02Z" />
     </svg>
   );
 }
@@ -16518,12 +16685,7 @@ function PencilIcon() {
 }
 
 function PanelIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="M9 4v16" />
-    </svg>
-  );
+  return <SideChatIcon size={16} mirrored />;
 }
 
 function ChatPlusIcon({ size = 14, strokeWidth = 2 }: { size?: number; strokeWidth?: number } = {}) {
@@ -16544,11 +16706,13 @@ function ChatBubbleIcon() {
   );
 }
 
-function SideChatIcon() {
+function SideChatIcon({ size = 15, mirrored = false }: { size?: number; mirrored?: boolean } = {}) {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2" y="4" width="20" height="16" rx="2" />
-      <path d="M14 4v16" />
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={mirrored ? { transform: "scaleX(-1)" } : undefined}>
+      <path d="m9.5 3.99988 1.5 0" />
+      <path d="m9.5 6.49988 1.5 0" />
+      <path d="M0.959867 10.2685C1.114 11.7092 2.2727 12.8679 3.71266 13.0284 4.78221 13.1476 5.88037 13.25 7 13.25s2.21779 -0.1024 3.2873 -0.2216c1.44 -0.1605 2.5987 -1.3192 2.7528 -2.7599 0.1138 -1.06348 0.2099 -2.15535 0.2099 -3.2685 0 -1.11316 -0.0961 -2.20502 -0.2099 -3.26853 -0.1541 -1.44065 -1.3128 -2.59936 -2.7528 -2.759861C9.21779 0.852392 8.11963 0.75 7 0.75S4.78221 0.852392 3.71266 0.971609C2.2727 1.13211 1.114 2.29082 0.959867 3.73147 0.846083 4.79498 0.75 5.88684 0.75 7c0 1.11315 0.096084 2.20502 0.209867 3.2685Z" />
+      <path d="m7.5 0.756592 0 12.486908" />
     </svg>
   );
 }
@@ -16765,25 +16929,44 @@ function FieldSelect({
   options,
   onChange,
   triggerStyle,
+  disabled = false,
 }: {
   id: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: { value: string; label: string; description?: string }[];
   onChange: (value: string) => void;
   triggerStyle: React.CSSProperties;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const selectedIndex = Math.max(0, options.findIndex((o) => o.value === value));
   const current = options[selectedIndex];
+  const hasDescriptions = options.some((option) => option.description);
+
+  useLayoutEffect(() => {
+    if (!open || !hasDescriptions) return;
+    function updatePosition() {
+      const bounds = wrapRef.current?.getBoundingClientRect();
+      if (bounds) setMenuPosition({ top: bounds.bottom + 6, right: window.innerWidth - bounds.right });
+    }
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, hasDescriptions]);
 
   useEffect(() => {
     if (!open) return;
     setActive(selectedIndex);
     function onDown(e: MouseEvent) {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+      if (!wrapRef.current?.contains(e.target as Node) && !listRef.current?.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -16821,11 +17004,34 @@ function FieldSelect({
     if (e.key === "End") { e.preventDefault(); setActive(options.length - 1); return; }
   }
 
+  const optionRows = options.map((opt, i) => {
+    const isSelected = opt.value === value;
+    return (
+      <div
+        key={opt.value}
+        id={`${id}-opt-${i}`}
+        data-idx={i}
+        role="option"
+        aria-selected={isSelected}
+        onMouseEnter={() => setActive(i)}
+        onClick={() => commit(i)}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 8, cursor: "pointer", fontSize: 13.5, letterSpacing: "var(--track-body)", background: i === active ? "var(--chip)" : "transparent", color: isSelected ? colors.accent : colors.fg }}
+      >
+        <span style={{ width: 14, display: "flex", flexShrink: 0, opacity: isSelected ? 1 : 0 }} aria-hidden="true"><Check size={14} strokeWidth={2.5} /></span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{opt.label}</span>
+          {opt.description && <span style={{ display: "block", marginTop: 2, color: colors.dim, fontSize: 12, lineHeight: 1.35 }}>{opt.description}</span>}
+        </span>
+      </div>
+    );
+  });
+
   return (
-    <div ref={wrapRef} style={{ position: "relative" }}>
+    <div ref={wrapRef} style={{ position: "relative", minWidth: 0, maxWidth: "100%" }}>
       <button
         id={id}
         type="button"
+        disabled={disabled}
         className="u-field"
         role="combobox"
         aria-expanded={open}
@@ -16834,28 +17040,30 @@ function FieldSelect({
         data-nopress
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onKeyDown}
-        style={{ ...triggerStyle, textAlign: "left", cursor: "pointer", display: "block" }}
+        style={{ ...triggerStyle, textAlign: "left", cursor: disabled ? "default" : "pointer", display: "block" }}
       >
         {current?.label ?? ""}
       </button>
       <FieldChevron />
-      {open && (
+      {open && (!hasDescriptions || menuPosition) && (hasDescriptions ? createPortal(
         <div
           ref={listRef}
           role="listbox"
           data-popover
           style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
-            left: 0,
-            right: 0,
+            position: hasDescriptions ? "fixed" : "absolute",
+            top: hasDescriptions ? menuPosition?.top : "calc(100% + 6px)",
+            left: hasDescriptions ? "auto" : 0,
+            right: hasDescriptions ? menuPosition?.right : 0,
+            width: hasDescriptions ? 300 : undefined,
+            maxWidth: "calc(100vw - 32px)",
             maxHeight: 260,
             overflowY: "auto",
             background: colors.panel,
             border: `1px solid ${colors.border}`,
             borderRadius: 14,
             padding: 8,
-            zIndex: 40,
+            zIndex: hasDescriptions ? 1000 : 40,
             boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
             // Grows out of the trigger rather than appearing from nothing:
             // origin at the top edge, ease-out, inside the 150-250ms band a
@@ -16864,45 +17072,17 @@ function FieldSelect({
             animation: "unbiased-field-pop 150ms var(--ease-out)",
           }}
         >
-          {options.map((opt, i) => {
-            const isSelected = opt.value === value;
-            return (
-              <div
-                key={opt.value}
-                id={`${id}-opt-${i}`}
-                data-idx={i}
-                role="option"
-                aria-selected={isSelected}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => commit(i)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "7px 10px",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  fontSize: 13.5,
-                  letterSpacing: "var(--track-body)",
-                  // The highlight follows the keyboard AND the pointer, so
-                  // there is never a second, competing "current" row.
-                  background: i === active ? "var(--chip)" : "transparent",
-                  color: isSelected ? colors.accent : colors.fg,
-                }}
-              >
-                <span style={{ width: 14, display: "flex", flexShrink: 0, opacity: isSelected ? 1 : 0 }} aria-hidden="true">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                </span>
-                <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {opt.label}
-                </span>
-              </div>
-            );
-          })}
+          {optionRows}
+        </div>, document.getElementById("root")?.firstElementChild ?? document.body) : (
+        <div
+          ref={listRef}
+          role="listbox"
+          data-popover
+          style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, maxHeight: 260, overflowY: "auto", background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 14, padding: 8, zIndex: 40, boxShadow: "0 8px 24px rgba(0,0,0,0.45)", transformOrigin: "top center", animation: "unbiased-field-pop 150ms var(--ease-out)" }}
+        >
+          {optionRows}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -17300,34 +17480,24 @@ function CloseIcon() {
   );
 }
 
-/** Connectors. A plug, drawn at the same 16px/1.7 stroke as the rest of the
- *  sidebar set so it sits level with New chat and Scheduled. */
 function PlugIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 2v6" />
-      <path d="M15 2v6" />
-      <path d="M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8Z" />
-      <path d="M12 17v5" />
+    <svg width="16" height="16" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M7.23815 11.5h-0.47934c-3.04059 0 -5.37728 -2.69131 -4.9505 -5.7018l0.18886 -1.33225c0.03496 -0.24656 0.24602 -0.42982 0.49505 -0.42982H11.504c0.249 0 0.46 0.18312 0.495 0.42956l0.1893 1.32992C12.6168 8.80692 10.2798 11.5 7.23815 11.5Z" />
+      <path d="M4.52832 4.03606V0.578125" />
+      <path d="M9.46777 4.03606V0.578125" />
+      <path d="M6.99805 11.4998v1.9221" />
     </svg>
   );
 }
 
 function ClockIcon({ size = 15 }: { size?: number } = {}) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3.5 2" />
-    </svg>
-  );
-}
-
-function FolderPlusIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.2 3.9A2 2 0 0 0 7.5 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-      <path d="M12 10v6" />
-      <path d="M9 13h6" />
+    <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M10.336 1.45A4.9 4.9 0 0 1 12.152 3" />
+      <path d="M13.132 8.5c0.078 -0.468 0.118 -0.969 0.118 -1.5s-0.04 -1.032 -0.118 -1.5" />
+      <path d="M12.389 10.633C11.39 12.335 9.55 13.25 7 13.25 3 13.25 0.75 11 0.75 7S3 0.75 7 0.75c0.323 0.003 1.073 0.032 1.492 0.125" />
+      <path d="M7 4.75v2.5l2.062 2.403" />
     </svg>
   );
 }
@@ -17412,10 +17582,8 @@ function ThreadRow({
           color: active ? colors.fg : "var(--fg-soft)",
           border: "none",
           padding: "8px 4px 8px 8px",
-          // Active state is carried by weight and material rather than by
-          // shrinking every inactive row.
           fontSize: 14,
-          fontWeight: active ? 500 : 400,
+          fontWeight: 400,
           letterSpacing: "var(--track-body)",
           textAlign: "left",
           cursor: "pointer",
@@ -17882,49 +18050,6 @@ function PermissionsPrompt({
         </span>
       </div>
     </div>
-  );
-}
-
-function ChatFooter({ status, busy }: { status: EngineStatus; busy: boolean }) {
-  return (
-    <footer
-      className="u-sidebar-footer"
-      style={{
-        padding: "9px 16px 11px",
-        fontSize: 11.5,
-        color: colors.dim,
-        display: "flex",
-        gap: 7,
-        alignItems: "center",
-        fontVariantNumeric: "tabular-nums",
-        flexShrink: 0,
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-      }}
-    >
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: 4,
-          flexShrink: 0,
-          background:
-            status.state === "connected" ? colors.ok : status.state === "starting" ? colors.accent : colors.err,
-        }}
-      />
-      {status.state === "connected" && (
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-          connected · pareto · engine {status.engineVersion}
-          {busy ? " · thinking…" : ""}
-        </span>
-      )}
-      {status.state === "starting" && <span>starting engine…</span>}
-      {status.state === "exited" && (
-        <span style={{ color: colors.err, overflow: "hidden", textOverflow: "ellipsis" }} title={status.detail}>
-          {status.detail}
-        </span>
-      )}
-    </footer>
   );
 }
 
