@@ -23,6 +23,7 @@ import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
+import { Check, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 
 type EngineStatus =
@@ -732,8 +733,10 @@ declare global {
       ) => Promise<{ ok: boolean; error?: string }>;
       revealProject: (path: string) => Promise<{ ok: boolean }>;
       readFile: (path: string) => Promise<{ fullPath: string; relPath?: string; content?: string; error?: string }>;
+      revealFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
+      saveFileCopy: (path: string) => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
       fileExists: (path: string) => Promise<{ exists: boolean }>;
-      readImage: (path: string) => Promise<{ dataUrl?: string; error?: string }>;
+      readImage: (path: string) => Promise<{ dataUrl?: string; fullPath?: string; error?: string }>;
       listDir: (dir?: string) => Promise<{ dir: string; entries: DirEntry[]; error?: string }>;
       searchRefs: (word: string) => Promise<{ results: RefHit[]; truncated?: boolean; error?: string }>;
       blameLine: (file: string, line: number) => Promise<BlameInfo>;
@@ -2610,7 +2613,7 @@ export function App() {
     addFileTab({
       name: a.name,
       relPath: a.name,
-      fullPath: a.path,
+      fullPath: result.fullPath ?? a.path,
       imageSrc: result.dataUrl,
       error: result.error,
     });
@@ -2621,7 +2624,7 @@ export function App() {
     const name = pathText.split("/").filter(Boolean).pop() ?? pathText;
     if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(name)) {
       const r = await window.unbiased.readImage(pathText);
-      return { name, relPath: name, fullPath: pathText, imageSrc: r.dataUrl, error: r.error };
+      return { name, relPath: name, fullPath: r.fullPath ?? pathText, imageSrc: r.dataUrl, error: r.error };
     }
     const result = await window.unbiased.readFile(pathText);
     return {
@@ -2632,6 +2635,20 @@ export function App() {
       line,
       error: result.error,
     };
+  }
+
+  async function refreshOpenFile(id: number, file: OpenFileInfo): Promise<OpenFileInfo> {
+    const info = await loadFileInfo(file.fullPath, file.line);
+    setOpenFiles((fs) => fs.map((f) =>
+      f.id === id && f.info.fullPath === file.fullPath ? { ...f, info } : f,
+    ));
+    return info;
+  }
+
+  async function refreshTreeFile(tabId: number, file: OpenFileInfo): Promise<OpenFileInfo> {
+    const info = await loadFileInfo(file.fullPath, file.line);
+    setTreeFiles((files) => files[tabId]?.fullPath === file.fullPath ? { ...files, [tabId]: info } : files);
+    return info;
   }
 
   async function openFileInPanel(pathText: string, line?: number) {
@@ -4423,6 +4440,7 @@ export function App() {
                   file={f.info}
                   onOpenFile={(p, l) => void openFileInPanel(p, l)}
                   onOpenLink={openInBrowser}
+                  onRefresh={() => refreshOpenFile(f.id, f.info)}
                   preview={previewOn}
                 />
               ),
@@ -4457,6 +4475,7 @@ export function App() {
                     file={treeFile}
                     onOpenFile={(p, l) => void openFileInTree(tabId, p, l)}
                     onOpenLink={openInBrowser}
+                    onRefresh={() => refreshTreeFile(tabId, treeFile)}
                     preview={previewOn}
                   />
                 ) : (
@@ -7388,14 +7407,94 @@ function FileViewer({
   file,
   onOpenFile,
   onOpenLink,
+  onRefresh,
   preview,
 }: {
   file: OpenFileInfo;
   onOpenFile?: (path: string, line?: number) => void;
   onOpenLink?: (url: string) => void;
+  onRefresh: () => Promise<OpenFileInfo>;
   preview?: boolean;
 }) {
   const content = file.content ?? "";
+  const canCopy = !file.error && file.content !== undefined;
+  const copyLabel = /\.(md|markdown)$/i.test(file.name) ? "Copy as Markdown" : "Copy contents";
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null);
+  const noticeTimer = useRef<number | null>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  function showNotice(message: string, error = false) {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+    setNotice({ message, error });
+    noticeTimer.current = window.setTimeout(() => setNotice(null), error ? 4000 : 1600);
+  }
+  useEffect(() => () => {
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+  }, []);
+  useEffect(() => {
+    setActionsOpen(false);
+    setNotice(null);
+  }, [file.fullPath]);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!actionsRef.current?.contains(e.target as Node)) setActionsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setActionsOpen(false);
+        actionsRef.current?.querySelector<HTMLButtonElement>('[aria-label="File actions"]')?.focus();
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [actionsOpen]);
+
+  async function copyContents() {
+    if (!canCopy) return;
+    setActionsOpen(false);
+    try {
+      await navigator.clipboard.writeText(content);
+      showNotice("Copied");
+    } catch {
+      showNotice("Could not copy this file.", true);
+    }
+  }
+
+  async function revealFile() {
+    setActionsOpen(false);
+    try {
+      const result = await window.unbiased.revealFile(file.fullPath);
+      if (!result.ok) showNotice(result.error ?? "Could not show this file in Finder.", true);
+    } catch {
+      showNotice("Could not show this file in Finder.", true);
+    }
+  }
+
+  async function saveCopy() {
+    setActionsOpen(false);
+    try {
+      const result = await window.unbiased.saveFileCopy(file.fullPath);
+      if (result.canceled) return;
+      showNotice(result.ok ? "Copy saved" : result.error ?? "Could not save a copy.", !result.ok);
+    } catch {
+      showNotice("Could not save a copy.", true);
+    }
+  }
+
+  async function refreshFile() {
+    setActionsOpen(false);
+    try {
+      const updated = await onRefresh();
+      showNotice(updated.error ?? "Refreshed", !!updated.error);
+    } catch {
+      showNotice("Could not refresh this file.", true);
+    }
+  }
   // The preview component map memoizes per file — the link handler rides a
   // ref so the memo never closes over a stale prop.
   const onOpenLinkRef = useRef(onOpenLink);
@@ -7630,6 +7729,7 @@ function FileViewer({
 
   function onCrumbClick(i: number, e: React.MouseEvent<HTMLElement>) {
     if (!onOpenFile) return;
+    setActionsOpen(false);
     const selfAbs = "/" + fullSegs.slice(0, segOffset + i + 1).join("/");
     const parentSegs = fullSegs.slice(0, segOffset + i);
     // Root crumb: no parent to list siblings from — list the crumb itself.
@@ -7640,38 +7740,69 @@ function FileViewer({
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
       <div ref={headerRef} style={{ position: "relative", borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
-        <div
-          style={{
-            padding: "10px 16px",
-            fontSize: 12.5,
-            color: colors.dim,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-          title={file.fullPath}
-        >
-          {crumbs.map((c, i) => (
-            <span key={i}>
-              {i > 0 && <span style={{ margin: "0 6px", color: "var(--gutter)" }}>›</span>}
+        <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+          <div
+            style={{
+              padding: "10px 16px",
+              fontSize: 12.5,
+              color: colors.dim,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              flex: 1,
+              minWidth: 0,
+            }}
+            title={file.fullPath}
+          >
+            {crumbs.map((c, i) => (
+              <span key={i}>
+                {i > 0 && <span style={{ margin: "0 6px", color: "var(--gutter)" }}>›</span>}
+                <button
+                  onClick={(e) => onCrumbClick(i, e)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    fontFamily: "inherit",
+                    fontSize: "inherit",
+                    color: i === crumbs.length - 1 ? colors.fg : colors.dim,
+                    cursor: onOpenFile ? "pointer" : "default",
+                  }}
+                >
+                  {c}
+                </button>
+              </span>
+            ))}
+          </div>
+          <div ref={actionsRef} style={{ position: "relative", display: "flex", alignItems: "center", gap: 2, paddingRight: 10, flexShrink: 0 }}>
+            {canCopy && (
               <button
-                onClick={(e) => onCrumbClick(i, e)}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
-                  fontFamily: "inherit",
-                  fontSize: "inherit",
-                  color: i === crumbs.length - 1 ? colors.fg : colors.dim,
-                  cursor: onOpenFile ? "pointer" : "default",
-                }}
+                onClick={() => void copyContents()}
+                title={copyLabel}
+                aria-label={copyLabel}
+                style={{ display: "flex", padding: 5, border: "none", background: "transparent", color: notice?.message === "Copied" ? colors.ok : colors.dim, cursor: "pointer" }}
               >
-                {c}
+                {notice?.message === "Copied" ? <Check size={15} /> : <Copy size={15} />}
               </button>
-            </span>
-          ))}
+            )}
+            <IconButton title="File actions" onClick={() => { setCrumbMenu(null); setActionsOpen((open) => !open); }}>
+              <MoreHorizontal size={17} />
+            </IconButton>
+            {actionsOpen && (
+              <div
+                role="group"
+                aria-label="File actions"
+                style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, width: 212, padding: 5, background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", zIndex: 30 }}
+              >
+                {canCopy && <MenuItem compact icon={<Copy size={15} />} label={copyLabel} onClick={() => void copyContents()} />}
+                <MenuItem compact icon={<FolderOpen size={15} />} label="Show in Finder" onClick={() => void revealFile()} />
+                <MenuItem compact icon={<Download size={15} />} label="Save a Copy…" onClick={() => void saveCopy()} />
+                <MenuItem compact icon={<RefreshCw size={15} />} label="Refresh" onClick={() => void refreshFile()} />
+              </div>
+            )}
+          </div>
         </div>
         {crumbMenu && onOpenFile && (
           <div
@@ -7701,6 +7832,11 @@ function FileViewer({
           </div>
         )}
       </div>
+      {notice && (
+        <div role="status" style={{ position: "absolute", right: 12, bottom: 12, zIndex: 40, maxWidth: "min(280px, calc(100% - 24px))", background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 6, padding: "7px 10px", color: notice.error ? colors.err : colors.fg, fontSize: 12.5, boxShadow: "0 4px 16px rgba(0,0,0,0.25)" }}>
+          {notice.message}
+        </div>
+      )}
       {file.error ? (
         <div style={{ padding: 24, color: colors.err, fontSize: 13 }}>{file.error}</div>
       ) : preview && /\.svg$/i.test(file.name) ? (

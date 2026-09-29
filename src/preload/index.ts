@@ -166,6 +166,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   updateProject: (path: string, record: unknown) => ipcRenderer.invoke("project:update", { path, record }),
   revealProject: (path: string) => ipcRenderer.invoke("project:reveal", path),
   readFile: (path: string) => ipcRenderer.invoke("file:read", path),
+  revealFile: (path: string) => ipcRenderer.invoke("file:reveal", path),
+  saveFileCopy: (path: string) => ipcRenderer.invoke("file:save-copy", path),
   fileExists: (path: string) => ipcRenderer.invoke("file:exists", path),
   readImage: (path: string) => ipcRenderer.invoke("file:read-image", path),
   listDir: (dir?: string) => ipcRenderer.invoke("fs:list", dir),
