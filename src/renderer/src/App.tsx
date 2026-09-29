@@ -23,6 +23,7 @@ import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
+import { ConversationDrafts } from "./conversation-drafts";
 
 type EngineStatus =
   | { state: "starting" }
@@ -1670,6 +1671,12 @@ export function App() {
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
   }>({ entries: [], nonce: 0 });
+  const mainDraftsRef = useRef<ConversationDrafts<Attachment> | null>(null);
+  if (!mainDraftsRef.current) mainDraftsRef.current = new ConversationDrafts(null, 0);
+  useEffect(() => {
+    if (authed === "out") mainDraftsRef.current = new ConversationDrafts(null, 0);
+    // A signed-out profile must not retain unsent text for the next account.
+  }, [authed]);
   // sideOpen = the whole right panel is visible; sideChatEnabled = the chat
   // tab exists in it. Kept separate so opening a file/image preview doesn't
   // drag the side chat along with it. Neither restores across launches —
@@ -2124,6 +2131,7 @@ export function App() {
   async function deleteThread(id: string) {
     sidePanelSnapshots.current.delete(id);
     await window.unbiased.deleteThread(id);
+    mainDraftsRef.current?.deleteThread(id);
     if (id === activeThreadId) {
       setActiveThreadId(null);
       setMainStarted(false);
@@ -3748,6 +3756,7 @@ export function App() {
           connected={connected}
           reset={mainReset}
           threadId={activeThreadId}
+          composerDrafts={mainDraftsRef.current}
           persistTranscript
           planMode={planMode}
           onTogglePlanMode={togglePlanMode}
@@ -8054,6 +8063,7 @@ function ChatPane({
   draftSeed,
   composerHeader,
   threadId,
+  composerDrafts,
   persistTranscript,
   onOpenAgent,
   onOpenScheduled,
@@ -8100,6 +8110,7 @@ function ChatPane({
   // The engine thread this pane shows (resumed threads); fresh chats learn
   // their id from the first send. Drives the transcript cache.
   threadId?: string | null;
+  composerDrafts?: ConversationDrafts<Attachment>;
   persistTranscript?: boolean;
   // Opens a sub-agent's conversation in the side panel (lifecycle rows).
   onOpenAgent?: (a: { threadId: string; name: string }) => void;
@@ -8110,7 +8121,10 @@ function ChatPane({
   onOpenSkills?: () => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>(reset.entries);
-  const [draft, setDraft] = useState("");
+  const localDraftsRef = useRef<ConversationDrafts<Attachment> | null>(null);
+  if (!localDraftsRef.current) localDraftsRef.current = new ConversationDrafts(threadId ?? null, reset.nonce);
+  const drafts = composerDrafts ?? localDraftsRef.current;
+  const [draft, setDraft] = useState(() => drafts.current().text);
   // A one-turn preference, like Codex's Computer composer option. Computer
   // tools remain registered for every thread so natural-language desktop
   // requests still work without explicitly selecting this first.
@@ -8148,10 +8162,27 @@ function ChatPane({
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
+  const changeDraft = (text: string) => {
+    drafts.setText(text);
+    setDraft(text);
+  };
+  const changeAttachments = (
+    update: Attachment[] | ((current: Attachment[]) => Attachment[]),
+    identity = drafts.identity(),
+  ) => {
+    const next = drafts.updateAttachments(identity, update);
+    if (next) setAttachments(next);
+  };
+  useLayoutEffect(() => {
+    const saved = drafts.transition(threadId ?? null, reset.nonce);
+    if (!saved) return;
+    setDraft(saved.text);
+    setAttachments(saved.attachments);
+  }, [drafts, threadId, reset.nonce]);
 
   useEffect(() => {
-    if (draftSeed) setDraft(draftSeed.text);
+    if (draftSeed) changeDraft(draftSeed.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftSeed?.nonce]);
   // Annotations staged for the next send: transcript excerpts, each with an
@@ -8237,15 +8268,16 @@ function ChatPane({
       .map((f) => window.unbiased.pathForDroppedFile(f))
       .filter(Boolean);
     if (paths.length === 0) return;
+    const origin = drafts.identity();
     const res = await window.unbiased.attachPaths(paths);
     if (!res.attachments?.length) return;
     // De-duplicate against what is already staged — dropping the same file
     // twice should not queue it twice.
-    setAttachments((list) => {
+    changeAttachments((list) => {
       const seen = new Set(list.map((a) => a.path));
       return [...list, ...res.attachments.filter((a) => !seen.has(a.path))];
-    });
-    taRef.current?.focus();
+    }, origin);
+    if (drafts.identity() === origin) taRef.current?.focus();
   }
 
   function openPlusMenu() {
@@ -8278,20 +8310,22 @@ function ChatPane({
     };
   }, [modeOpen]);
 
-  function stageAttachment(a: Attachment) {
-    setAttachments((list) => (list.some((x) => x.path === a.path) ? list : [...list, a]));
+  function stageAttachment(a: Attachment, origin = drafts.identity()) {
+    changeAttachments((list) => (list.some((x) => x.path === a.path) ? list : [...list, a]), origin);
   }
 
   async function addAttachments() {
     setPlusOpen(false);
+    const origin = drafts.identity();
     const { attachments: picked } = await window.unbiased.chooseAttachments();
-    picked.forEach(stageAttachment);
+    picked.forEach((a) => stageAttachment(a, origin));
   }
 
   async function attachClipboardImage() {
     setPlusOpen(false);
+    const origin = drafts.identity();
     const { attachment } = await window.unbiased.clipboardImage();
-    if (attachment) stageAttachment(attachment);
+    if (attachment) stageAttachment(attachment, origin);
   }
   const [busy, setBusyState] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -9002,8 +9036,8 @@ function ChatPane({
     ).trimEnd();
     const wire = message;
     const sentAttachments = attachments;
-    setDraft("");
-    setAttachments([]);
+    changeDraft("");
+    changeAttachments([]);
     setAnnotations([]);
     const msg: QueuedMsg = {
       id: nextQueueIdRef.current++,
@@ -9044,8 +9078,8 @@ function ChatPane({
 
   function editQueued(q: QueuedMsg) {
     setQueue((list) => list.filter((x) => x.id !== q.id));
-    setDraft(q.text);
-    setAttachments(q.attachments);
+    changeDraft(q.text);
+    changeAttachments(q.attachments);
     if (q.annotations) setAnnotations(q.annotations);
     setComputerSelected(!!q.computer);
   }
@@ -9898,7 +9932,7 @@ function ChatPane({
                 <button
                   onClick={() => {
                     onTogglePlanMode();
-                    setDraft("");
+                    changeDraft("");
                   }}
                   style={{
                     display: "flex",
@@ -9994,7 +10028,7 @@ function ChatPane({
           {attachments.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 10, paddingTop: 4 }}>
               {attachments.map((a) => {
-                const remove = () => setAttachments((list) => list.filter((x) => x.path !== a.path));
+                const remove = () => changeAttachments((list) => list.filter((x) => x.path !== a.path));
                 return a.kind === "image" && a.thumb ? (
                   <span key={a.path} title={a.path} style={{ position: "relative", display: "flex" }}>
                     <img
@@ -10118,7 +10152,7 @@ function ChatPane({
           <textarea
             data-pane-id={paneId}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => changeDraft(e.target.value)}
             onKeyDown={(e) => {
               // Enter sends immediately when idle and queues while a turn runs.
               if (e.key === "Enter" && !e.shiftKey) {
@@ -10127,7 +10161,7 @@ function ChatPane({
                 const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : null;
                 if (q !== null && "plan".startsWith(q)) {
                   onTogglePlanMode();
-                  setDraft("");
+                  changeDraft("");
                   return;
                 }
                 void submit();
@@ -10152,7 +10186,7 @@ function ChatPane({
               const el = e.currentTarget;
               const start = el.selectionStart ?? draft.length;
               const end = el.selectionEnd ?? start;
-              setDraft(draft.slice(0, start) + bare + draft.slice(end));
+              changeDraft(draft.slice(0, start) + bare + draft.slice(end));
               // React restores the caret to the end of the value; put it back
               // after what was inserted, so typing continues where you paused.
               const caret = start + bare.length;

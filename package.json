@@ -8,7 +8,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "dist": "electron-vite build && electron-builder --publish never",
-    "test": "node --import tsx --test src/main/*.test.ts"
+    "test": "node --import tsx --test src/main/*.test.ts src/renderer/src/*.test.ts"
   },
   "build": {
     "appId": "ai.unbiased.desktop",
