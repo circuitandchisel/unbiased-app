@@ -6,6 +6,18 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.12.0 — September 29, 2026
+
+### New
+
+- **More control over files.** Copy a file's contents or Markdown, reveal it in Finder, refresh it, or save a copy without overwriting an existing file.
+
+### Improved
+
+- **Drafts stay with their conversations.** Unsent text and attachments are still there when you return to a chat, instead of following you into a different one.
+- **A tidier desktop workspace.** Navigate with the app menu, resize panels from the keyboard, and use the side panel in a narrow window. Tabs have separate close controls, and conversation text is easier to scan.
+- **Unused side chats close themselves after eight hours.** Active work stays open; the idle timer starts again when the work finishes.
+
 ## 1.11.0 — September 19, 2026
 
 ### New
