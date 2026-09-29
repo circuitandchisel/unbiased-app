@@ -3327,7 +3327,6 @@ export function App() {
             )}
           </button>
         </div>
-        <ChatFooter status={status} busy={mainBusy} />
       </nav>
       )}
       {!navOpen && (
@@ -3378,13 +3377,6 @@ export function App() {
             <SidebarRailButton label="Settings" onClick={() => setShowSettings(true)}>
               <GearIcon />
             </SidebarRailButton>
-            <span
-              title={status.state === "connected" ? `Connected to Pareto · engine ${status.engineVersion}${mainBusy ? " · thinking" : ""}` : status.state === "starting" ? "Starting engine" : status.detail}
-              aria-label={status.state === "connected" ? "Engine connected" : status.state === "starting" ? "Engine starting" : "Engine disconnected"}
-              style={{ width: 40, height: 16, display: "flex", alignItems: "center", justifyContent: "center" }}
-            >
-              <span style={{ width: 7, height: 7, borderRadius: 4, background: status.state === "connected" ? colors.ok : status.state === "starting" ? colors.accent : colors.err }} />
-            </span>
           </div>
         </nav>
       )}
@@ -18058,49 +18050,6 @@ function PermissionsPrompt({
         </span>
       </div>
     </div>
-  );
-}
-
-function ChatFooter({ status, busy }: { status: EngineStatus; busy: boolean }) {
-  return (
-    <footer
-      className="u-sidebar-footer"
-      style={{
-        padding: "9px 16px 11px",
-        fontSize: 11.5,
-        color: colors.dim,
-        display: "flex",
-        gap: 7,
-        alignItems: "center",
-        fontVariantNumeric: "tabular-nums",
-        flexShrink: 0,
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-      }}
-    >
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: 4,
-          flexShrink: 0,
-          background:
-            status.state === "connected" ? colors.ok : status.state === "starting" ? colors.accent : colors.err,
-        }}
-      />
-      {status.state === "connected" && (
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-          connected · pareto · engine {status.engineVersion}
-          {busy ? " · thinking…" : ""}
-        </span>
-      )}
-      {status.state === "starting" && <span>starting engine…</span>}
-      {status.state === "exited" && (
-        <span style={{ color: colors.err, overflow: "hidden", textOverflow: "ellipsis" }} title={status.detail}>
-          {status.detail}
-        </span>
-      )}
-    </footer>
   );
 }
 
