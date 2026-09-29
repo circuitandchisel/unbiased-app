@@ -21,6 +21,8 @@ import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, 
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
+import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
+import { epochMillis } from "../shared/conversation-time";
 import { startSecretProxy, type SecretConnector } from "./oauth-proxy";
 import {
   CATALOGUE_CACHE_VERSION,
@@ -982,6 +984,33 @@ function browserWallHint(out: string): string {
   );
 }
 
+function agentStylePrefsFile(): string {
+  return join(app.getPath("userData"), "agent-style.json");
+}
+
+let agentStyleCache: AgentStylePrefs | null = null;
+function agentStylePrefs(): AgentStylePrefs {
+  if (!agentStyleCache) {
+    try {
+      agentStyleCache = parseAgentStylePrefs(JSON.parse(readFileSync(agentStylePrefsFile(), "utf8")));
+    } catch {
+      agentStyleCache = { ...DEFAULT_AGENT_STYLE };
+    }
+  }
+  return agentStyleCache;
+}
+
+function saveAgentStylePrefs(value: unknown): { ok: boolean; prefs: AgentStylePrefs } {
+  const prefs = parseAgentStylePrefs(value);
+  try {
+    writeFileSync(agentStylePrefsFile(), JSON.stringify(prefs), { mode: 0o600 });
+    agentStyleCache = prefs;
+    return { ok: true, prefs };
+  } catch {
+    return { ok: false, prefs: agentStylePrefs() };
+  }
+}
+
 // The host app's own instructions for every thread it starts (codex's
 // developer_instructions channel; sub-agents inherit it). Kept short — it
 // rides every request. Its one job is to stop the model asking for
@@ -1106,10 +1135,15 @@ const APP_DEVELOPER_INSTRUCTIONS = [
  *  project's memory index, when it has one. Computed per thread START — the
  *  index a running conversation sees is a snapshot, same as Claude Code's
  *  per-session index, refreshed on the next thread/start or resume. */
+function baseDeveloperInstructions(): string {
+  return `${APP_DEVELOPER_INSTRUCTIONS}\n\n${agentStyleInstructions(agentStylePrefs())}`;
+}
+
 function developerInstructionsFor(cwd: string | null): string {
   const dir = memoryDirForCwd(cwd);
   const section = renderMemorySection(loadMemoryNotes(dir), dir);
-  return section ? `${APP_DEVELOPER_INSTRUCTIONS}\n\n${section}` : APP_DEVELOPER_INSTRUCTIONS;
+  const base = baseDeveloperInstructions();
+  return section ? `${base}\n\n${section}` : base;
 }
 
 const AGENT_BROWSER_TOOLS = [
@@ -4370,7 +4404,7 @@ function resumeParamsFor(id: string): Record<string, unknown> {
     // points at the conversation being left).
     developerInstructions: threadCwds.has(id)
       ? developerInstructionsFor(threadCwds.get(id) ?? null)
-      : APP_DEVELOPER_INSTRUCTIONS,
+      : baseDeveloperInstructions(),
     experimentalRawEvents: true,
     config: mcpOverrideFor(id),
   };
@@ -4469,6 +4503,10 @@ function threadToEntries(
   let runningTurnStartedAt: number | null = null;
   for (let t = 0; t < turns.length; t++) {
     const turn = turns[t];
+    const startedAt = epochMillis(turn.startedAt) ?? (t === 0 ? epochMillis(thread.createdAt) : null);
+    const answeredAt = startedAt !== null && typeof turn.durationMs === "number" && Number.isFinite(turn.durationMs) && turn.durationMs >= 0
+      ? startedAt + turn.durationMs
+      : startedAt;
     // Per-turn bucket, folded when the turn (or a mid-turn user message)
     // flushes it. The live path folds a completed turn's intermediate output
     // under a "Worked" header at turn/completed — but a REOPENED conversation
@@ -4511,11 +4549,7 @@ function threadToEntries(
     const foldThisTurn = !(opts?.runningLastTurn && t === turns.length - 1);
     if (!foldThisTurn) {
       runningTurnStart = entries.length;
-      const at = turn.startedAt;
-      // Epoch guard: below ~2001-09 in milliseconds means it is not an epoch-
-      // ms value — rather a seconds epoch or something else. A wrong unit here
-      // shows a 50-year duration on the fold, so unknown beats guessed.
-      runningTurnStartedAt = typeof at === "number" && at > 1e12 ? at : null;
+      runningTurnStartedAt = startedAt;
     }
     for (const item of turn.items ?? []) {
       switch (item.type) {
@@ -4523,7 +4557,7 @@ function threadToEntries(
           // A user message (initial, or a mid-turn steer) never hides inside
           // a fold — flush what came before it, folded, then show it.
           flush(false);
-          entries.push({ kind: "user", text: item.text ?? contentToText(item.content) });
+          entries.push({ kind: "user", text: item.text ?? contentToText(item.content), ...(startedAt !== null ? { at: startedAt } : {}) });
           // The running turn's fold starts after its user message, matching
           // where the live path plants its start index on send.
           if (!foldThisTurn) runningTurnStart = entries.length;
@@ -4539,10 +4573,10 @@ function threadToEntries(
           const text = m.text ?? contentToText(m.content);
           if (!text) break;
           if (m.role === "user") {
-            entries.push({ kind: "user", text });
+            entries.push({ kind: "user", text, ...(startedAt !== null ? { at: startedAt } : {}) });
             if (!foldThisTurn) runningTurnStart = entries.length;
           } else {
-            bucket.push({ kind: "assistant", text, phase: m.phase ?? null });
+            bucket.push({ kind: "assistant", text, phase: m.phase ?? null, ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
           }
           break;
         }
@@ -4556,7 +4590,7 @@ function threadToEntries(
           // replays narration flat. That is exactly the reopened-transcript
           // bug this fixes.
           const m = item as { text?: string; phase?: string | null };
-          bucket.push({ kind: "assistant", text: m.text ?? "", phase: m.phase ?? null });
+          bucket.push({ kind: "assistant", text: m.text ?? "", phase: m.phase ?? null, ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
           break;
         }
         case "commandExecution":
@@ -4607,7 +4641,7 @@ function threadToEntries(
           bucket.push({ kind: "compaction" });
           break;
         case "plan":
-          bucket.push({ kind: "assistant", text: item.text ?? "" });
+          bucket.push({ kind: "assistant", text: item.text ?? "", ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
           break;
         case "subAgentActivity": {
           const sub = item as { kind?: string; agentThreadId?: string; agentPath?: string };
@@ -7570,6 +7604,8 @@ app.whenReady().then(async () => {
     version: app.getVersion(),
     lastCheckedAt: lastUpdateCheck || null,
   }));
+  ipcMain.handle("agent-style:get", () => agentStylePrefs());
+  ipcMain.handle("agent-style:set", (_e, value: unknown) => saveAgentStylePrefs(value));
   ipcMain.handle("update:set-prefs", (_e, p: { autoDownload: boolean }) => {
     setUpdatePrefs({ autoDownload: !!p.autoDownload });
     // Turning it on mid-session should act now, not in six hours.

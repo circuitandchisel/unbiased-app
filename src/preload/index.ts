@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { AgentStylePrefs } from "../shared/agent-style";
 
 // The renderer's entire view of the engine. Typed, minimal, and additive.
 // Chat traffic is pane-scoped: every event payload carries paneId and every
@@ -25,6 +26,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   changelogReleases: () => ipcRenderer.invoke("changelog:releases"),
   updatePrefs: () => ipcRenderer.invoke("update:prefs"),
   setUpdatePrefs: (p: { autoDownload: boolean }) => ipcRenderer.invoke("update:set-prefs", p),
+  agentStyle: () => ipcRenderer.invoke("agent-style:get"),
+  setAgentStyle: (prefs: AgentStylePrefs) => ipcRenderer.invoke("agent-style:set", prefs),
   onUpdateAvailable: (cb: (p: unknown) => void) => subscribe("update:available", cb),
   onUpdateStaged: (cb: (p: unknown) => void) => subscribe("update:staged", cb),
   onUpdateProgress: (cb: (p: unknown) => void) => subscribe("update:progress", cb),
