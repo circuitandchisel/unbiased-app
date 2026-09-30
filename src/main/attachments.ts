@@ -23,6 +23,19 @@ import { join } from "node:path";
  *  subprocess on every attach. */
 export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "heif", "tif", "tiff", "avif"];
 
+export const MAX_ATTACHMENT_BYTES = 7 * 1024 * 1024;
+const REQUEST_ENVELOPE_RESERVE_BYTES = 256 * 1024;
+
+export function attachmentSizeError(name: string, size: number, kind: "image" | "file" = "file"): string | null {
+  if (size > MAX_ATTACHMENT_BYTES) {
+    return `${name} is larger than 7 MB. Attach a smaller file or split it before sending.`;
+  }
+  if (kind === "image" && Math.ceil(size / 3) * 4 + REQUEST_ENVELOPE_RESERVE_BYTES > MAX_ATTACHMENT_BYTES) {
+    return `${name} would exceed the 7 MB request budget after image encoding. Use a smaller image.`;
+  }
+  return null;
+}
+
 const IMAGE_RE = new RegExp(`\\.(${IMAGE_EXTENSIONS.join("|")})$`, "i");
 
 export function looksLikeImage(path: string): boolean {
