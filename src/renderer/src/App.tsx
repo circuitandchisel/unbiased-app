@@ -30,6 +30,7 @@ import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
 import { finalAssistantIndices } from "./transcript-actions";
+import { commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
 
 type EngineStatus =
@@ -90,7 +91,7 @@ type Entry =
      source?: "shell" | "browser" | "memory" | "tool" | "approval" | "computer";
      /** For a computer step: the icon of the app it acted on, as a data URL. */
      appIcon?: string;
-     status: string; // inProgress | completed | failed | declined | awaitingApproval | canceled
+     status: string; // inProgress | completed | failed | declined | awaitingApproval | canceled | unconfirmed
      exitCode?: number;
      output?: string;
      approval?: {
@@ -8729,7 +8730,7 @@ function ChatPane({
   useEffect(() => {
     threadIdRef.current = threadId ?? null;
     messageBoundaryRef.current = false;
-    setEntries(reset.entries);
+    setEntries(reset.resume?.running ? reset.entries : settleUnconfirmedSteps(reset.entries));
     // A reopened conversation may still be mid-turn: restore its busy
     // state and any approval requests the agent is blocked on.
     setBusy(!!reset.resume?.running);
@@ -8742,16 +8743,7 @@ function ChatPane({
       : null;
     turnStartedAtRef.current = reset.resume?.running ? (reset.runningTurnStartedAt ?? null) : null;
     for (const held of reset.resume?.approvals ?? []) applyApproval(held);
-    // A restored step can only still be running if the thread is. Statuses are
-    // persisted in the transcript, so a command that died as inProgress when
-    // the app quit is restored as inProgress — and StepsGroup reads exactly
-    // that to say "Working…", forever, about work no process is doing. Same
-    // disease as the stale approval cards above, one field over.
-    if (!reset.resume?.running) {
-      setEntries((es) =>
-        mapCommandsDeep(es, (e) => (e.status === "inProgress" ? { ...e, status: "canceled" } : e)),
-      );
-    }
+    // A saved running step in an idle thread has no confirmed outcome.
     // Occupancy is a property of the conversation being left, not the one
     // being entered. The [threadId] effect below also clears it, but only when
     // the id actually changes — this covers a reset where it does not.
@@ -8884,13 +8876,14 @@ function ChatPane({
             }
           }
           next = withoutTrailingPlaceholder(next);
+          const start = workStart;
+          next = settleTurnSteps(next, start);
           // Fold a completed turn's intermediate output — narration, agent
           // lifecycle rows, command groups — under a "Worked for Ns" header,
           // leaving the final message visible (Codex-style). Only turns that
           // actually did agent/tool work get folded; failed and interrupted
           // turns stay raw so nothing hides the evidence.
           if (p.status === "completed") {
-            const start = workStart;
             if (start !== null && start >= 0 && start < next.length) {
               const turnEntries = next.slice(start);
               const last = turnEntries[turnEntries.length - 1];
@@ -9158,7 +9151,7 @@ function ChatPane({
             return {
               ...existing,
               command: item.command ?? existing.command,
-              status: item.status ?? existing.status,
+              status: commandStatusAfterEvent(existing.status, item.status, p.phase, turnStartIndexRef.current !== null),
               exitCode: item.exitCode ?? existing.exitCode,
               output: item.aggregatedOutput ?? item.output ?? existing.output,
               // Carried live, not only on a transcript reload: without these a
@@ -9174,7 +9167,7 @@ function ChatPane({
               kind: "command",
               itemId,
               command: item.command ?? "(command)",
-              status: item.status ?? (p.phase === "started" ? "inProgress" : "completed"),
+              status: commandStatusAfterEvent(undefined, item.status, p.phase, turnStartIndexRef.current !== null),
               exitCode: item.exitCode,
               output: item.aggregatedOutput ?? item.output,
               source: item.source,
@@ -9358,6 +9351,7 @@ function ChatPane({
     if (e.status === "declined") return { text: "▸ declined", color: colors.dim };
     if (e.status === "failed" || (e.exitCode ?? 0) !== 0)
       return { text: `▸ exit ${e.exitCode ?? "?"}`, color: colors.err };
+    if (e.status === "unconfirmed") return { text: "▸ result not confirmed", color: colors.dim };
     return { text: "▸ done", color: colors.ok };
   };
 
@@ -18274,7 +18268,9 @@ function StepsGroup({
       return next;
     });
   const running = items.some((e) => e.status === "inProgress");
+  const unconfirmed = items.some((e) => e.status === "unconfirmed");
   const failed = items.some((e) => e.status === "failed" || (e.exitCode ?? 0) !== 0);
+  const issueSuffix = `${failed ? " · issues" : ""}${unconfirmed ? " · result not confirmed" : ""}`;
   // A hidden approval would hang the turn on a question nobody can see.
   const expanded = open || needsApproval;
 
@@ -18293,16 +18289,16 @@ function StepsGroup({
           verb: browsing ? "Using" : null,
         }
       : browsing
-        ? { text: "Used", color: failed ? colors.err : colors.dim, verb: "Used" }
+        ? { text: `Used${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: "Used" }
         : computing
-          ? { text: "Controlled desktop", color: failed ? colors.err : colors.dim, verb: null }
+          ? { text: `Controlled desktop${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
         : memoryLabel
-          ? { text: `${memoryLabel}${failed ? " · issues" : ""}`, color: failed ? colors.err : colors.dim, verb: null }
+          ? { text: `${unconfirmed ? "Memory update" : memoryLabel}${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
           : {
               // "Ran commands" rather than "Worked · N steps": the count is
               // already one row per step below, and the verb says what kind
               // of work it was without the reader opening the group.
-              text: `Ran command${items.length === 1 ? "" : "s"}${failed ? " · issues" : ""}`,
+              text: `Ran command${items.length === 1 ? "" : "s"}${issueSuffix}`,
               color: failed ? colors.err : colors.dim,
               verb: null,
             };
