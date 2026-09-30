@@ -142,9 +142,10 @@ import {
 import {
   deleteMemoryNote,
   loadMemoryNotes,
-  projectMemoryDir,
+  migrateLegacyPlainMemory,
   renderMemorySection,
   saveMemoryNote,
+  scopedMemoryDir,
   validateMemory,
 } from "./memory";
 import {
@@ -1131,17 +1132,17 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "sub-agents already inherit the current model.",
 ].join(" ");
 
-/** The instructions a thread actually gets: the static block above plus the
- *  project's memory index, when it has one. Computed per thread START — the
+/** The instructions a thread actually gets: the static block above plus its
+ *  scoped memory index, when it has one. Computed per thread START — the
  *  index a running conversation sees is a snapshot, same as Claude Code's
  *  per-session index, refreshed on the next thread/start or resume. */
 function baseDeveloperInstructions(): string {
   return `${APP_DEVELOPER_INSTRUCTIONS}\n\n${agentStyleInstructions(agentStylePrefs())}`;
 }
 
-function developerInstructionsFor(cwd: string | null): string {
-  const dir = memoryDirForCwd(cwd);
-  const section = renderMemorySection(loadMemoryNotes(dir), dir);
+function developerInstructionsFor(cwd: string | null, threadId: string | null = null): string {
+  const dir = memoryDirForCwd(cwd, threadId);
+  const section = dir ? renderMemorySection(loadMemoryNotes(dir), dir) : "";
   const base = baseDeveloperInstructions();
   return section ? `${base}\n\n${section}` : base;
 }
@@ -1754,10 +1755,10 @@ const MEMORY_TOOLS = [
     type: "function",
     name: "memory_save",
     description:
-      "Save a durable note to this project's persistent memory so FUTURE conversations start knowing it. " +
+      "Save a durable note to this conversation's memory, shared with other conversations only when they use the same project. " +
       "Save: corrections and preferences the user states, project facts not written down anywhere, and " +
       "hard-won lessons — each with its Why. Do NOT save things the repo or git history already records, " +
-      "or details that only matter to this conversation. Saving an existing name updates that note — " +
+      "or fleeting task details. Saving an existing name updates that note — " +
       "that is how you edit one.",
     inputSchema: {
       type: "object",
@@ -1769,8 +1770,8 @@ const MEMORY_TOOLS = [
         description: {
           type: "string",
           description:
-            "ONE sentence: what this says and when to reach for it. This line is all a future " +
-            "conversation sees before deciding to read the note — a vague one makes the memory " +
+            "ONE sentence: what this says and when to reach for it. This line is all a later " +
+            "turn or project conversation sees before deciding to read the note — a vague one makes the memory " +
             "invisible forever.",
         },
         type: {
@@ -1790,7 +1791,7 @@ const MEMORY_TOOLS = [
     type: "function",
     name: "memory_forget",
     description:
-      "Delete one note from this project's persistent memory, by its exact name from the memory index. " +
+      "Delete one note from this conversation or project's persistent memory, by its exact name from the memory index. " +
       "Use when a memory turns out wrong or obsolete — a wrong note re-read by every future conversation " +
       "is worse than none.",
     inputSchema: {
@@ -3922,14 +3923,13 @@ const threadCwds = new Map<string, string>();
 
 const memoryRoot = () => join(homedir(), ".unbiased", "memory");
 
-/** The memory directory a thread reads and writes. Worktree conversations
- *  resolve to their PROJECT's store — keying by cwd would give every
- *  worktree an amnesiac private notebook (matches observed Claude Code
- *  behavior: a worktree session uses the main project's memory). */
-function memoryDirForCwd(cwd: string | null): string {
-  const at = cwd || defaultChatDir();
-  const project = loadWorktrees()[at]?.project ?? at;
-  return projectMemoryDir(memoryRoot(), project);
+/** Projects share their notes; ordinary chats have no shared memory until
+ *  the engine assigns a thread ID. Unknown cwd fails closed to that thread. */
+function memoryDirForCwd(cwd: string | null, threadId: string | null = null): string | null {
+  return scopedMemoryDir(
+    memoryRoot(), cwd, defaultChatDir(), threadId,
+    cwd ? loadWorktrees()[cwd]?.project : undefined,
+  );
 }
 
 // ── The learning sidecar (observe-only) ─────────────────────────────────
@@ -3977,9 +3977,11 @@ async function startLearning(): Promise<void> {
   }
 }
 
-function memoryDirForThread(threadId: string | null): string {
-  const root = threadId ? rootThreadOf(threadId) : null;
-  return memoryDirForCwd((root && threadCwds.get(root)) || mainCwd);
+function memoryDirForThread(threadId: string | null): string | null {
+  if (!threadId) return null;
+  const root = rootThreadOf(threadId);
+  const cwd = threadCwds.get(root) ?? (panes.main.threadId === root ? mainCwd : null);
+  return memoryDirForCwd(cwd, root);
 }
 
 // Where the NEXT fresh main chat's thread will live. null = home directory
@@ -4397,14 +4399,9 @@ function resumeParamsFor(id: string): Record<string, unknown> {
     threadId: id,
     ...threadPolicy(),
     dynamicTools: threadDynamicTools(),
-    // The thread's cwd is only known once the resume RETURNS, so the
-    // memory index rides along when this app session has seen the
-    // thread before, and is omitted on a cold reopen — no section
-    // beats injecting some other project's memory (mainCwd still
-    // points at the conversation being left).
-    developerInstructions: threadCwds.has(id)
-      ? developerInstructionsFor(threadCwds.get(id) ?? null)
-      : baseDeveloperInstructions(),
+    // A cold reopen can safely recover thread-private notes by ID. Project
+    // memory still needs a known cwd; never substitute the previous chat's.
+    developerInstructions: developerInstructionsFor(threadCwds.get(id) ?? null, id),
     experimentalRawEvents: true,
     config: mcpOverrideFor(id),
   };
@@ -7086,6 +7083,7 @@ async function handleMemoryToolCall(
       false,
     );
   }
+  if (!dir) return text("This conversation has no memory store yet.", false);
 
   if (tool === "memory_forget") {
     const rawName = (rawArgs as Record<string, unknown>)?.name;
@@ -7100,7 +7098,7 @@ async function handleMemoryToolCall(
       [
         `Deletes ${join(dir, `${name}.md`)}`,
         "",
-        "Future conversations in this project will no longer see it. This cannot be undone.",
+        "This memory store will no longer contain it. This cannot be undone.",
       ].join("\n"),
     );
     if (decision === "decline") {
@@ -7582,6 +7580,14 @@ async function startEngine(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  try {
+    const migrated = migrateLegacyPlainMemory(memoryRoot(), defaultChatDir());
+    if (migrated.copied || migrated.unassigned || migrated.conflicts) {
+      console.log(`[memory] scoped old plain-chat notes: ${JSON.stringify(migrated)}`);
+    }
+  } catch (error) {
+    console.warn("[memory] could not scope old plain-chat notes:", error);
+  }
   ipcMain.handle("engine:status", () => lastStatus);
 
   // ── Auth IPC ────────────────────────────────────────────────────────
@@ -9598,22 +9604,22 @@ app.whenReady().then(async () => {
 
   // ---- Skills ------------------------------------------------------------
   // ── Memory ──────────────────────────────────────────────────────────
-  // The Environment popover's "Agent memory" section: every note in the
-  // thread's project store, with a flag for the ones this conversation
+  // The Environment popover's "Agent memory" section: notes in the
+  // conversation or project store, with a flag for the ones this conversation
   // saved (matched on the originThreadId provenance stamp).
   ipcMain.handle("memory:list", (_e, threadId?: string | null) => {
     const tid = typeof threadId === "string" ? threadId : null;
     const dir = memoryDirForThread(tid);
     const root = tid ? rootThreadOf(tid) : null;
     return redactSecrets({
-      dir,
-      memories: loadMemoryNotes(dir).map((n) => ({
+      dir: dir ?? "",
+      memories: dir ? loadMemoryNotes(dir).map((n) => ({
         name: n.name,
         description: n.description,
         type: n.type,
         path: join(dir, `${n.name}.md`),
         thisThread: !!root && n.originThreadId === root,
-      })),
+      })) : [],
     });
   });
 

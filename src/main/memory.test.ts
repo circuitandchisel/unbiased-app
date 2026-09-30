@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,12 +9,15 @@ import {
   type MemoryNote,
   deleteMemoryNote,
   loadMemoryNotes,
+  migrateLegacyPlainMemory,
   parseMemoryFile,
   projectMemoryDir,
   renderIndex,
   renderMemoryFile,
   renderMemorySection,
   saveMemoryNote,
+  scopedMemoryDir,
+  threadMemoryDir,
   validateMemory,
 } from "./memory";
 
@@ -255,4 +258,65 @@ test("projectMemoryDir flattens the project path into one slug directory", () =>
     projectMemoryDir("/root/mem", "/Users/u/a"),
     projectMemoryDir("/root/mem", "/Users/u/b"),
   );
+});
+
+const firstThread = "01a05a3e-b6c3-7401-a195-1128d2d38db8";
+const secondThread = "01a087c0-b8f4-74c0-82a7-4851787fd611";
+
+test("ordinary chat memory is thread-private while project and worktree memory is shared", () => {
+  const root = "/root/memory";
+  const scratchCwd = "/Users/u/Unbiased";
+  const project = "/Users/u/Projects/app";
+  const first = scopedMemoryDir(root, scratchCwd, scratchCwd, firstThread);
+  const second = scopedMemoryDir(root, scratchCwd, scratchCwd, secondThread);
+  assert.equal(first, threadMemoryDir(root, firstThread));
+  assert.notEqual(first, second);
+  assert.equal(scopedMemoryDir(root, scratchCwd, scratchCwd, null), null);
+  assert.equal(scopedMemoryDir(root, null, scratchCwd, firstThread), first);
+  assert.equal(scopedMemoryDir(root, project, scratchCwd, firstThread), projectMemoryDir(root, project));
+  assert.equal(scopedMemoryDir(root, project, scratchCwd, secondThread), projectMemoryDir(root, project));
+  assert.equal(scopedMemoryDir(root, "/tmp/worktree", scratchCwd, firstThread, project), projectMemoryDir(root, project));
+  assert.equal(threadMemoryDir(root, "../other-thread"), null);
+});
+
+test("legacy ordinary-chat notes copy only to their originating threads, once", () => {
+  const root = scratch();
+  const defaultCwd = "/Users/u/Unbiased";
+  const legacy = projectMemoryDir(root, defaultCwd);
+  saveMemoryNote(legacy, { ...note("first"), originThreadId: firstThread });
+  saveMemoryNote(legacy, { ...note("second"), originThreadId: secondThread });
+  saveMemoryNote(legacy, note("unassigned"));
+
+  assert.deepEqual(migrateLegacyPlainMemory(root, defaultCwd), { copied: 2, unassigned: 1, conflicts: 0 });
+  const first = threadMemoryDir(root, firstThread);
+  const second = threadMemoryDir(root, secondThread);
+  assert.ok(first && second);
+  assert.deepEqual(loadMemoryNotes(first).map((n) => n.name), ["first"]);
+  assert.deepEqual(loadMemoryNotes(second).map((n) => n.name), ["second"]);
+  assert.equal(existsSync(legacy), false);
+  assert.equal(loadMemoryNotes(join(root, "legacy-shared-chat-backup")).length, 3);
+  deleteMemoryNote(first, "first");
+  assert.deepEqual(migrateLegacyPlainMemory(root, defaultCwd), { copied: 0, unassigned: 0, conflicts: 0 });
+  assert.deepEqual(loadMemoryNotes(first), []);
+});
+
+test("an already-copied legacy store is archived without reviving deleted notes", () => {
+  const root = scratch();
+  const defaultCwd = "/Users/u/Unbiased";
+  const legacy = projectMemoryDir(root, defaultCwd);
+  saveMemoryNote(legacy, { ...note("old"), originThreadId: firstThread });
+  writeFileSync(join(legacy, ".thread-scope-migrated-v1"), "done");
+  assert.deepEqual(migrateLegacyPlainMemory(root, defaultCwd), { copied: 0, unassigned: 0, conflicts: 0 });
+  assert.equal(existsSync(legacy), false);
+  assert.equal(loadMemoryNotes(join(root, "legacy-shared-chat-backup")).length, 1);
+  assert.deepEqual(loadMemoryNotes(threadMemoryDir(root, firstThread)!), []);
+});
+
+test("new memory files and directories are private", () => {
+  if (process.platform === "win32") return;
+  const dir = join(scratch(), "private");
+  saveMemoryNote(dir, note("secret"));
+  assert.equal(statSync(dir).mode & 0o077, 0);
+  assert.equal(statSync(join(dir, "secret.md")).mode & 0o077, 0);
+  assert.equal(statSync(join(dir, "MEMORY.md")).mode & 0o077, 0);
 });
