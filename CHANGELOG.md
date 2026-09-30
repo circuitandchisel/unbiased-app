@@ -6,6 +6,12 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.1 — September 30, 2026
+
+### Fixed
+
+- **Recent messages stay visible when you return from Settings.** Opening Settings no longer interrupts an active conversation or makes its latest messages disappear when you come back.
+
 ## 1.13.0 — September 29, 2026
 
 ### New
