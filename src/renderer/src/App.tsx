@@ -26,6 +26,7 @@ import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import { Bot, Check, ChevronLeft, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
+import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
 import { finalAssistantIndices } from "./transcript-actions";
@@ -2858,30 +2859,30 @@ export function App() {
     );
   }
 
-  if (showSettings) {
-    return (
-      <div
-        style={{
-          ...themeVars(theme),
-          height: "100vh",
-          display: "flex",
-          background: colors.bg,
-          color: colors.fg,
-          fontFamily: "var(--font-ui)",
-        }}
-      >
-        <SettingsView
-          releases={releases}
-          theme={theme}
-          onChange={applyTheme}
-          onBack={() => setShowSettings(false)}
-          onSignOut={signOut}
-        />
-      </div>
-    );
-  }
-
   return (
+    <SettingsRoute
+      active={showSettings}
+      settings={
+        <div
+          style={{
+            ...themeVars(theme),
+            height: "100vh",
+            display: "flex",
+            background: colors.bg,
+            color: colors.fg,
+            fontFamily: "var(--font-ui)",
+          }}
+        >
+          <SettingsView
+            releases={releases}
+            theme={theme}
+            onChange={applyTheme}
+            onBack={() => setShowSettings(false)}
+            onSignOut={signOut}
+          />
+        </div>
+      }
+    >
     <div
       style={{
         ...themeVars(theme),
@@ -5746,6 +5747,7 @@ export function App() {
         </div>
       )}
     </div>
+    </SettingsRoute>
   );
 }
 
