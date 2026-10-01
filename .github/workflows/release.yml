@@ -64,7 +64,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: circuitandchisel/unbiased-app-engine
-          ref: v0.1.0
+          # Merged wrapper PR #8; pins app-server 0.1.1 via engine.lock.
+          ref: 2d859c8d7f47e388af3a7b9e07d8de7c72c60cca
           token: ${{ steps.app-token.outputs.token }}
           path: unbiased-app-engine
 
@@ -93,8 +94,8 @@ jobs:
         working-directory: unbiased-app-engine
         run: make test
 
-      # fetch-engine.sh pulls the pinned upstream engine through the
-      # engine.lock checksum gate (public openai/codex release — no secret).
+      # fetch-engine.sh pulls the pinned forked app-server through the
+      # engine.lock checksum gate (public release — no secret).
       - name: build engine bundle
         working-directory: unbiased-app-engine
         run: make bundle
@@ -163,6 +164,7 @@ jobs:
           # one file), and the signature seals it.
           test -x "$app/Contents/Resources/engine/unbiased-app-engine"
           test -x "$app/Contents/Resources/engine/pareto-app-server"
+          test "$("$app/Contents/Resources/engine/pareto-app-server" --version)" = "codex-app-server 0.1.1"
           codesign --verify --deep --strict "$app"
           ls -lh release/*.dmg
 
