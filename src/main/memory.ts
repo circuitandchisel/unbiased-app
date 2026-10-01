@@ -1,11 +1,11 @@
-// Agent memory: a per-project directory of small markdown notes the model
-// saves via the memory_save dynamic tool, indexed by a MEMORY.md whose lines
-// are injected into every thread's developer instructions. This module is the
+// Agent memory: project-scoped or thread-private markdown notes the model
+// saves via memory_save, indexed by a MEMORY.md whose lines are injected into
+// the relevant thread's developer instructions. This module is the
 // pure half — format, validation, index — kept free of Electron and (in this
 // section) the filesystem so the parts that are easy to get wrong can be
 // exercised on their own, the same split scheduler.ts uses. The fs layer at
 // the bottom is the only part that touches disk.
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type MemoryType = "user" | "feedback" | "project" | "reference";
@@ -140,8 +140,8 @@ export function renderMemorySection(notes: MemoryNote[], dir: string): string {
   if (!notes.length) return "";
   const head = [
     "## Memory",
-    `You have a persistent memory directory for this project at ${dir} — durable notes saved in`,
-    "earlier conversations. One line per note below; read the note's file",
+    `You have a persistent memory directory at ${dir} — durable notes saved in`,
+    "this conversation or project. One line per note below; read the note's file",
     `(${dir}/<name>.md) before relying on it. Save NEW durable facts with memory_save: user`,
     "corrections and preferences, project facts not written down anywhere, and hard-won lessons",
     "with their Why — never things the repo or git history already records, and never",
@@ -172,6 +172,26 @@ export function projectMemoryDir(root: string, projectPath: string): string {
   return join(root, projectPath.replace(/[^\w.-]/g, "_"));
 }
 
+const THREAD_ID_RE = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+export function threadMemoryDir(root: string, threadId: string): string | null {
+  return THREAD_ID_RE.test(threadId) ? join(root, "threads", threadId) : null;
+}
+
+export function scopedMemoryDir(
+  root: string,
+  cwd: string | null,
+  defaultCwd: string,
+  threadId: string | null,
+  worktreeProject?: string,
+): string | null {
+  const project = worktreeProject ?? cwd;
+  if (!project || project === defaultCwd) {
+    return threadId ? threadMemoryDir(root, threadId) : null;
+  }
+  return projectMemoryDir(root, project);
+}
+
 // ── fs layer ────────────────────────────────────────────────────────────
 
 /** Every path built from a note name goes through this gate first — the
@@ -185,7 +205,7 @@ const noteFile = (dir: string, name: string): string | null =>
 // file behind.
 function atomicWrite(path: string, content: string): void {
   const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(tmp, content, "utf8");
+  writeFileSync(tmp, content, { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, path);
 }
 
@@ -218,7 +238,7 @@ function rebuildIndex(dir: string): void {
 export function saveMemoryNote(dir: string, note: MemoryNote): { path: string } | { error: string } {
   const path = noteFile(dir, note.name);
   if (!path) return { error: "Invalid memory name." };
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const existing = loadMemoryNotes(dir);
   const isUpdate = existing.some((n) => n.name === note.name);
   if (!isUpdate && existing.length >= MEMORY_MAX_NOTES) {
@@ -238,4 +258,41 @@ export function deleteMemoryNote(dir: string, name: string): { ok: true } | { er
   rmSync(path);
   rebuildIndex(dir);
   return { ok: true };
+}
+
+/** Copy attributable notes out of the old shared scratch-chat store once.
+ *  Archive the original directory so older builds cannot keep sharing it. */
+export function migrateLegacyPlainMemory(root: string, defaultCwd: string): {
+  copied: number;
+  unassigned: number;
+  conflicts: number;
+} {
+  const legacyDir = projectMemoryDir(root, defaultCwd);
+  const marker = join(root, ".thread-scope-migrated-v1");
+  const oldMarker = join(legacyDir, ".thread-scope-migrated-v1");
+  const result = { copied: 0, unassigned: 0, conflicts: 0 };
+  if (!existsSync(legacyDir)) return result;
+  if (!existsSync(marker) && !existsSync(oldMarker)) {
+    for (const note of loadMemoryNotes(legacyDir)) {
+      const target = note.originThreadId ? threadMemoryDir(root, note.originThreadId) : null;
+      if (!target) {
+        result.unassigned++;
+        continue;
+      }
+      if (loadMemoryNotes(target).some((existing) => existing.name === note.name)) {
+        result.conflicts++;
+        continue;
+      }
+      const saved = saveMemoryNote(target, note);
+      if ("error" in saved) throw new Error(`Could not migrate memory ${note.name}: ${saved.error}`);
+      result.copied++;
+    }
+  }
+  atomicWrite(marker, JSON.stringify(result));
+  let backup = join(root, "legacy-shared-chat-backup");
+  for (let suffix = 2; existsSync(backup); suffix++) {
+    backup = join(root, `legacy-shared-chat-backup-${suffix}`);
+  }
+  renameSync(legacyDir, backup);
+  return result;
 }
