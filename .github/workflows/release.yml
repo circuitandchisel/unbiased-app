@@ -165,8 +165,14 @@ jobs:
           test -x "$app/Contents/Resources/engine/unbiased-app-engine"
           test -x "$app/Contents/Resources/engine/pareto-app-server"
           test "$("$app/Contents/Resources/engine/pareto-app-server" --version)" = "codex-app-server 0.1.1"
+          test -x "$app/Contents/Resources/browser/agent-browser"
+          test -x "$app/Contents/Resources/browser/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
           codesign --verify --deep --strict "$app"
           ls -lh release/*.dmg
+
+      - name: smoke test packaged browser
+        working-directory: unbiased-app
+        run: node build/smoke-browser.cjs release/mac-arm64/Unbiased.app/Contents/Resources/browser
 
       - name: publish release to the public repo
         working-directory: unbiased-app

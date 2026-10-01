@@ -16,11 +16,12 @@ import {
 import type { MenuItemConstructorOptions } from "electron";
 import type { NativeImage } from "electron";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, release as osRelease } from "node:os";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
+import { agentBrowserCandidates, chromeCandidates } from "./browser-binaries";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
 import { epochMillis } from "../shared/conversation-time";
 import { startSecretProxy, type SecretConnector } from "./oauth-proxy";
@@ -280,12 +281,6 @@ const AGENT_CHROME_PORT = 9222;
 function agentChromeProfile(): string {
   return join(app.getPath("home"), ".unbiased", "chrome-profile");
 }
-const CHROME_BINARIES = [
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-];
 let managedChrome: ChildProcess | null = null;
 // Two threads can call browser_connect at once; without this both would spawn
 // Chrome against the same profile, the loser would exit on Chrome's profile
@@ -354,13 +349,16 @@ async function launchAgentChrome(
   port: number,
 ): Promise<{ ok: boolean; launched: boolean; firstRun: boolean; error?: string }> {
   if (await cdpAlive(port)) return { ok: true, launched: false, firstRun: false };
-  const bin = CHROME_BINARIES.find((b) => existsSync(b));
+  const darwinMajor = Number.parseInt(osRelease().split(".")[0], 10);
+  const bin = chromeCandidates(process.resourcesPath, app.isPackaged, darwinMajor).find((b) => existsSync(b));
   if (!bin) {
     return {
       ok: false,
       launched: false,
       firstRun: false,
-      error: "No Chrome/Chromium install found in /Applications.",
+      error: darwinMajor < 22
+        ? "No supported Chrome/Chromium install found. The bundled browser requires macOS 13 or newer."
+        : "No Chrome/Chromium install found in /Applications or the app bundle.",
     };
   }
   const profile = agentChromeProfile();
@@ -945,14 +943,7 @@ let agentBrowserBinCache: string | null | undefined;
 function agentBrowserBin(): string | null {
   if (agentBrowserBinCache !== undefined) return agentBrowserBinCache;
   const home = app.getPath("home");
-  const candidates = [
-    ...(process.env.PATH ?? "").split(":").filter(Boolean).map((d) => join(d, "agent-browser")),
-    "/opt/homebrew/bin/agent-browser",
-    "/usr/local/bin/agent-browser",
-    join(home, ".local", "bin", "agent-browser"),
-    join(home, ".npm-global", "bin", "agent-browser"),
-    join(home, ".cargo", "bin", "agent-browser"),
-  ];
+  const candidates = agentBrowserCandidates(process.resourcesPath, app.isPackaged, home, process.env.PATH ?? "");
   agentBrowserBinCache = candidates.find((p) => existsSync(p)) ?? null;
   if (!agentBrowserBinCache) {
     // Said once, loudly. Until now this returned null and agentBrowserTools()
@@ -962,7 +953,7 @@ function agentBrowserBin(): string | null {
     console.warn(
       "[browser] agent-browser not found — the browser_* tools will NOT be offered to the model.\n" +
         `[browser] looked in: ${candidates.slice(0, 6).join(", ")}\n` +
-        "[browser] install it (e.g. `brew install agent-browser`) and restart the app.",
+        "[browser] the packaged app should include it; reinstall Unbiased or install it with `brew install agent-browser`.",
     );
   }
   return agentBrowserBinCache;
@@ -1906,7 +1897,7 @@ function runAgentBrowser(args: string[], timeoutMs = 60_000): Promise<{ ok: bool
       // the wrong conclusion — the browser is missing, not absent by design.
       out:
         "The Agent browser is unavailable: the agent-browser CLI is not installed on this machine. " +
-        "Tell the user to install it (`brew install agent-browser`) and restart Unbiased. Do not try to " +
+        "Tell the user to reinstall Unbiased, or install it with `brew install agent-browser` and restart. Do not try to " +
         "browse with shell commands instead.",
     });
   return new Promise((resolve) =>
