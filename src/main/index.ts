@@ -148,6 +148,7 @@ import {
   scopedMemoryDir,
   validateMemory,
 } from "./memory";
+import { writeAutomaticMemory } from "./automatic-memory";
 import {
   LearningClient,
   buildEvent,
@@ -3984,6 +3985,39 @@ function memoryDirForThread(threadId: string | null): string | null {
   return memoryDirForCwd(cwd, root);
 }
 
+const automaticMemoryRunning = new Set<string>();
+const completedTurnsSinceMemory = new Map<string, number>();
+
+function scheduleAutomaticMemory(threadId: string, reason: "compaction" | "25-turns"): void {
+  if (planMode || subAgents.has(threadId) || automaticMemoryRunning.has(threadId)) return;
+  automaticMemoryRunning.add(threadId);
+  void (async () => {
+    const key = readStoredKey()?.key;
+    if (!key) return;
+    const result = await engine.request("thread/read", { threadId, includeTurns: true }) as { thread: WireThread };
+    const thread = result.thread;
+    if (thread.threadSource) return; // Scheduled and other internal conversations do not create memories.
+    if (thread.cwd) threadCwds.set(threadId, thread.cwd);
+    const dir = memoryDirForThread(threadId);
+    if (!dir) return;
+    const saved = await writeAutomaticMemory({
+      threadId, turns: thread.turns ?? [], dir, apiKey: key,
+      redact: redactSecrets, canWrite: () => !planMode,
+    });
+    if (!saved) {
+      console.info(`[memory] ${reason}: no durable note for ${threadId}`);
+      return;
+    }
+    console.info(`[memory] ${reason}: saved ${saved.note.name} for ${threadId}`);
+    const paneId = paneForThread(threadId);
+    if (paneId) send("chat:memory-saved", {
+      paneId, name: saved.note.name, description: saved.note.description, path: saved.path, automatic: true,
+    });
+  })().catch((error) => {
+    console.warn(`[memory] ${reason}: automatic write skipped for ${threadId}: ${String(error)}`);
+  }).finally(() => automaticMemoryRunning.delete(threadId));
+}
+
 // Where the NEXT fresh main chat's thread will live. null = home directory
 // (a plain chat, listed under Recents). Set by the project picker or by
 // clicking a project header; consumed when the lazy thread is created.
@@ -6176,6 +6210,10 @@ function wireNotifications(): void {
         if (threadId && subAgents.has(threadId) && phase === "completed") {
           send("chat:subagent-activity", { threadId });
         }
+        if (item?.type === "contextCompaction" && phase === "completed" && threadId && !subAgents.has(threadId)) {
+          completedTurnsSinceMemory.set(threadId, 0);
+          scheduleAutomaticMemory(threadId, "compaction");
+        }
         if (!paneId) break; // history holds these for a backgrounded thread
         if (item?.type === "commandExecution") {
           send("chat:command", { paneId, phase, item: { ...(item as object), source: "shell" } });
@@ -6359,6 +6397,14 @@ function wireNotifications(): void {
           | { status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
           | undefined;
         if (threadId) {
+          if (turn?.status === "completed" && !subAgents.has(threadId)) {
+            const count = (completedTurnsSinceMemory.get(threadId) ?? 0) + 1;
+            completedTurnsSinceMemory.set(threadId, count);
+            if (count >= 25) {
+              completedTurnsSinceMemory.set(threadId, 0);
+              scheduleAutomaticMemory(threadId, "25-turns");
+            }
+          }
           // The event the sidecar's whole reflex hangs on: turn_completed is
           // what triggers scoring and distillation on its side. Observed
           // BEFORE runningTurns is cleared so the event still carries its
@@ -7549,7 +7595,10 @@ async function startEngine(): Promise<void> {
   }
   engine.stop();
   resetSubAgentState();
-  engine.start(bin, { UNBIASED_API_KEY: stored.key });
+  engine.start(bin, {
+    UNBIASED_API_KEY: stored.key,
+    UNBIASED_JEV_URL: process.env.UNBIASED_JEV_URL?.trim() || "https://api.unbiased.ai/v1/systemone",
+  });
 
   const result = await engine.handshake(app.getVersion());
   // extraRoots is session state, so it has to be re-sent after every engine
