@@ -12,14 +12,11 @@ export function agentBrowserCandidates(resourcesPath: string, packaged: boolean,
   ];
 }
 
-export function chromeCandidates(resourcesPath: string, packaged: boolean, darwinMajor: number): string[] {
+export function chromeCandidates(): string[] {
   return [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
     "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    ...(packaged && darwinMajor >= 22
-      ? [join(resourcesPath, "browser", "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")]
-      : []),
   ];
 }

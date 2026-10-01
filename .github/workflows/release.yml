@@ -166,7 +166,7 @@ jobs:
           test -x "$app/Contents/Resources/engine/pareto-app-server"
           test "$("$app/Contents/Resources/engine/pareto-app-server" --version)" = "codex-app-server 0.1.1"
           test -x "$app/Contents/Resources/browser/agent-browser"
-          test -x "$app/Contents/Resources/browser/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+          test ! -e "$app/Contents/Resources/browser/chrome-mac-arm64"
           codesign --verify --deep --strict "$app"
           ls -lh release/*.dmg
 

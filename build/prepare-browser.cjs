@@ -1,4 +1,4 @@
-// Stage pinned browser binaries for electron-builder's extraResources.
+// Stage the pinned agent-browser CLI for electron-builder's extraResources.
 const { execFileSync } = require("node:child_process");
 const { copyFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync } = require("node:fs");
 const { join } = require("node:path");
@@ -15,11 +15,6 @@ const artifacts = [
     file: "agent-browser-darwin-arm64-v0.38.1",
     url: "https://github.com/vercel-labs/agent-browser/releases/download/v0.38.1/agent-browser-darwin-arm64",
     sha256: "2e61287259053ea964d39e77002c6a34af0e589e55ccff25e659efae7e892e0d",
-  },
-  {
-    file: "chrome-mac-arm64-154.0.8037.57.zip",
-    url: "https://storage.googleapis.com/chrome-for-testing-public/154.0.8037.57/mac-arm64/chrome-mac-arm64.zip",
-    sha256: "0e6b3439469c1b8b95b2e89c72ea29f7af00fb2c28a8878358a0b6002b6d3a64",
   },
   {
     file: "agent-browser-LICENSE-v0.38.1",
@@ -48,15 +43,11 @@ function fetchVerified({ file, url, sha256 }) {
 }
 
 mkdirSync(cache, { recursive: true });
-const [cli, chrome, license] = artifacts.map(fetchVerified);
+const [cli, license] = artifacts.map(fetchVerified);
 rmSync(bundle, { recursive: true, force: true });
 mkdirSync(bundle, { recursive: true });
 copyFileSync(cli, join(bundle, "agent-browser"));
 chmodSync(join(bundle, "agent-browser"), 0o755);
 mkdirSync(join(bundle, "licenses", "agent-browser"), { recursive: true });
 copyFileSync(license, join(bundle, "licenses", "agent-browser", "LICENSE"));
-execFileSync("ditto", ["-x", "-k", chrome, bundle], { stdio: "inherit" });
-
-const chromeBin = join(bundle, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
-if (!existsSync(chromeBin)) throw new Error("Chrome archive is missing the expected executable");
 console.log(`Browser bundle ready: ${bundle}`);

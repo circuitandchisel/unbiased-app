@@ -14,10 +14,9 @@ test("development app uses installed agent-browser", () => {
   assert.ok(!candidates.some((path) => path.includes("/App/Contents/Resources")));
 });
 
-test("packaged app keeps installed Chrome first and bundled Chrome as fallback", () => {
-  const candidates = chromeCandidates("/App/Contents/Resources", true, 22);
+test("browser requires an installed Chrome-family executable", () => {
+  const candidates = chromeCandidates();
   assert.equal(candidates[0], "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
-  assert.equal(candidates.at(-1), "/App/Contents/Resources/browser/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
-  assert.ok(!chromeCandidates("/App/Contents/Resources", false, 22).some((path) => path.includes("/App/Contents/Resources")));
-  assert.ok(!chromeCandidates("/App/Contents/Resources", true, 21).some((path) => path.includes("/App/Contents/Resources")));
+  assert.equal(candidates.length, 4);
+  assert.ok(candidates.every((path) => path.startsWith("/Applications/")));
 });
