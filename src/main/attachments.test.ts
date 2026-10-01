@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { looksLikeImage, convertedImagePath, sipsArgs, IMAGE_EXTENSIONS } from "./attachments";
+import { looksLikeImage, convertedImagePath, sipsArgs, IMAGE_EXTENSIONS, attachmentSizeError, MAX_ATTACHMENT_BYTES } from "./attachments";
+
+test("attachments over 7 MiB are rejected", () => {
+  assert.equal(attachmentSizeError("report.pdf", MAX_ATTACHMENT_BYTES), null);
+  assert.match(attachmentSizeError("report.pdf", MAX_ATTACHMENT_BYTES + 1) ?? "", /report\.pdf.*7 MB/);
+  assert.equal(attachmentSizeError("photo.png", 4 * 1024 * 1024, "image"), null);
+  assert.match(attachmentSizeError("photo.png", 6 * 1024 * 1024, "image") ?? "", /image encoding/);
+});
 
 // Measured 2026-09-09: a user attached a WebP logo and asked for it to be
 // redrawn. Electron's nativeImage cannot decode WebP, so the extension said

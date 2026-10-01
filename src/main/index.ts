@@ -120,7 +120,7 @@ import {
   CHECKPOINT_TOOLS, checkpointPath, validateCheckpointNotes, renderCheckpoint, pushFact, checkpointDue,
   checkpointGateText, checkpointPreamble, isGatedTool, pathsInCommand, remeasureNudge, type LedgerEntry,
 } from "./checkpoint";
-import { looksLikeImage, convertedImagePath, sipsArgs } from "./attachments";
+import { looksLikeImage, convertedImagePath, sipsArgs, attachmentSizeError } from "./attachments";
 import { clipboardImageBuffer } from "./clipboard-image";
 import { IMAGE_OUTLINE_TOOL, outlineOf, renderOutline, outlineReminder, type PendingOutline } from "./image-outline";
 import { isProductionBuild } from "./runtime-mode";
@@ -7755,6 +7755,14 @@ app.whenReady().then(async () => {
     computer?: boolean;
   }) => {
     const { paneId, text, attachments, computer } = payload;
+    for (const attachment of attachments ?? []) {
+      if (!isAbsolute(attachment.path)) throw new Error(`Invalid attachment path: ${attachment.name}`);
+      const info = statSync(attachment.path);
+      if (info.isFile()) {
+        const error = attachmentSizeError(attachment.name, info.size, attachment.kind === "image" ? "image" : "file");
+        if (error) throw new Error(error);
+      }
+    }
     const pane = ensurePane(paneId);
     let created = false;
     if (!pane.threadId) {
@@ -10726,6 +10734,37 @@ app.whenReady().then(async () => {
     return { path, name, kind: "file" };
   }
 
+  function attachablePaths(paths: string[]): { attachments: Record<string, unknown>[]; errors: string[] } {
+    const attachments: Record<string, unknown>[] = [];
+    const errors: string[] = [];
+    for (const path of paths) {
+      try {
+        const info = statSync(path);
+        const error = info.isFile()
+          ? attachmentSizeError(path.split("/").pop() ?? path, info.size, looksLikeImage(path) ? "image" : "file")
+          : null;
+        if (error) {
+          errors.push(error);
+          continue;
+        }
+        const attachment = describeAttachment(path);
+        const finalPath = attachment.path;
+        if (typeof finalPath === "string" && finalPath !== path) {
+          const converted = statSync(finalPath);
+          const convertedError = attachmentSizeError(attachment.name as string, converted.size, "image");
+          if (convertedError) {
+            errors.push(convertedError);
+            continue;
+          }
+        }
+        attachments.push(attachment);
+      } catch {
+        errors.push(`Could not attach ${path.split("/").pop() ?? path}.`);
+      }
+    }
+    return { attachments, errors };
+  }
+
   ipcMain.handle("attach:choose", async () => {
     if (!win) return { attachments: [] };
     const result = await dialog.showOpenDialog(win, {
@@ -10736,7 +10775,7 @@ app.whenReady().then(async () => {
     });
     if (result.canceled) return { attachments: [] };
     if (result.filePaths[0]) rememberDialogDir("attach", result.filePaths[0]);
-    return { attachments: result.filePaths.map(describeAttachment) };
+    return attachablePaths(result.filePaths);
   });
 
   // Drag-and-drop lands here. The renderer can resolve a dropped File to a
@@ -10758,7 +10797,7 @@ app.whenReady().then(async () => {
       }
     });
     if (real[0]) rememberDialogDir("attach", real[0]);
-    return { attachments: real.map(describeAttachment) };
+    return attachablePaths(real);
   });
 
   ipcMain.handle("browser:open", (_e, p: { id: number; url?: string }) => {
@@ -11300,11 +11339,14 @@ app.whenReady().then(async () => {
 
     const image = nativeImage.createFromBuffer(bytes);
     if (image.isEmpty()) return { attachment: null };
+    const png = image.toPNG();
+    const error = attachmentSizeError("Pasted image", png.length, "image");
+    if (error) return { attachment: null, error };
     const dir = join(app.getPath("temp"), "unbiased-pastes");
     mkdirSync(dir, { recursive: true });
     const name = `pasted-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.png`;
     const path = join(dir, name);
-    writeFileSync(path, image.toPNG());
+    writeFileSync(path, png);
     return { attachment: { name, path, kind: "image", thumb: thumbDataUrl(image) } };
   });
 

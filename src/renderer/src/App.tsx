@@ -524,9 +524,9 @@ declare global {
         attachments?: Attachment[],
         options?: { computer?: boolean },
       ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
-      chooseAttachments: () => Promise<{ attachments: Attachment[] }>;
-      attachPaths: (paths: string[]) => Promise<{ attachments: Attachment[] }>;
-      clipboardImage: () => Promise<{ attachment: Attachment | null }>;
+      chooseAttachments: () => Promise<{ attachments: Attachment[]; errors?: string[] }>;
+      attachPaths: (paths: string[]) => Promise<{ attachments: Attachment[]; errors?: string[] }>;
+      clipboardImage: () => Promise<{ attachment: Attachment | null; error?: string }>;
       interrupt: (paneId: PaneId) => Promise<{ interrupted: boolean }>;
       compact: (paneId: PaneId) => Promise<{ ok: boolean; error?: string }>;
       onTurnStarted: (cb: (p: { paneId: PaneId; turnId: string | null }) => void) => () => void;
@@ -8398,6 +8398,7 @@ function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const changeDraft = (text: string) => {
     drafts.setText(text);
     setDraft(text);
@@ -8414,6 +8415,7 @@ function ChatPane({
     if (!saved) return;
     setDraft(saved.text);
     setAttachments(saved.attachments);
+    setAttachmentError(null);
   }, [drafts, threadId, reset.nonce]);
 
   useEffect(() => {
@@ -8505,6 +8507,7 @@ function ChatPane({
     if (paths.length === 0) return;
     const origin = drafts.identity();
     const res = await window.unbiased.attachPaths(paths);
+    setAttachmentError(res.errors?.join("\n") ?? null);
     if (!res.attachments?.length) return;
     // De-duplicate against what is already staged — dropping the same file
     // twice should not queue it twice.
@@ -8552,14 +8555,16 @@ function ChatPane({
   async function addAttachments() {
     setPlusOpen(false);
     const origin = drafts.identity();
-    const { attachments: picked } = await window.unbiased.chooseAttachments();
+    const { attachments: picked, errors } = await window.unbiased.chooseAttachments();
+    setAttachmentError(errors?.join("\n") ?? null);
     picked.forEach((a) => stageAttachment(a, origin));
   }
 
   async function attachClipboardImage() {
     setPlusOpen(false);
     const origin = drafts.identity();
-    const { attachment } = await window.unbiased.clipboardImage();
+    const { attachment, error } = await window.unbiased.clipboardImage();
+    setAttachmentError(error ?? null);
     if (attachment) stageAttachment(attachment, origin);
   }
   const [busy, setBusyState] = useState(false);
@@ -9265,6 +9270,7 @@ function ChatPane({
     const sentAttachments = attachments;
     changeDraft("");
     changeAttachments([]);
+    setAttachmentError(null);
     setAnnotations([]);
     const msg: QueuedMsg = {
       id: nextQueueIdRef.current++,
@@ -10326,6 +10332,11 @@ function ChatPane({
                   </span>
                 );
               })}
+            </div>
+          )}
+          {attachmentError && (
+            <div role="alert" style={{ color: colors.err, fontSize: 12, whiteSpace: "pre-wrap", marginBottom: 8 }}>
+              {attachmentError}
             </div>
           )}
           {annotations.length > 0 && (
