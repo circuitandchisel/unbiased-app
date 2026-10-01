@@ -29,6 +29,7 @@ import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
+import { settleTurnOutput } from "./turn-completion";
 import { finalAssistantIndices } from "./transcript-actions";
 import { commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
@@ -8861,10 +8862,10 @@ function ChatPane({
         // for sign-ins, where the page is the only place to type.
         if (p.paneId === paneId) closeAgentMirrorRef.current?.();
         if (p.paneId !== paneId) return;
+        const output = settleTurnOutput(p.status, !!p.narrated, producedRef.current, emptyStreakRef.current);
+        emptyStreakRef.current = output.emptyStreak;
         setBusy(false);
         onTurnLanded?.();
-        // A turn that produced anything breaks the empty streak.
-        if (producedRef.current) emptyStreakRef.current = 0;
         // Read-and-clear OUTSIDE the updater: React can invoke updaters
         // more than once (StrictMode), and a consumed ref on the second
         // pass would silently skip the work fold.
@@ -8973,16 +8974,14 @@ function ChatPane({
                 text: "⚠ The agent stopped after its progress notes without writing a final answer. Ask it to continue and it will pick up where it left off.",
               },
             ];
-          } else if (p.status !== "interrupted" && !producedRef.current) {
+          } else if (output.empty) {
             // "Completed" with zero output: the model returned an empty
             // completion. Indistinguishable from a hang unless we say so.
-            emptyStreakRef.current += 1;
-            const persistent = emptyStreakRef.current >= 2;
             next = [
               ...next,
               {
                 kind: "assistant",
-                text: persistent
+                text: output.persistent
                   ? "⚠ The model returned an empty response again. Something earlier in this conversation is being suppressed every turn — start a new chat to continue."
                   : "⚠ The model returned an empty response — try sending again.",
               },
