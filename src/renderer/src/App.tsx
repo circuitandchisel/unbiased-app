@@ -627,6 +627,7 @@ declare global {
           description: string;
           path: string;
           fromSubAgent?: boolean;
+          automatic?: boolean;
         }) => void,
       ) => () => void;
       mcpLogin: (name: string) => Promise<{ ok: boolean; error?: string }>;
@@ -9094,7 +9095,7 @@ function ChatPane({
       }),
       window.unbiased.onMemorySaved((p) => {
         if (p.paneId !== paneId) return;
-        producedRef.current = true;
+        if (!p.automatic) producedRef.current = true;
         const receipt = { name: p.name, description: p.description, path: p.path };
         setEntries((es) => {
           const cleaned = withoutTrailingPlaceholder(es);
@@ -9111,7 +9112,7 @@ function ChatPane({
           // replayed history sitting below this turn's scope.
           const scope = turnStartIndexRef.current;
           const inScope = scope === null || cleaned.length - 1 >= scope;
-          if (!p.fromSubAgent && inScope && last?.kind === "assistant" && last.text) {
+          if (!p.fromSubAgent && !p.automatic && inScope && last?.kind === "assistant" && last.text) {
             return [
               ...cleaned.slice(0, -1),
               { ...last, memories: dedupeReceipts([...(last.memories ?? []), receipt]) },

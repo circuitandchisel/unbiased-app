@@ -6,6 +6,18 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.2 — October 1, 2026
+
+### New
+
+- **Useful details can stay with a conversation or project.** After compaction or every 25 completed turns, the app checks for lasting preferences, corrections, and lessons. It saves a memory only when the conversation supports one.
+- **Memories stay in the right place.** Ordinary chats keep private notes; project chats share notes only within that project.
+
+### Fixed
+
+- **Large attachments are stopped before sending.** Files above the request limit now show a clear error instead of repeatedly failing upstream.
+- **Completed steps and replies stay accurate.** The app settles stale activity after a turn and no longer shows an empty-response warning when a queued turn has started.
+
 ## 1.13.1 — September 30, 2026
 
 ### Fixed
