@@ -16,7 +16,7 @@ import {
 import type { MenuItemConstructorOptions } from "electron";
 import type { NativeImage } from "electron";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import { homedir, hostname, release as osRelease } from "node:os";
+import { homedir, hostname } from "node:os";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -349,16 +349,13 @@ async function launchAgentChrome(
   port: number,
 ): Promise<{ ok: boolean; launched: boolean; firstRun: boolean; error?: string }> {
   if (await cdpAlive(port)) return { ok: true, launched: false, firstRun: false };
-  const darwinMajor = Number.parseInt(osRelease().split(".")[0], 10);
-  const bin = chromeCandidates(process.resourcesPath, app.isPackaged, darwinMajor).find((b) => existsSync(b));
+  const bin = chromeCandidates().find((b) => existsSync(b));
   if (!bin) {
     return {
       ok: false,
       launched: false,
       firstRun: false,
-      error: darwinMajor < 22
-        ? "No supported Chrome/Chromium install found. The bundled browser requires macOS 13 or newer."
-        : "No Chrome/Chromium install found in /Applications or the app bundle.",
+      error: "No Chrome, Chromium, Brave, or Edge installation found in /Applications.",
     };
   }
   const profile = agentChromeProfile();

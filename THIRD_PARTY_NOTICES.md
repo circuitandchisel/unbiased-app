@@ -22,10 +22,3 @@ The packaged application includes the `agent-browser` CLI from
 [Vercel Labs](https://github.com/vercel-labs/agent-browser), licensed under
 Apache-2.0. Its license is included at
 `Contents/Resources/browser/licenses/agent-browser/LICENSE`.
-
-## Chrome for Testing
-
-The macOS arm64 package also includes Google Chrome for Testing as a browser
-fallback. The archive's `ABOUT` file and the browser's own notices are retained
-under `Contents/Resources/browser/chrome-mac-arm64/`. Chrome is subject to
-[Google's terms](https://www.google.com/chrome/terms/).

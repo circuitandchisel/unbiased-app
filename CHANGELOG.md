@@ -6,6 +6,12 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.3 — October 1, 2026
+
+### Improved
+
+- **Agent Browser comes with the app.** Browser control no longer requires installing a separate command-line tool.
+
 ## 1.13.2 — October 1, 2026
 
 ### New

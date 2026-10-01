@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { execFile, spawn } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
-const { mkdtempSync, rmSync } = require("node:fs");
+const { existsSync, mkdtempSync, rmSync } = require("node:fs");
 const net = require("node:net");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
@@ -10,7 +10,12 @@ const { promisify } = require("node:util");
 const exec = promisify(execFile);
 const root = resolve(process.argv[2] ?? join(__dirname, "browser-bundle"));
 const cli = join(root, "agent-browser");
-const chrome = join(root, "chrome-mac-arm64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
+const chrome = process.env.UNBIASED_TEST_CHROME || [
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+].find(existsSync);
 
 async function freePort() {
   const server = net.createServer();
@@ -22,9 +27,9 @@ async function freePort() {
 
 async function main() {
   const cliVersion = (await exec(cli, ["--version"])).stdout.trim();
+  assert.ok(chrome, "Install Chrome, Chromium, Brave, or Edge to run the browser smoke test");
   const chromeVersion = (await exec(chrome, ["--version"])).stdout.trim();
   assert.equal(cliVersion, "agent-browser 0.38.1");
-  assert.equal(chromeVersion, "Google Chrome for Testing 154.0.8037.57");
 
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), "unbiased-browser-smoke-"));
