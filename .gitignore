@@ -4,3 +4,5 @@ dist/
 .dirac-cache/
 # Packaged installers (hundreds of MB — the engine ships inside them).
 release/
+build/.browser-cache/
+build/browser-bundle/

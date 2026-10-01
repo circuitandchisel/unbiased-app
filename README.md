@@ -29,6 +29,11 @@ On first launch, choose **Sign in with browser** to select an Unbiased
 workload, or paste an existing Unbiased API key. Desktop-control features ask
 for macOS Accessibility or Screen Recording access only when they need it.
 
+Agent Browser includes a pinned control binary and a Chrome for Testing
+fallback, so no Homebrew installation is needed. On macOS 12, Chrome for
+Testing is no longer supported; Agent Browser uses an installed Chrome,
+Chromium, Brave, or Edge browser instead.
+
 ## Features
 
 - **Streaming chat** with markdown rendering, Prism-highlighted code

@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "node build/dev-launcher.cjs",
     "build": "electron-vite build",
+    "prepare:browser": "node build/prepare-browser.cjs",
+    "smoke:browser": "node build/smoke-browser.cjs",
     "typecheck": "tsc --noEmit",
-    "dist": "electron-vite build && electron-builder --publish never",
+    "dist": "npm run prepare:browser && electron-vite build && electron-builder --publish never",
     "test": "node --import tsx --test src/main/*.test.ts src/renderer/src/*.test.ts"
   },
   "build": {
@@ -44,6 +46,13 @@
       {
         "from": "../unbiased-ax/dist",
         "to": "ax",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/browser-bundle",
+        "to": "browser",
         "filter": [
           "**/*"
         ]
