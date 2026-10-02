@@ -64,8 +64,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: circuitandchisel/unbiased-app-engine
-          # Merged wrapper PR #8; pins app-server 0.1.1 via engine.lock.
-          ref: 2d859c8d7f47e388af3a7b9e07d8de7c72c60cca
+          # Merged wrapper PR #9; points the app at pareto-26.10-preview and
+          # pins app-server 0.1.1 via engine.lock.
+          ref: fb15c1a03f271191fb224ea75b0a3b6533e3290f
           token: ${{ steps.app-token.outputs.token }}
           path: unbiased-app-engine
 
@@ -151,6 +152,17 @@ jobs:
           echo '{"id":1,"method":"hello"}' | "$bin" | grep -q '"protocolVersion":1' || {
             echo "::error::the packaged bridge did not answer hello"; exit 1; }
           echo "bridge shipped and answers: $bin"
+
+      - name: verify the preview Pareto engine shipped
+        working-directory: unbiased-app
+        run: |
+          bin="release/mac-arm64/Unbiased.app/Contents/Resources/engine/unbiased-app-engine"
+          [ -x "$bin" ] || { echo "::error::$bin missing from the packaged app"; exit 1; }
+          strings "$bin" | grep -q 'model = "pareto-26.10-preview"' || {
+            echo "::error::packaged engine is not configured for pareto-26.10-preview"; exit 1; }
+          strings "$bin" | grep -q 'model_context_window = 1048576' || {
+            echo "::error::packaged engine does not declare the 1M context window"; exit 1; }
+          echo "preview Pareto engine shipped: $bin"
 
       - name: checksums
         working-directory: unbiased-app/release

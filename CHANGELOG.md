@@ -6,6 +6,12 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.7 — October 2, 2026
+
+### Fixed
+
+- **Long conversations now use the larger Pareto window.** This release includes the updated engine build, so older chats show the expanded context capacity when reopened.
+
 ## 1.13.6 — October 2, 2026
 
 ### Improved
