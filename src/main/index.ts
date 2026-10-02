@@ -4068,6 +4068,7 @@ function ctxUsageFile(): string {
   return join(app.getPath("userData"), "context-usage.json");
 }
 let ctxUsageCache: Record<string, { used: number; window: number | null; percent: number | null }> | null = null;
+let configuredContextWindowCache: { mtimeMs: number; window: number | null } | null = null;
 function loadCtxUsage(): Record<string, { used: number; window: number | null; percent: number | null }> {
   if (!ctxUsageCache) {
     try {
@@ -4077,6 +4078,42 @@ function loadCtxUsage(): Record<string, { used: number; window: number | null; p
     }
   }
   return ctxUsageCache!;
+}
+function configuredUsableContextWindow(): number | null {
+  const file = join(homedir(), ".unbiased", "app-engine", "home", "config.toml");
+  try {
+    const stat = statSync(file);
+    if (configuredContextWindowCache?.mtimeMs === stat.mtimeMs) return configuredContextWindowCache.window;
+    const text = readFileSync(file, "utf8");
+    const raw = Number(/^model_context_window\s*=\s*(\d+)\s*$/m.exec(text)?.[1]);
+    if (!Number.isFinite(raw) || raw <= 0) {
+      configuredContextWindowCache = { mtimeMs: stat.mtimeMs, window: null };
+      return null;
+    }
+    const percent = Number(/^effective_context_window_percent\s*=\s*(\d+)\s*$/m.exec(text)?.[1] ?? 95);
+    const safePercent = Number.isFinite(percent) && percent > 0 ? percent : 95;
+    const window = Math.floor((raw * safePercent) / 100);
+    configuredContextWindowCache = { mtimeMs: stat.mtimeMs, window };
+    return window;
+  } catch {
+    configuredContextWindowCache = null;
+    return null;
+  }
+}
+function currentCtxUsage(threadId: string): { used: number; window: number | null; percent: number | null } | null {
+  const map = loadCtxUsage();
+  const usage = map[threadId] ?? null;
+  if (!usage) return null;
+  const configured = configuredUsableContextWindow();
+  if (!configured || !usage.window || usage.window >= configured) return usage;
+  const rebased = { ...usage, window: configured, percent: Math.round((usage.used / configured) * 100) };
+  map[threadId] = rebased;
+  try {
+    writeFileSync(ctxUsageFile(), JSON.stringify(map));
+  } catch {
+    // best-effort cache repair
+  }
+  return rebased;
 }
 
 // Plan mode: the agent researches read-only and proposes a plan instead
@@ -8021,7 +8058,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("usage:context", (_e, threadId: string) => {
-    return { usage: loadCtxUsage()[threadId] ?? null };
+    return { usage: currentCtxUsage(threadId) };
   });
 
   ipcMain.handle("usage:billing", () => readBilling());
