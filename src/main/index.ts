@@ -17,7 +17,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import type { NativeImage } from "electron";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { homedir, hostname } from "node:os";
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
@@ -4938,6 +4938,24 @@ function credentialsPath(): string {
   return join(app.getPath("home"), ".unbiased", "credentials.json");
 }
 
+// Delegation (docs/DELEGATION.md): when set, the engine's Unbiased base URL
+// points at a local proxy that executes Pareto's frontier escalations on this
+// machine's own provider credential. Stored beside the credentials; absent =
+// the engine talks to the gateway directly. Loopback only — the protocol's
+// whole point is that the credential never leaves this machine.
+const DELEGATION_PROXY_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?\/v1\/?$/;
+function delegationPath(): string {
+  return join(app.getPath("home"), ".unbiased", "delegation.json");
+}
+function readDelegationProxy(): string | null {
+  try {
+    const d = JSON.parse(readFileSync(delegationPath(), "utf8")) as { proxyUrl?: unknown };
+    return typeof d.proxyUrl === "string" && DELEGATION_PROXY_URL.test(d.proxyUrl.trim()) ? d.proxyUrl.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The key the engine would use, and where it came from. Env wins (matches
  *  the wrapper's own ResolveKey order), then the credentials file. */
 function readStoredKey(): { key: string; source: "env" | "file" } | null {
@@ -7660,9 +7678,13 @@ async function startEngine(): Promise<void> {
   }
   engine.stop();
   resetSubAgentState();
+  // The engine reads its base URL once, at launch (unbiased-app-engine
+  // main.go: UNBIASED_BASE_URL); a delegation proxy is applied by restarting it.
+  const delegationProxy = readDelegationProxy();
   engine.start(bin, {
     UNBIASED_API_KEY: stored.key,
     UNBIASED_JEV_URL: process.env.UNBIASED_JEV_URL?.trim() || "https://api.unbiased.ai/v1/systemone",
+    ...(delegationProxy ? { UNBIASED_BASE_URL: delegationProxy } : {}),
   });
 
   const result = await engine.handshake(app.getVersion());
@@ -7779,6 +7801,20 @@ app.whenReady().then(async () => {
     startEngine().catch((err) => pushStatus({ state: "exited", code: null, detail: String(err) }));
     return who;
   }
+
+  // ── Delegation proxy (docs/DELEGATION.md) ───────────────────────────
+  ipcMain.handle("delegation:get", () => ({ proxyUrl: readDelegationProxy() }));
+  ipcMain.handle("delegation:set", async (_e, payload: { proxyUrl?: string | null }) => {
+    const url = (payload?.proxyUrl ?? "").trim();
+    if (url && !DELEGATION_PROXY_URL.test(url)) {
+      return { ok: false as const, error: "The delegation proxy must be a local URL such as http://127.0.0.1:4040/v1." };
+    }
+    mkdirSync(dirname(delegationPath()), { recursive: true });
+    if (url) writeFileSync(delegationPath(), JSON.stringify({ proxyUrl: url }, null, 2), { mode: 0o600 });
+    else rmSync(delegationPath(), { force: true });
+    if (readStoredKey()) await startEngine();
+    return { ok: true as const, proxyUrl: url || null };
+  });
 
   ipcMain.handle("auth:login", async (_e, payload: { key?: string }) => {
     const key = (payload?.key ?? process.env.UNBIASED_API_KEY?.trim() ?? readStoredKey()?.key ?? "").trim();

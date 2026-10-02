@@ -521,6 +521,8 @@ declare global {
       authDeviceStart: () => Promise<DeviceStart>;
       authDeviceWait: () => Promise<WhoamiResult>;
       authDeviceCancel: () => Promise<{ ok: boolean }>;
+      delegationGet: () => Promise<{ proxyUrl: string | null }>;
+      delegationSet: (proxyUrl: string | null) => Promise<{ ok: true; proxyUrl: string | null } | { ok: false; error: string }>;
       sendMessage: (
         paneId: PaneId,
         text: string,
@@ -15430,6 +15432,27 @@ function SettingsView({
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [account, setAccount] = useState<WhoamiResult | null>(null);
+  // Delegation (docs/DELEGATION.md): the engine's base URL when a local proxy
+  // runs Pareto's frontier escalations on this machine's own credential.
+  const [delegationUrl, setDelegationUrl] = useState("");
+  const [delegationSaved, setDelegationSaved] = useState<string | null>(null);
+  const [delegationError, setDelegationError] = useState<string | null>(null);
+  useEffect(() => {
+    void window.unbiased.delegationGet().then((r) => {
+      setDelegationSaved(r.proxyUrl);
+      setDelegationUrl(r.proxyUrl ?? "");
+    });
+  }, []);
+  async function saveDelegation(url: string | null) {
+    const r = await window.unbiased.delegationSet(url);
+    if (r.ok) {
+      setDelegationSaved(r.proxyUrl);
+      setDelegationUrl(r.proxyUrl ?? "");
+      setDelegationError(null);
+    } else {
+      setDelegationError(r.error);
+    }
+  }
 
   useEffect(() => {
     if (tab === "account" && !account) void window.unbiased.authValidate().then(setAccount);
@@ -15824,6 +15847,64 @@ function SettingsView({
               {keepKey
                 ? "Signing out stops the engine. The saved key stays on this machine for the next sign-in."
                 : "Signing out stops the engine and removes the saved key from this machine."}
+            </div>
+
+            <h2 style={{ fontSize: 17, fontWeight: 600, margin: "32px 0 12px" }}>Delegation proxy</h2>
+            <div
+              style={{
+                border: `1px solid ${colors.border}`,
+                borderRadius: 12,
+                background: colors.panel,
+                padding: "14px 18px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+              }}
+            >
+              <span style={{ fontSize: 12, color: "var(--gutter)" }}>
+                Route the engine through a local Unbiased proxy that runs Pareto&apos;s frontier escalations on your own
+                provider credential, so those prompts never transit our account. Leave empty to talk to the gateway
+                directly. The engine restarts when this changes.
+              </span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={delegationUrl}
+                  onChange={(e) => setDelegationUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:4040/v1"
+                  spellCheck={false}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    background: "var(--input, transparent)",
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    color: "inherit",
+                    fontFamily: "var(--font-code)",
+                    fontSize: 13,
+                  }}
+                />
+                <button
+                  onClick={() => void saveDelegation(delegationUrl.trim() || null)}
+                  style={{
+                    background: "transparent",
+                    border: `1px solid ${colors.border}`,
+                    color: "inherit",
+                    borderRadius: 8,
+                    padding: "8px 14px",
+                    fontSize: 13,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {delegationUrl.trim() ? "Apply" : "Clear"}
+                </button>
+              </div>
+              {delegationError ? (
+                <span style={{ fontSize: 12, color: colors.err }}>{delegationError}</span>
+              ) : delegationSaved ? (
+                <span style={{ fontSize: 12, color: colors.dim }}>Engine routed through {delegationSaved}.</span>
+              ) : null}
             </div>
           </div>
         ) : (
