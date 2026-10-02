@@ -86,7 +86,7 @@ export async function proposeAutomaticMemory(
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "pareto",
+      model: "pareto-26.10-preview",
       store: false,
       stream: false,
       input: [
