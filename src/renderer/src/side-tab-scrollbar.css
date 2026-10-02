@@ -1,0 +1,43 @@
+.u-side-tab-strip {
+  padding-bottom: 6px;
+}
+
+.u-side-tab {
+  position: relative;
+}
+
+.u-side-tab:has(> button:focus-visible)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent, #ff563f);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.u-side-tab > button:focus-visible {
+  outline: none;
+}
+
+.u-side-tab > button:last-child:focus-visible {
+  background: var(--chip) !important;
+  border-radius: 5px;
+}
+
+.u-side-tab-strip::-webkit-scrollbar {
+  height: 2px;
+  background: transparent;
+}
+
+.u-side-tab-strip::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.u-side-tab-strip::-webkit-scrollbar-thumb {
+  background: #3a3a40;
+  border-radius: 2px;
+}
+
+.u-side-tab-strip::-webkit-scrollbar-thumb:hover {
+  background: #56565c;
+}

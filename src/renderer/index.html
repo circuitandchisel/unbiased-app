@@ -157,8 +157,17 @@
       .u-chip:hover:not(:disabled) {
         background: color-mix(in srgb, var(--fg) 24%, transparent);
       }
+      .u-worked-group {
+        color: var(--dim);
+        transition: color 120ms var(--ease-out);
+      }
+      .u-worked-group:hover,
+      .u-worked-group:focus-visible {
+        color: var(--fg);
+      }
       @media (prefers-reduced-motion: reduce) {
         .u-chip { transition: none; }
+        .u-worked-group { transition: none; }
       }
 
       /* Form fields — selects and the time input.
