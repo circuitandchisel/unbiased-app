@@ -6,6 +6,17 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.8 — October 2, 2026
+
+### Fixed
+
+- **Side chats open from long conversations.** Starting a side chat no longer fails when the main conversation has a long history.
+- **The context window stays consistent during replies.** The updated Pareto engine keeps the larger window available while a response is running.
+
+### Improved
+
+- **File controls stay at the panel edge.** Preview and file-tree controls no longer crowd the tab button.
+
 ## 1.13.7 — October 2, 2026
 
 ### Fixed
