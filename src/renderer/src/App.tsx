@@ -4500,7 +4500,7 @@ export function App() {
               );
             })}
             </div>
-            <span ref={sidePlusRef} style={{ position: "relative", display: "flex" }}>
+            <span ref={sidePlusRef} style={{ position: "relative", display: "flex", flexShrink: 0 }}>
               <IconButton title="Open side panel tab" onClick={() => void toggleSidePlusMenu()}>
                 <PlusIcon />
               </IconButton>
@@ -4551,7 +4551,7 @@ export function App() {
                 </div>
               )}
             </span>
-            {tabOrder.length === 0 && <span style={{ flex: 1 }} />}
+            <span style={{ flex: 1, minWidth: 0 }} />
             {previewable && (
               <button
                 onClick={() => setPreviewOn((o) => !o)}
