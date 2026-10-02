@@ -34,6 +34,16 @@ Everything else is gated. The docs say "Sign in with ChatGPT is currently availa
 - `POST /v1/responses` only, with `store: false` and `stream: true`. Rejected: `temperature`, `top_p`, `max_output_tokens`, `metadata`, `user`, `service_tier`, `previous_response_id` and others; system-role items; hosted tools. Function tools must be grouped in namespaces or sent as `additional_tools`. The model catalog is account-specific (`GET /v1/models` with the token); the docs' example is `gpt-6.1-sol`, and Astra's availability to Plus/Pro accounts is unverified.
 - Access tokens last one hour; refresh tokens 30 days and rotate. OpenAI does not notify an app when a user disconnects it.
 
+## Observed on a real Plus account (2026-10-02)
+
+The proxy's `login` registered the client as "Unbiased" through the dynamic flow with no review step; plan usage was granted on the first consent. Against that token:
+
+- The catalog (`GET /v1/models`, `visibility: "list"`) was `gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5` — Astra is available to Plus; `gpt-6.1-sol` is not listed, yet a request for it was served, so the list is a display catalog, not an entitlement check.
+- Codex-style **flat function tools work**: the model returned `function_call` items without namespacing or `additional_tools`.
+- `service_tier: flex` is refused before admission with the documented non-standard body `{"detail":"Unsupported service_tier: flex"}` (HTTP 400). `max_output_tokens` and `temperature` were accepted on the calls tried, so the rejected-fields list is enforced unevenly; the proxy keeps dropping all of them for a plan credential.
+- `response.completed` carries **`output: []`**; the answer is only in the `output_item.*` and `*.delta` events. Any client that assembles from the terminal event alone sees nothing (fixed in the proxy).
+- Latency: a short Astra reply in 3–4 s; delegated steps in the spike ran 3.6–4.5 s for a tool call and 13.5 s for a three-paragraph answer.
+
 ## What we do about it
 
 - The spike runs on an API key and makes no Sign in with ChatGPT call, so it has no Terms exposure. Phase 4 (the credential flow in the proxy) waits on the two legal calls above and on making the proxy repo public.
