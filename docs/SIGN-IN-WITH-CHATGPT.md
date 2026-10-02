@@ -41,6 +41,7 @@ The proxy's `login` registered the client as "Unbiased" through the dynamic flow
 - The catalog (`GET /v1/models`, `visibility: "list"`) was `gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5` — Astra is available to Plus; `gpt-6.1-sol` is not listed, yet a request for it was served, so the list is a display catalog, not an entitlement check.
 - Codex-style **flat function tools work**: the model returned `function_call` items without namespacing or `additional_tools`.
 - `service_tier: flex` is refused before admission with the documented non-standard body `{"detail":"Unsupported service_tier: flex"}` (HTTP 400). `max_output_tokens` and `temperature` were accepted on the calls tried, so the rejected-fields list is enforced unevenly; the proxy keeps dropping all of them for a plan credential.
+- A string `input` is refused (HTTP 400); `input` must be an array, as the preview limitations say. The proxy lifts a string prompt into one user turn.
 - `response.completed` carries **`output: []`**; the answer is only in the `output_item.*` and `*.delta` events. Any client that assembles from the terminal event alone sees nothing (fixed in the proxy).
 - Latency: a short Astra reply in 3–4 s; delegated steps in the spike ran 3.6–4.5 s for a tool call and 13.5 s for a three-paragraph answer.
 
