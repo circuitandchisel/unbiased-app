@@ -15,7 +15,7 @@ A user runs the Unbiased proxy, or a harness that speaks this protocol, and it d
 - **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in; the channel can later carry a continuation. The one invariant is the cascade's own: before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
 - **The standard terminal event**, `response.failed` with `error.code = "delegation_required"`: a client that declared the capability and did not act sees an accurate, actionable failure. Billing the handed-off request is a separate decision; the event carries `usage` either way.
 - **A patch, not a prompt.** The client holds the request; the server sends only what it would have added or changed. Small for every relay hop; no prompt text on the hand-off path.
-- **Capability in a request header**, HTTP's extension point for client capabilities (`OpenAI-Beta`, `anthropic-beta`); RFC 6648 retires `X-`, RFC 8941 gives the grammar. The server delegates only to a client that declared it, and echoes what it accepted. Per provider the client declares credential kind and servable models, so the server picks a seat the client can dial and can offer fallbacks. Plan tier is absent on purpose: tokens do not expose it and a client assertion is not trustworthy.
+- **Capability in a request header**, HTTP's extension point for client capabilities (`OpenAI-Beta`, `anthropic-beta`); RFC 6648 retires `X-`, RFC 8941 gives the grammar. The server delegates only to a client that declared it, and echoes what it accepted. Per provider the client declares credential kind and servable models, so the server picks a seat the client can dial and can offer fallbacks. Plan tier is absent on purpose: tokens do not expose it.
 - **The name.** MCP calls this pattern *sampling*; that word means parameters here, so *delegation*.
 
 **Out of scope for v1:** billing of pre-hand-off work; ZDR-organization policy; hand-off after partial output; the continuation post-back (handle reserved); providers other than OpenAI (the grammar admits them; only the Responses patch is defined).
@@ -93,6 +93,6 @@ on client request R to /v1/responses:
   if R had stream:false: collect the chosen stream's response.completed and answer JSON
 ```
 
-### 5. Transport notes
+### 5. Transport note
 
-The event rides gpu-router's chat→Responses translation as an error chunk carrying `error.delegation`; the router's pre-stream failure gate passes this code through, and the gateway relays it byte-for-byte. Only a request carrying a valid `Delegation` header can receive it: the cascade reads the signed claim, never the header.
+Inside our stack the event is the cascade's in-band error chunk, translated to `response.failed` by gpu-router (whose pre-stream failure gate passes this code through) and relayed byte-for-byte by the gateway. The cascade reads the signed claim, never the header.
