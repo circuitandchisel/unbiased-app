@@ -6,6 +6,14 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.4 — October 2, 2026
+
+### Improved
+
+- **Browser links open in new tabs.** Opening another page no longer replaces the one you were viewing.
+- **The side panel is easier to use.** Browser pages stay in place when switching tabs or opening the panel menu, and a slim scrollbar appears when tabs overflow.
+- **Browser controls feel more consistent.** The address bar selects its URL when clicked, toolbar icons and header controls are better aligned, and activity rows use clearer chevrons.
+
 ## 1.13.3 — October 1, 2026
 
 ### Improved
