@@ -29,8 +29,11 @@ test("a low Jev score skips Pareto and creates no memory", async () => {
 test("a durable fact yields a validated note with an exact evidence quote", async () => {
   const evidence = "USER: Always keep release notes concise and avoid unverified claims.\nASSISTANT: Understood.";
   let calls = 0;
-  const fetcher = (async () => {
+  const fetcher = (async (_url: string, init?: RequestInit) => {
     calls++;
+    if (calls === 2) {
+      assert.equal(JSON.parse(String(init?.body)).model, "pareto-26.10-preview");
+    }
     return new Response(JSON.stringify(calls === 1
       ? { answers: { durable: { noul: 0.81 } } }
       : { output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({
