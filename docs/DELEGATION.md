@@ -12,11 +12,11 @@ A user runs the Unbiased proxy, or a harness that speaks this protocol. The clie
 
 ## Why this way
 
-- **A stream event, not an HTTP status.** The hand-off arrives in-band on the committed SSE stream, so heartbeats keep flowing and the server may decide minutes into a request; the same channel can later carry a continuation handshake. The one invariant is the cascade's own: before the first content byte, because streamed content cannot be retracted. A non-streaming request gets the identical payload as an HTTP 422.
-- **The standard terminal event.** `response.failed` with `error.code = "delegation_required"`: a client that declared the capability and did not act sees an accurate failure with an actionable message. Billing the handed-off request is a separate decision; the event carries `usage` so either answer is implementable.
-- **A patch, not a prompt.** The client holds the request; the server sends only what it would have added or changed. Small enough for every relay hop, and no prompt text on the hand-off path.
-- **Capability in a request header**, HTTP's extension point for client capabilities (`OpenAI-Beta`, `anthropic-beta`). RFC 6648 retires `X-`; RFC 8941 Structured Fields give the grammar. The server requests a delegation only from a client that declared it, and echoes what it accepted. Per provider the client declares credential kind and the models it can serve, so the server picks a seat the client can dial and can offer fallbacks. Plan tier is absent on purpose: tokens do not expose it and a client assertion is not trustworthy.
-- **The name.** MCP calls this pattern *sampling*; that word means parameters here, so: *delegation*.
+- **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in; the channel can later carry a continuation. The one invariant is the cascade's own: before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
+- **The standard terminal event**, `response.failed` with `error.code = "delegation_required"`: a client that declared the capability and did not act sees an accurate, actionable failure. Billing the handed-off request is a separate decision; the event carries `usage` either way.
+- **A patch, not a prompt.** The client holds the request; the server sends only what it would have added or changed. Small for every relay hop; no prompt text on the hand-off path.
+- **Capability in a request header**, HTTP's extension point for client capabilities (`OpenAI-Beta`, `anthropic-beta`); RFC 6648 retires `X-`, RFC 8941 gives the grammar. The server delegates only to a client that declared it, and echoes what it accepted. Per provider the client declares credential kind and servable models, so the server picks a seat the client can dial and can offer fallbacks. Plan tier is absent on purpose: tokens do not expose it and a client assertion is not trustworthy.
+- **The name.** MCP calls this pattern *sampling*; that word means parameters here, so *delegation*.
 
 **Out of scope for v1:** billing of pre-hand-off work; ZDR-organization policy; hand-off after partial output; the continuation post-back (handle reserved); providers other than OpenAI (the grammar admits them; only the Responses patch is defined).
 
@@ -24,7 +24,7 @@ A user runs the Unbiased proxy, or a harness that speaks this protocol. The clie
 
 ### 1. Capability declaration
 
-The client sends a `Delegation` request header, an RFC 8941 Dictionary whose keys are providers and whose parameters describe the credential. Unknown keys and parameters are ignored. The server echoes the entries it accepted on the response, in the same grammar, on every response; an absent echo means the server does not speak the protocol.
+`Delegation` is an RFC 8941 Dictionary: keys are providers, parameters describe the credential; unknown keys and parameters are ignored. The server echoes the accepted entries on every response; no echo means it does not speak the protocol.
 
 ```http
 Delegation: openai;v=1;cred=plan;models="gpt-6-astra gpt-6.1-sol";api=responses
@@ -38,7 +38,7 @@ Delegation: openai;v=1;cred=key;models="gpt-6-astra";api=responses, anthropic;v=
 | `models` | space-separated model ids this credential can serve, from the provider's catalog |
 | `api` | the wire the client can speak to this provider: `responses` (v1), `messages` (reserved) |
 
-The gateway validates the header and mints the accepted entries into the signed caller token it already attaches to every Pareto call:
+The gateway mints the accepted entries into the signed caller token it already attaches to every Pareto call:
 
 ```json
 { "org": "…", "workload": "…", "rid": "…", "byok": false,
@@ -47,7 +47,7 @@ The gateway validates the header and mints the accepted entries into the signed 
 
 ### 2. The hand-off event
 
-At an escalation decision the cascade walks its escalation chain and takes the first seat whose provider and model the client declared. If none matches it escalates server-side as today. Otherwise, instead of dialing the seat, it ends the response:
+At an escalation decision the cascade takes the first seat of its escalation chain the client declared, or escalates server-side as today if none matches. Instead of dialing the seat it ends the response:
 
 ```
 event: response.failed
@@ -64,7 +64,7 @@ data: {"type":"response.failed","response":{"id":"resp_…","status":"failed","u
       "continuation":null}}}}
 ```
 
-`reason` is `leader-takeover` (an agentic step; `window.remaining` is the takeover steps left after this one) or `seqr-escalate` (a one-shot whose tier-1 panel disagreed). `drop` lists the request fields the chosen credential's route rejects; for `cred=key` it is empty. `continuation` is reserved for v2. A request sent with `stream: false` receives the same `error` object as the body of an HTTP 422.
+`reason` is `leader-takeover` (an agentic step; `window.remaining` is the takeover steps left after it) or `seqr-escalate` (a one-shot whose tier-1 panel disagreed). `drop` lists what the chosen credential's route rejects; empty for `cred=key`. `continuation` is reserved for v2. With `stream: false` the same `error` object is the body of an HTTP 422.
 
 ### 3. Applying the patch (client)
 
@@ -95,4 +95,4 @@ on client request R to /v1/responses:
 
 ### 5. Transport notes
 
-The event rides gpu-router's chat-completions→Responses translation as an error chunk carrying `error.delegation`; the router's pre-stream failure gate must not convert this code into an HTTP error, and the gateway relays it byte-for-byte (an error-shaped terminal event; the billing gate's treatment of it is the deferred decision above). Only a request carrying a valid `Delegation` header can ever receive the event: the cascade reads the signed claim, never the header.
+The event rides gpu-router's chat→Responses translation as an error chunk carrying `error.delegation`; the router's pre-stream failure gate passes this code through, and the gateway relays it byte-for-byte. Only a request carrying a valid `Delegation` header can receive it: the cascade reads the signed claim, never the header.
