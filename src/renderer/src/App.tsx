@@ -25,7 +25,7 @@ import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import "./side-tab-scrollbar.css";
-import { Bot, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
@@ -8713,6 +8713,7 @@ function ChatPane({
   const savedRangeRef = useRef<Range | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followTranscriptRef = useRef(true);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
 
   // Failsafe: if the compaction completion event never arrives (engine error,
@@ -8830,6 +8831,7 @@ function ChatPane({
   useEffect(() => {
     threadIdRef.current = threadId ?? null;
     followTranscriptRef.current = true;
+    setShowScrollToLatest(false);
     messageBoundaryRef.current = false;
     setEntries(reset.resume?.running ? reset.entries : settleUnconfirmedSteps(reset.entries));
     // A reopened conversation may still be mid-turn: restore its busy
@@ -9325,6 +9327,7 @@ function ChatPane({
   /** Send a prepared message right now (fresh sends and queue flushes). */
   async function sendNow(q: QueuedMsg) {
     followTranscriptRef.current = true;
+    setShowScrollToLatest(false);
     setBusy(true);
     producedRef.current = false;
     turnStartedAtRef.current = Date.now();
@@ -9993,13 +9996,22 @@ function ChatPane({
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        onMouseUp={handleMouseUp}
-        onWheelCapture={(e) => { if (e.deltaY < 0) followTranscriptRef.current = false; }}
-        onScroll={(e) => { followTranscriptRef.current = isTranscriptAtBottom(e.currentTarget); }}
-        style={{ flex: 1, overflowY: "auto", padding: "24px 0" }}
-      >
+      <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
+        <div
+          ref={scrollRef}
+          onMouseUp={handleMouseUp}
+          onWheelCapture={(e) => {
+            if (e.deltaY >= 0 || e.currentTarget.scrollHeight <= e.currentTarget.clientHeight + 2) return;
+            followTranscriptRef.current = false;
+            setShowScrollToLatest(true);
+          }}
+          onScroll={(e) => {
+            const atBottom = isTranscriptAtBottom(e.currentTarget);
+            followTranscriptRef.current = atBottom;
+            setShowScrollToLatest(!atBottom);
+          }}
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "24px 0" }}
+        >
         {entries.length === 0 && (
           <div style={{ height: "100%", display: "grid", placeItems: "center" }}>{emptyState}</div>
         )}
@@ -10089,6 +10101,38 @@ function ChatPane({
             </div>
           )}
         </div>
+        </div>
+        {showScrollToLatest && (
+          <button
+            className="u-scroll-to-latest"
+            type="button"
+            title="Scroll to latest"
+            aria-label="Scroll to latest"
+            onClick={() => {
+              followTranscriptRef.current = true;
+              setShowScrollToLatest(false);
+              const el = scrollRef.current;
+              if (el) el.scrollTo({ top: el.scrollHeight });
+            }}
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: 14,
+              transform: "translateX(-50%)",
+              zIndex: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 38,
+              height: 38,
+              padding: 0,
+              borderRadius: "50%",
+              cursor: "pointer",
+            }}
+          >
+            <ChevronDown size={18} strokeWidth={1.8} />
+          </button>
+        )}
       </div>
 
       <div style={{ padding: "8px 16px 16px" }}>
