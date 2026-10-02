@@ -6,6 +6,12 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.5 — October 2, 2026
+
+### Improved
+
+- **Read earlier messages without losing your place.** Scrolling up pauses automatic scrolling while a reply is being written. A button takes you back to the latest message when you're ready.
+
 ## 1.13.4 — October 2, 2026
 
 ### Improved
