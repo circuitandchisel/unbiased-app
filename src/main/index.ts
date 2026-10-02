@@ -7884,13 +7884,13 @@ app.whenReady().then(async () => {
       if (paneId.startsWith("side") && panes.main.threadId) {
         // The Codex semantics, confirmed from its own client: a side chat is
         // an ephemeral FORK of the parent conversation — full context copied
-        // into a temporary thread the engine forgets at exit. (Codex also
-        // passes excludeTurns to trim the response payload, but that flag is
-        // gated behind the experimentalApi capability; we ignore the returned
-        // turn array anyway, so we simply don't ask for the trim.)
+        // into a temporary thread the engine forgets at exit. Paginated
+        // parents require excludeTurns so the fork does not hydrate the full
+        // turn array, which this client does not use.
         started = (await engine.request("thread/fork", {
           threadId: panes.main.threadId,
           ephemeral: true,
+          excludeTurns: true,
           ...threadPolicy(),
           // A fork copies CONVERSATION, not per-thread config: without these
           // three a side chat had no browser tools, no app instructions and no
