@@ -157,6 +157,17 @@
       .u-chip:hover:not(:disabled) {
         background: color-mix(in srgb, var(--fg) 24%, transparent);
       }
+      .u-scroll-to-latest {
+        color: var(--fg-soft);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.28);
+        transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
+      }
+      .u-scroll-to-latest:hover {
+        color: var(--fg);
+        background: var(--panel-2);
+      }
       .u-worked-group {
         color: var(--dim);
         transition: color 120ms var(--ease-out);
@@ -167,6 +178,7 @@
       }
       @media (prefers-reduced-motion: reduce) {
         .u-chip { transition: none; }
+        .u-scroll-to-latest { transition: none; }
         .u-worked-group { transition: none; }
       }
 
