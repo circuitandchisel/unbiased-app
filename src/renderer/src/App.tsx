@@ -6865,6 +6865,7 @@ function TranscriptChevron({ open }: { open: boolean }) {
  *  The final message stays outside, always visible. */
 function WorkedGroup({ duration, children }: { duration: number | null; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [hovering, setHovering] = useState(false);
   // A small bottom margin, not zero: the answer below tightens its own top
   // margin after a fold, and with nothing here the two collapsed to 2px —
   // the metadata line then read as the answer's first line, and the gap
@@ -6876,6 +6877,8 @@ function WorkedGroup({ duration, children }: { duration: number | null; children
       <button
         className="u-worked-group"
         onClick={() => setOpen((o) => !o)}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
         aria-expanded={open}
         style={{
           display: "flex",
@@ -6889,6 +6892,7 @@ function WorkedGroup({ duration, children }: { duration: number | null; children
           background: "transparent",
           border: "none",
           padding: "2px 0 2px",
+          color: hovering ? "var(--fg-msg)" : colors.dim,
           // Set like the answer it introduces — same size, leading and
           // tracking — so the fold reads as a quiet line of the same voice
           // rather than a caption in a different one. Colour alone carries
@@ -18411,6 +18415,8 @@ function StepsGroup({
 }) {
   const [open, setOpen] = useState(false);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+  const [hoveringSummary, setHoveringSummary] = useState(false);
+  const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const needsApproval = items.some(
     (e) => e.status === "awaitingApproval" && e.approval && !e.approval.decision && !e.approval.expired,
   );
@@ -18457,12 +18463,18 @@ function StepsGroup({
               color: failed ? colors.err : colors.dim,
               verb: null,
             };
+  const hoverTextColor = "var(--fg-msg)";
+  const summaryColor = hoveringSummary && summary.color === colors.dim ? hoverTextColor : summary.color;
 
   return (
     <div style={{ margin: "14px 0" }}>
       {/* A row, not one button: the browser's name is its own control, and a
           button inside a button is invalid markup. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div
+        onMouseEnter={() => setHoveringSummary(true)}
+        onMouseLeave={() => setHoveringSummary(false)}
+        style={{ display: "flex", alignItems: "center", gap: 6 }}
+      >
         <button
           onClick={() => setOpen((o) => !o)}
           aria-expanded={expanded}
@@ -18472,7 +18484,7 @@ function StepsGroup({
             gap: 6,
             background: "transparent",
             border: "none",
-            color: summary.color,
+            color: summaryColor,
             // Set like the step rows it heads and the answer beside them, so
             // the whole fold reads in one voice.
             fontSize: 15.5,
@@ -18531,7 +18543,7 @@ function StepsGroup({
             background: "transparent",
             border: "none",
             padding: 0,
-            color: summary.color,
+            color: summaryColor,
             cursor: "pointer",
             display: "inline-flex",
             alignItems: "center",
@@ -18550,6 +18562,7 @@ function StepsGroup({
           const itemOpen = openItems.has(e.itemId);
           const awaiting = e.status === "awaitingApproval" && e.approval && !e.approval.decision;
           const failed = e.status === "failed" || (e.exitCode ?? 0) !== 0;
+          const itemColor = awaiting ? colors.amber : failed ? colors.err : hoveredItemId === e.itemId ? hoverTextColor : colors.dim;
           return (
             <div key={e.itemId} style={{ margin: "1px 0" }}>
               {/* A line of prose with an icon, not a card. The bordered
@@ -18558,13 +18571,15 @@ function StepsGroup({
                   the panel below, where a terminal is the right metaphor. */}
               <div
                 onClick={hasOutput ? () => toggleItem(e.itemId) : undefined}
+                onMouseEnter={() => setHoveredItemId(e.itemId)}
+                onMouseLeave={() => setHoveredItemId((id) => (id === e.itemId ? null : id))}
                 style={{
                   display: "flex",
                   gap: 8,
                   alignItems: "center",
                   cursor: hasOutput ? "pointer" : "default",
                   padding: "3px 0",
-                  color: awaiting ? colors.amber : failed ? colors.err : colors.dim,
+                  color: itemColor,
                   fontSize: 15.5,
                   lineHeight: 1.6,
                   letterSpacing: "var(--track-body)",
