@@ -31,6 +31,7 @@ import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
 import { settleTurnOutput } from "./turn-completion";
+import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
 import { commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
@@ -8711,6 +8712,7 @@ function ChatPane({
   const [selection, setSelection] = useState<{ text: string; x: number; y: number; right: number } | null>(null);
   const savedRangeRef = useRef<Range | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followTranscriptRef = useRef(true);
   const paneRef = useRef<HTMLDivElement>(null);
 
   // Failsafe: if the compaction completion event never arrives (engine error,
@@ -8827,6 +8829,7 @@ function ChatPane({
 
   useEffect(() => {
     threadIdRef.current = threadId ?? null;
+    followTranscriptRef.current = true;
     messageBoundaryRef.current = false;
     setEntries(reset.resume?.running ? reset.entries : settleUnconfirmedSteps(reset.entries));
     // A reopened conversation may still be mid-turn: restore its busy
@@ -9277,8 +9280,9 @@ function ChatPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && followTranscriptRef.current) el.scrollTo({ top: el.scrollHeight });
   }, [entries]);
 
   // Drawn anew every time this pane shows a (different) conversation.
@@ -9320,6 +9324,7 @@ function ChatPane({
 
   /** Send a prepared message right now (fresh sends and queue flushes). */
   async function sendNow(q: QueuedMsg) {
+    followTranscriptRef.current = true;
     setBusy(true);
     producedRef.current = false;
     turnStartedAtRef.current = Date.now();
@@ -9988,7 +9993,13 @@ function ChatPane({
         </div>
       )}
 
-      <div ref={scrollRef} onMouseUp={handleMouseUp} style={{ flex: 1, overflowY: "auto", padding: "24px 0" }}>
+      <div
+        ref={scrollRef}
+        onMouseUp={handleMouseUp}
+        onWheelCapture={(e) => { if (e.deltaY < 0) followTranscriptRef.current = false; }}
+        onScroll={(e) => { followTranscriptRef.current = isTranscriptAtBottom(e.currentTarget); }}
+        style={{ flex: 1, overflowY: "auto", padding: "24px 0" }}
+      >
         {entries.length === 0 && (
           <div style={{ height: "100%", display: "grid", placeItems: "center" }}>{emptyState}</div>
         )}
