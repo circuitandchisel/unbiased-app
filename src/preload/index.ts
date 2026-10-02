@@ -197,6 +197,7 @@ contextBridge.exposeInMainWorld("unbiased", {
   onAgentMirrorActivity: (cb: (p: unknown) => void) => subscribe("agentmirror:activity", cb),
 
   openBrowser: (p: { id: number; url?: string }) => ipcRenderer.invoke("browser:open", p),
+  captureBrowser: (id: number) => ipcRenderer.invoke("browser:capture", id),
   setBrowserBounds: (b: { id: number; x: number; y: number; width: number; height: number }) =>
     ipcRenderer.invoke("browser:bounds", b),
   setBrowserVisible: (p: { id: number; visible: boolean }) => ipcRenderer.invoke("browser:visible", p),
@@ -204,6 +205,7 @@ contextBridge.exposeInMainWorld("unbiased", {
   closeBrowser: (id: number) => ipcRenderer.invoke("browser:close", id),
   startBrowserAnnotate: (id: number) => ipcRenderer.invoke("browser:annotate-mode", id),
   onBrowserState: (cb: (p: unknown) => void) => subscribe("browser:state", cb),
+  onBrowserOpenLink: (cb: (p: unknown) => void) => subscribe("browser:open-link", cb),
   onBrowserAnnotate: (cb: (p: unknown) => void) => subscribe("browser:annotate", cb),
 
   createTerminal: (cols: number, rows: number) => ipcRenderer.invoke("term:create", { cols, rows }),

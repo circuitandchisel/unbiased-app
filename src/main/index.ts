@@ -5558,6 +5558,7 @@ function createWindow(): void {
   };
   win.on("resize", persistBounds);
   win.on("move", persistBounds);
+  win.webContents.on("did-start-loading", clearBrowserViews);
 
   // Coming back to the app is the moment a new release should surface.
   win.on("focus", () => {
@@ -5844,13 +5845,49 @@ async function startAnnotatePicker(id: number): Promise<void> {
 // owns the toolbars and reports each placeholder's bounds; this side owns
 // navigation and pushes state back tagged with the id.
 const browserViews = new Map<number, WebContentsView>();
+const browserVisibility = new Map<number, boolean>();
+const browserViewBounds = new Map<number, { x: number; y: number; width: number; height: number }>();
+
+function offscreenBrowserBounds(bounds: { width: number; height: number }) {
+  const width = Math.max(1, bounds.width);
+  const height = Math.max(1, bounds.height);
+  return { x: -width - 1, y: -height - 1, width, height };
+}
+
+function setBrowserViewVisible(id: number, view: WebContentsView, visible: boolean): void {
+  if (!win || win.isDestroyed()) return;
+  if (visible) {
+    if (!win.contentView.children.includes(view)) win.contentView.addChildView(view);
+    const bounds = browserViewBounds.get(id);
+    if (bounds) view.setBounds(bounds);
+    view.setVisible(true);
+  } else {
+    view.setVisible(false);
+    // Keep the native layer mounted to avoid a flash on return, but move its
+    // hit area away from renderer menus while preserving its page viewport.
+    view.setBounds(offscreenBrowserBounds(browserViewBounds.get(id) ?? view.getBounds()));
+  }
+}
+
+function clearBrowserViews(): void {
+  for (const view of browserViews.values()) {
+    win?.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
+  }
+  browserViews.clear();
+  browserVisibility.clear();
+  browserViewBounds.clear();
+}
 
 function ensureBrowserView(id: number): WebContentsView {
   const existing = browserViews.get(id);
   if (existing) return existing;
   const view = new WebContentsView({ webPreferences: { sandbox: true } });
-  browserViews.set(id, view);
+  view.setVisible(false);
+  view.setBounds(offscreenBrowserBounds(browserViewBounds.get(id) ?? { width: 1, height: 1 }));
   win?.contentView.addChildView(view);
+  browserViews.set(id, view);
+  if (browserVisibility.get(id)) setBrowserViewVisible(id, view, true);
   const wc = view.webContents;
   const pushState = () => {
     if (wc.isDestroyed()) return;
@@ -5868,9 +5905,10 @@ function ensureBrowserView(id: number): WebContentsView {
   wc.on("page-title-updated", pushState);
   wc.on("did-start-loading", pushState);
   wc.on("did-stop-loading", pushState);
-  // Popups/new-tab links load in the same view — tabs are renderer-owned.
+  // Tabs are renderer-owned. Ask it to create one rather than replacing the
+  // page that opened the link.
   wc.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) void wc.loadURL(url);
+    if (/^https?:\/\//i.test(url)) send("browser:open-link", { url });
     return { action: "deny" };
   });
 
@@ -5887,7 +5925,9 @@ function ensureBrowserView(id: number): WebContentsView {
           : null,
       { label: "Annotate", click: () => void startAnnotatePicker(id) },
       { type: "separator" },
-      link ? { label: "Open link", click: () => void wc.loadURL(link) } : null,
+      link && /^https?:\/\//i.test(link)
+        ? { label: "Open link in new tab", click: () => send("browser:open-link", { url: link }) }
+        : null,
       link ? { label: "Open in external browser", click: () => void shell.openExternal(link) } : null,
       { type: "separator" },
       link ? { label: "Copy link address", click: () => clipboard.writeText(link) } : null,
@@ -10843,23 +10883,41 @@ app.whenReady().then(async () => {
     return { ok: true };
   });
 
+  ipcMain.handle("browser:capture", async (_e, id: number) => {
+    const wc = browserViews.get(id)?.webContents;
+    if (!wc || wc.isDestroyed()) return null;
+    try {
+      const image = await wc.capturePage();
+      return image.isEmpty() ? null : image.toDataURL();
+    } catch {
+      return null;
+    }
+  });
+
   ipcMain.handle("browser:bounds", (_e, p: { id: number; x: number; y: number; width: number; height: number }) => {
     // The renderer measures in its own CSS pixels; setBounds wants window
     // DIPs. They differ by the page zoom factor (Cmd+= / Cmd+-), so an
     // unzoomed conversion strands the view at the wrong spot and size.
     const z = win?.webContents.getZoomFactor() ?? 1;
-    // Lookup, never create: a late ResizeObserver tick for a tab the user
-    // just closed would otherwise mint an orphan view layered over the panel.
-    browserViews.get(p.id)?.setBounds({
+    // A hidden renderer placeholder reports zero size. Keep the last usable
+    // viewport so its page does not reflow while parked offscreen.
+    if (!browserViews.has(p.id) && !browserVisibility.has(p.id)) return;
+    const bounds = {
       x: Math.round(p.x * z),
       y: Math.round(p.y * z),
       width: Math.max(0, Math.round(p.width * z)),
       height: Math.max(0, Math.round(p.height * z)),
-    });
+    };
+    if (!bounds.width || !bounds.height) return;
+    browserViewBounds.set(p.id, bounds);
+    const view = browserViews.get(p.id);
+    if (view) view.setBounds(browserVisibility.get(p.id) ? bounds : offscreenBrowserBounds(bounds));
   });
 
   ipcMain.handle("browser:visible", (_e, p: { id: number; visible: boolean }) => {
-    browserViews.get(p.id)?.setVisible(p.visible);
+    browserVisibility.set(p.id, p.visible);
+    const view = browserViews.get(p.id);
+    if (view) setBrowserViewVisible(p.id, view, p.visible);
   });
 
   ipcMain.handle("browser:navigate", (_e, p: { id: number; url?: string; action?: "back" | "forward" | "reload" }) => {
@@ -10883,6 +10941,8 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("browser:close", (_e, id: number) => {
+    browserVisibility.delete(id);
+    browserViewBounds.delete(id);
     const view = browserViews.get(id);
     if (view) {
       browserViews.delete(id);

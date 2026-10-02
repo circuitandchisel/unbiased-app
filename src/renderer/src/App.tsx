@@ -24,7 +24,8 @@ import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
-import { Bot, Check, ChevronLeft, Copy, Download, FolderOpen, MoreHorizontal, RefreshCw } from "lucide-react";
+import "./side-tab-scrollbar.css";
+import { Bot, Check, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
@@ -781,11 +782,13 @@ declare global {
       agentStyle: () => Promise<AgentStylePrefs>;
       setAgentStyle: (prefs: AgentStylePrefs) => Promise<{ ok: boolean; prefs: AgentStylePrefs }>;
       openBrowser: (p: { id: number; url?: string }) => Promise<{ ok: boolean }>;
+      captureBrowser: (id: number) => Promise<string | null>;
       setBrowserBounds: (b: { id: number; x: number; y: number; width: number; height: number }) => Promise<void>;
       setBrowserVisible: (p: { id: number; visible: boolean }) => Promise<void>;
       navigateBrowser: (p: { id: number; url?: string; action?: "back" | "forward" | "reload" }) => Promise<void>;
       closeBrowser: (id: number) => Promise<void>;
       onBrowserState: (cb: (p: BrowserState) => void) => () => void;
+      onBrowserOpenLink: (cb: (p: { url: string }) => void) => () => void;
       onBrowserAnnotate: (
         cb: (p: { text: string; comment?: string; tag?: string; thumb?: string }) => void,
       ) => () => void;
@@ -1967,6 +1970,7 @@ export function App() {
     if (fresh) {
       for (const id of browserTabsRef.current) void window.unbiased.closeBrowser(id);
       setBrowserTabs([]);
+      blankBrowserTabsRef.current.clear();
       setAgentMirrorOpen(false);
       setBrowserTitles({});
       // Matching closeSideChat: the engine drops each ephemeral pane, so the
@@ -2249,6 +2253,7 @@ export function App() {
   // wrongly open. These refs give it the arrays as they are at call time.
   const browserTabsRef = useRef(browserTabs);
   browserTabsRef.current = browserTabs;
+  const blankBrowserTabsRef = useRef(new Set<number>());
   const sideChatsRef = useRef(sideChats);
   sideChatsRef.current = sideChats;
   // Live page titles per browser tab (for the strip labels).
@@ -2340,7 +2345,52 @@ export function App() {
   const [previewOn, setPreviewOn] = useState(false);
   // The side panel header's + menu (Review / Terminal / Files / Side chat).
   const [sidePlusOpen, setSidePlusOpen] = useState(false);
+  const [sidePlusOpensLeft, setSidePlusOpensLeft] = useState(false);
+  const [browserPreview, setBrowserPreview] = useState<{ id: number; image: string } | null>(null);
   const sidePlusRef = useRef<HTMLSpanElement>(null);
+  const sideTabStripRef = useRef<HTMLDivElement>(null);
+
+  async function toggleSidePlusMenu() {
+    if (sidePlusOpen) {
+      setSidePlusOpen(false);
+      return;
+    }
+    const id = panelMode.startsWith("browser:") ? Number(panelMode.slice(8)) : null;
+    let image: string | null = null;
+    if (id !== null && browserTabs.includes(id)) {
+      try {
+        image = await window.unbiased.captureBrowser(id);
+      } catch {
+        // The menu remains usable if a page cannot be captured.
+      }
+    }
+    setBrowserPreview(image && id !== null ? { id, image } : null);
+    const anchorLeft = sidePlusRef.current?.getBoundingClientRect().left ?? 0;
+    setSidePlusOpensLeft(anchorLeft + 224 + 8 > window.innerWidth);
+    setSidePlusOpen(true);
+  }
+
+  useEffect(() => {
+    if (sidePlusOpen || !browserPreview) return;
+    const timer = window.setTimeout(() => setBrowserPreview(null), 200);
+    return () => window.clearTimeout(timer);
+  }, [sidePlusOpen, browserPreview]);
+
+  useEffect(() => {
+    if (!sideOpen) return;
+    const strip = sideTabStripRef.current;
+    if (!strip) return;
+    const onWheel = (event: WheelEvent) => {
+      if (strip.scrollWidth <= strip.clientWidth + 1) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      event.preventDefault();
+      event.stopPropagation();
+      strip.scrollLeft += delta;
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, [sideOpen]);
 
   useEffect(() => {
     if (!sidePlusOpen) return;
@@ -2450,11 +2500,11 @@ export function App() {
 
   // The browser is a native layer floating over the panel — it must hide
   // whenever its spot isn't showing: other tab active, panel closed, the
-  // + menu dropping over it, or the Settings view replacing the whole UI.
-  useEffect(() => {
+  // side-panel + menu dropping over it, or Settings replacing the whole UI.
+  // The Environment menu lives in the main pane and does not cover it.
+  useLayoutEffect(() => {
     const clear =
       !sidePlusOpen &&
-      !envOpen &&
       !showSettings &&
       !showChangelog &&
       !confirmDialog &&
@@ -2468,13 +2518,28 @@ export function App() {
       // hiding itself with display:none would leave the page floating over
       // Scheduled or Connectors. It has to be told.
       !pageOpen;
-    for (const id of browserTabs) {
-      void window.unbiased.setBrowserVisible({
-        id,
-        visible: sideOpen && panelMode === `browser:${id}` && clear,
-      });
-    }
-  }, [browserTabs, sideOpen, panelMode, sidePlusOpen, envOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, pageOpen]);
+    const activeId = sideOpen && clear && panelMode.startsWith("browser:")
+      ? Number(panelMode.slice(8))
+      : null;
+    let cancelled = false;
+    const sync = async () => {
+      if (activeId !== null && browserTabs.includes(activeId)) {
+        const host = sidePanelRef.current?.querySelector<HTMLElement>(`[data-browser-host="${activeId}"]`);
+        if (host) {
+          const rect = host.getBoundingClientRect();
+          await window.unbiased.setBrowserBounds({ id: activeId, x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+        }
+        if (cancelled) return;
+        await window.unbiased.setBrowserVisible({ id: activeId, visible: true });
+        if (cancelled) return;
+      }
+      await Promise.all(browserTabs
+        .filter((id) => id !== activeId)
+        .map((id) => window.unbiased.setBrowserVisible({ id, visible: false })));
+    };
+    void sync();
+    return () => { cancelled = true; };
+  }, [browserTabs, sideOpen, panelMode, sidePlusOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, pageOpen]);
 
   function openSideChatTab() {
     setSidePlusOpen(false);
@@ -2491,38 +2556,42 @@ export function App() {
     setSideOpenPersisted(true);
   }
 
+  function createBrowserTab(url?: string): boolean {
+    if (browserTabsRef.current.length >= MAX_TABS_PER_KIND) return false;
+    const id = tabIdRef.current++;
+    if (!url) blankBrowserTabsRef.current.add(id);
+    browserTabsRef.current = [...browserTabsRef.current, id];
+    setBrowserTabs(browserTabsRef.current);
+    setPanelMode(`browser:${id}`);
+    setSideOpenPersisted(true);
+    if (url) void window.unbiased.openBrowser({ id, url });
+    return true;
+  }
+
   function openBrowserTab() {
     setSidePlusOpen(false);
-    if (browserTabs.length >= MAX_TABS_PER_KIND) {
-      setPanelMode(`browser:${browserTabs[browserTabs.length - 1]}`);
+    if (!createBrowserTab() && browserTabsRef.current.length > 0) {
+      setPanelMode(`browser:${browserTabsRef.current[browserTabsRef.current.length - 1]}`);
       setSideOpenPersisted(true);
-      return;
     }
-    const id = tabIdRef.current++;
-    setBrowserTabs((ts) => [...ts, id]);
-    setPanelMode(`browser:${id}`);
-    setSideOpenPersisted(true);
   }
 
-  // Any http(s) link anywhere in the app lands in the embedded browser:
-  // the active browser tab if one is focused, else the most recent one,
-  // else a fresh tab.
+  // A new link must not replace an open page. At the tab cap, let the system
+  // browser handle it rather than discarding or overwriting a live tab.
   function openInBrowser(url: string) {
-    let id: number;
-    if (panelMode.startsWith("browser:") && browserTabs.includes(Number(panelMode.slice(8)))) {
-      id = Number(panelMode.slice(8));
-    } else if (browserTabs.length > 0) {
-      id = browserTabs[browserTabs.length - 1];
-    } else {
-      id = tabIdRef.current++;
-      setBrowserTabs((ts) => [...ts, id]);
-    }
-    setPanelMode(`browser:${id}`);
-    setSideOpenPersisted(true);
-    void window.unbiased.openBrowser({ id, url });
+    if (!/^https?:\/\//i.test(url)) return;
+    if (!createBrowserTab(url)) void window.unbiased.openExternal(url);
   }
+
+  const openInBrowserRef = useRef(openInBrowser);
+  openInBrowserRef.current = openInBrowser;
+  useEffect(
+    () => window.unbiased.onBrowserOpenLink(({ url }) => openInBrowserRef.current(url)),
+    [],
+  );
 
   function closeBrowserTab(id: number) {
+    blankBrowserTabsRef.current.delete(id);
     setBrowserTabs((ts) => ts.filter((x) => x !== id));
     setBrowserTitles((m) => {
       const rest = { ...m };
@@ -4316,14 +4385,16 @@ export function App() {
         >
           <header
             style={{
-              padding: "8px 12px",
+              minHeight: 56,
+              boxSizing: "border-box",
+              padding: "10px 12px 6px",
               display: "flex",
               alignItems: "center",
               gap: 6,
               flexShrink: 0,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 4, flex: tabOrder.length > 0 ? "1 1 auto" : "0 0 auto", minWidth: 0, overflowX: "auto" }}>
+            <div ref={sideTabStripRef} className="u-side-tab-strip" style={{ display: "flex", alignItems: "center", gap: 4, flex: "0 1 auto", minWidth: 0, overflowX: "auto", overscrollBehaviorX: "contain" }}>
             {tabOrder.map((t) => {
               const agent = t.startsWith("agent:")
                 ? openAgents.find((a) => `agent:${a.threadId}` === t)
@@ -4386,6 +4457,7 @@ export function App() {
               return (
                 <div
                   key={t}
+                  className="u-side-tab"
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -4428,7 +4500,7 @@ export function App() {
             })}
             </div>
             <span ref={sidePlusRef} style={{ position: "relative", display: "flex" }}>
-              <IconButton title="Open side panel tab" onClick={() => setSidePlusOpen((o) => !o)}>
+              <IconButton title="Open side panel tab" onClick={() => void toggleSidePlusMenu()}>
                 <PlusIcon />
               </IconButton>
               {sidePlusOpen && (
@@ -4436,8 +4508,9 @@ export function App() {
                   style={{
                     position: "absolute",
                     top: 32,
-                    left: 0,
+                    ...(sidePlusOpensLeft ? { right: 0 } : { left: 0 }),
                     width: 224,
+                    boxSizing: "border-box",
                     background: colors.panel,
                     border: `1px solid ${colors.border}`,
                     borderRadius: 12,
@@ -4645,7 +4718,7 @@ export function App() {
                 flexDirection: "column",
               }}
             >
-              <BrowserPane browserId={id} />
+              <BrowserPane browserId={id} autoFocusAddress={blankBrowserTabsRef.current.has(id)} preview={browserPreview?.id === id ? browserPreview.image : null} />
             </div>
           ))}
           {sideChats.map((id) => (
@@ -6597,7 +6670,7 @@ function ReviewPane({ gitPath }: { gitPath: string | null }) {
 /** The embedded browser's renderer half: toolbar + a placeholder div whose
  *  bounds the native WebContentsView (main process) is pinned to. The
  *  actual page pixels are the native layer floating above this spot. */
-function BrowserPane({ browserId }: { browserId: number }) {
+function BrowserPane({ browserId, autoFocusAddress, preview }: { browserId: number; autoFocusAddress: boolean; preview: string | null }) {
   const holdRef = useRef<HTMLDivElement>(null);
   const [urlDraft, setUrlDraft] = useState("");
   const [state, setState] = useState<BrowserState>({
@@ -6609,13 +6682,26 @@ function BrowserPane({ browserId }: { browserId: number }) {
     loading: false,
   });
   const editingRef = useRef(false);
+  const selectedUrlRef = useRef<string | null>(null);
+  const selectOnClickRef = useRef(false);
+  const toolbarButtonStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 28,
+    height: 28,
+    padding: 0,
+    flexShrink: 0,
+    background: "transparent",
+    border: "none",
+  };
 
   useEffect(() => {
     void window.unbiased.openBrowser({ id: browserId });
     const off = window.unbiased.onBrowserState((s) => {
       if (s.id !== browserId) return;
       setState(s);
-      if (!editingRef.current) setUrlDraft(s.url === "about:blank" ? "" : s.url);
+      setUrlDraft((current) => !editingRef.current || !current ? (s.url === "about:blank" ? "" : s.url) : current);
     });
     const el = holdRef.current;
     if (!el) return off;
@@ -6642,17 +6728,12 @@ function BrowserPane({ browserId }: { browserId: number }) {
       aria-label={label}
       title={label}
       style={{
-        background: "transparent",
-        border: "none",
+        ...toolbarButtonStyle,
         color: enabled ? colors.fg : "var(--gutter)",
         cursor: enabled ? "pointer" : "default",
-        padding: "4px 6px",
-        fontSize: 14,
-        fontFamily: "inherit",
-        lineHeight: 1,
       }}
     >
-      {label === "Back" ? "←" : label === "Forward" ? "→" : "⟳"}
+      {label === "Back" ? <ChevronLeft size={24} strokeWidth={1.8} /> : label === "Forward" ? <ChevronRight size={24} strokeWidth={1.8} /> : <RefreshCw size={16} strokeWidth={1.8} />}
     </button>
   );
 
@@ -6673,12 +6754,32 @@ function BrowserPane({ browserId }: { browserId: number }) {
         {navBtn("Reload", state.url !== "", "reload")}
         <input
           value={urlDraft}
-          onChange={(e) => setUrlDraft(e.target.value)}
-          onFocus={() => {
+          onChange={(e) => {
+            setUrlDraft(e.target.value);
+            selectedUrlRef.current = e.target.value;
+          }}
+          onMouseDown={(e) => {
+            selectOnClickRef.current = e.button === 0 && !!e.currentTarget.value &&
+              (document.activeElement !== e.currentTarget || selectedUrlRef.current !== e.currentTarget.value);
+          }}
+          onMouseUp={(e) => {
+            if (selectOnClickRef.current) e.preventDefault();
+          }}
+          onClick={(e) => {
+            if (!selectOnClickRef.current) return;
+            e.currentTarget.select();
+            selectedUrlRef.current = e.currentTarget.value;
+            selectOnClickRef.current = false;
+          }}
+          onFocus={(e) => {
             editingRef.current = true;
+            e.currentTarget.select();
+            if (e.currentTarget.value) selectedUrlRef.current = e.currentTarget.value;
           }}
           onBlur={() => {
             editingRef.current = false;
+            selectedUrlRef.current = null;
+            selectOnClickRef.current = false;
             setUrlDraft(state.url === "about:blank" ? "" : state.url);
           }}
           onKeyDown={(e) => {
@@ -6689,7 +6790,7 @@ function BrowserPane({ browserId }: { browserId: number }) {
           }}
           placeholder="Enter a URL…"
           spellCheck={false}
-          autoFocus={!state.url || state.url === "about:blank"}
+          autoFocus={autoFocusAddress}
           style={{
             flex: 1,
             background: "var(--panel-2)",
@@ -6710,17 +6811,12 @@ function BrowserPane({ browserId }: { browserId: number }) {
           title="Open in external browser"
           aria-label="Open in external browser"
           style={{
-            background: "transparent",
-            border: "none",
+            ...toolbarButtonStyle,
             color: /^https?:/.test(state.url) ? colors.fg : "var(--gutter)",
             cursor: /^https?:/.test(state.url) ? "pointer" : "default",
-            padding: "4px 6px",
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
           }}
         >
-          <ExternalLinkIcon />
+          <ExternalLink size={16} strokeWidth={1.8} />
         </button>
         <button
           onClick={() => void window.unbiased.startBrowserAnnotate(browserId)}
@@ -6728,20 +6824,17 @@ function BrowserPane({ browserId }: { browserId: number }) {
           title="Annotate"
           aria-label="Annotate page"
           style={{
-            background: "transparent",
-            border: "none",
+            ...toolbarButtonStyle,
             color: state.url && state.url !== "about:blank" ? colors.fg : "var(--gutter)",
             cursor: state.url && state.url !== "about:blank" ? "pointer" : "default",
-            padding: "4px 6px",
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
           }}
         >
-          <AnnotationIcon />
+          <MessageSquare size={16} strokeWidth={1.8} />
         </button>
       </div>
-      <div ref={holdRef} style={{ flex: 1, minHeight: 0, background: "var(--code-bg)" }} />
+      <div ref={holdRef} data-browser-host={browserId} style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden", background: "var(--code-bg)" }}>
+        {preview && <img src={preview} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />}
+      </div>
     </div>
   );
 }
@@ -6750,6 +6843,22 @@ function BrowserPane({ browserId }: { browserId: number }) {
  *  the active conversation's root) in the main process. Mounted for as
  *  long as its tab exists — hiding the tab only hides this component, so
  *  the shell session survives tab switches. */
+function TranscriptChevron({ open }: { open: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "inline-flex",
+        flexShrink: 0,
+        transform: open ? "rotate(90deg)" : "none",
+        transition: "transform 120ms var(--ease-out)",
+      }}
+    >
+      <ChevronRight size={16} strokeWidth={1.8} />
+    </span>
+  );
+}
+
 /** A completed turn's work — narration, agent lifecycle rows, command
  *  groups — collapsed under a dim "Worked for Ns" header, Codex-style.
  *  The final message stays outside, always visible. */
@@ -6764,6 +6873,7 @@ function WorkedGroup({ duration, children }: { duration: number | null; children
   return (
     <div style={{ margin: "14px 0 8px" }}>
       <button
+        className="u-worked-group"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         style={{
@@ -6778,7 +6888,6 @@ function WorkedGroup({ duration, children }: { duration: number | null; children
           background: "transparent",
           border: "none",
           padding: "2px 0 2px",
-          color: colors.dim,
           // Set like the answer it introduces — same size, leading and
           // tracking — so the fold reads as a quiet line of the same voice
           // rather than a caption in a different one. Colour alone carries
@@ -6791,16 +6900,7 @@ function WorkedGroup({ duration, children }: { duration: number | null; children
         }}
       >
         {duration !== null ? `Worked for ${formatDuration(duration)}` : "Worked"}
-        <span
-          style={{
-            display: "inline-block",
-            transform: open ? "rotate(90deg)" : "none",
-            transition: "transform 120ms var(--ease-out)",
-            fontSize: 10,
-          }}
-        >
-          ›
-        </span>
+        <TranscriptChevron open={open} />
       </button>
       {open && (
         <>
@@ -6899,16 +6999,7 @@ function AgentLifecycleRow({
         >
           {label.verb} {headerName}
         </span>
-        <span
-          style={{
-            display: "inline-block",
-            transform: open ? "rotate(90deg)" : "none",
-            transition: "transform 120ms var(--ease-out)",
-            fontSize: 10,
-          }}
-        >
-          ›
-        </span>
+        <TranscriptChevron open={open} />
       </button>
       {open && (
         <div
@@ -16043,11 +16134,9 @@ function PrIcon() {
 /** Checklist glyph for the header's Environment button. */
 function EnvIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 6l1.5 1.5L8 5" />
-      <path d="M4 12.5l1.5 1.5L8 11.5" />
-      <path d="M4 19l1.5 1.5L8 18" />
-      <path d="M11.5 6.5H20M11.5 13H20M11.5 19.5H20" />
+    <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M0.96 10.27C1.11 11.71 2.27 12.87 3.71 13.03c1.07.12 2.17.22 3.29.22s2.22-.1 3.29-.22c1.44-.16 2.6-1.32 2.75-2.76.11-1.06.21-2.16.21-3.27s-.1-2.21-.21-3.27C12.89 2.29 11.73 1.13 10.29.97 9.22.85 8.12.75 7 .75S4.78.85 3.71.97C2.27 1.13 1.11 2.29.96 3.73.85 4.79.75 5.89.75 7s.1 2.21.21 3.27Z" />
+      <path d="m3.1 4.7.7.7 1-1.1m1.5 1h4.2M3.1 8.7l.7.7 1-1.1m1.5 1h4.2" />
     </svg>
   );
 }
@@ -18356,11 +18445,16 @@ function StepsGroup({
             onClick={() => openAgentMirrorRef.current?.()}
             title="Show the agent browser in the side panel"
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
               background: "transparent",
               border: "none",
-              padding: "2px 0",
+              padding: "3px 0",
               color: colors.accent,
-              fontSize: 13.5,
+              fontSize: 15.5,
+              lineHeight: 1.6,
+              letterSpacing: "var(--track-body)",
               cursor: "pointer",
               fontFamily: "var(--font-ui)",
               textDecoration: "none",
@@ -18369,7 +18463,7 @@ function StepsGroup({
             {/* Inline emoji + name, the same shape sub-agent rows use. Kept
                 inside the button so the icon is part of the click target, and
                 marked decorative — the adjacent word already names it. */}
-            <span aria-hidden="true" style={{ fontSize: 13, marginRight: 5 }}>
+            <span aria-hidden="true" style={{ display: "flex", alignItems: "center", fontSize: 15.5, lineHeight: 1 }}>
               🌐
             </span>
             Agent Browser
@@ -18384,15 +18478,14 @@ function StepsGroup({
             padding: 0,
             color: summary.color,
             cursor: "pointer",
-            display: "inline-block",
-            transform: expanded ? "rotate(90deg)" : "none",
-            transition: "transform 120ms var(--ease-out)",
-            // Scaled with the header's larger type; the row centres it, so
-            // the old 1px nudge would now push it low.
-            fontSize: 12,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 16,
+            height: 24,
           }}
         >
-          ›
+          <TranscriptChevron open={expanded} />
         </button>
       </div>
       {expanded &&
@@ -18448,19 +18541,7 @@ function StepsGroup({
                 {(failed || (e.status !== "completed" && !awaiting)) && (
                   <span style={{ color: label.color, flexShrink: 0, fontSize: 13 }}>{label.text}</span>
                 )}
-                {hasOutput && (
-                  <span
-                    style={{
-                      flexShrink: 0,
-                      fontSize: 11,
-                      display: "inline-block",
-                      transform: itemOpen ? "rotate(90deg)" : "none",
-                      transition: "transform 120ms var(--ease-out)",
-                    }}
-                  >
-                    ›
-                  </span>
-                )}
+                {hasOutput && <TranscriptChevron open={itemOpen} />}
               </div>
               {awaiting &&
                 (e.approval!.expired ? (
