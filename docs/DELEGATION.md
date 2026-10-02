@@ -4,11 +4,11 @@
 
 ## Why
 
-Pareto is a cascade: open-weight models on our GPUs answer most requests and a frontier model (today GPT-6 Astra) answers the hard ones. Every escalation runs on our provider account: we pay, and the customer's prompt transits our account. BYOK customers want their prompts to stay in their own provider account. OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call, but its Terms require the request to originate from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call. The server keeps deciding *when* to escalate; the client executes it.
+Pareto is a cascade: open-weight models on our GPUs answer most requests and a frontier model (today GPT-6 Astra) answers the hard ones, on our provider account. BYOK customers want their prompts to stay in their own account. OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call, but its Terms require the request to originate from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call. The server keeps deciding *when* to escalate; the client executes it.
 
 ## Use case
 
-A user runs the Unbiased proxy, or a harness that speaks this protocol. The client declares which providers it can call and with what credential. Pareto runs as today; when it decides a request needs a frontier model the client declared, it hands the step back instead of dialing the seat. The client re-issues its own request to that provider on the user's credential, with a small patch from the server, and streams the answer to the user as Pareto's. Pareto never sees the credential or makes the call. A later version lets the client post the frontier answer back for Pareto to judge or synthesise.
+A user runs the Unbiased proxy, or a harness that speaks this protocol, and it declares which providers it can call and with what credential. When Pareto decides a request needs a frontier model the client declared, it hands the step back instead of dialing the seat; the client re-issues its own request to that provider on the user's credential, with a small patch from the server, and streams the answer as Pareto's. Pareto never sees the credential or makes the call. A later version lets the client post the answer back for Pareto to judge or synthesise.
 
 ## Why this way
 
