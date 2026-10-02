@@ -4,7 +4,7 @@
 
 ## Why
 
-Pareto is a cascade: open-weight models on our GPUs answer most requests and a frontier model (today GPT-6 Astra) answers the hard ones, on our provider account. BYOK customers want their prompts to stay in their own account. OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call, but its Terms require the request to originate from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call. The server keeps deciding *when* to escalate; the client executes it.
+Pareto is a cascade: open-weight models on our GPUs answer most requests and a frontier model (today GPT-6 Astra) answers the hard ones, on our provider account. BYOK customers want their prompts to stay in their own account. OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call, but its Terms require the request to originate from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call ([SIGN-IN-WITH-CHATGPT.md](SIGN-IN-WITH-CHATGPT.md) has the clause-by-clause read). The server keeps deciding *when* to escalate; the client executes it.
 
 ## Use case
 
