@@ -176,7 +176,9 @@ jobs:
           # one file), and the signature seals it.
           test -x "$app/Contents/Resources/engine/unbiased-app-engine"
           test -x "$app/Contents/Resources/engine/pareto-app-server"
-          test "$("$app/Contents/Resources/engine/pareto-app-server" --version)" = "codex-app-server 0.1.1"
+          expected_version="$(sed -n 's/^version = //p' ../unbiased-app-engine/engine.lock)"
+          test -n "$expected_version"
+          test "$("$app/Contents/Resources/engine/pareto-app-server" --version)" = "codex-app-server $expected_version"
           test -x "$app/Contents/Resources/browser/agent-browser"
           test ! -e "$app/Contents/Resources/browser/chrome-mac-arm64"
           codesign --verify --deep --strict "$app"
