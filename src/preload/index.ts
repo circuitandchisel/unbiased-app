@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   authDeviceStart: () => ipcRenderer.invoke("auth:device-start"),
   authDeviceWait: () => ipcRenderer.invoke("auth:device-wait"),
   authDeviceCancel: () => ipcRenderer.invoke("auth:device-cancel"),
+  delegationGet: () => ipcRenderer.invoke("delegation:get"),
+  delegationSet: (proxyUrl: string | null) => ipcRenderer.invoke("delegation:set", { proxyUrl }),
 
   sendMessage: (
     paneId: string,
