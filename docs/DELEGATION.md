@@ -96,7 +96,7 @@ on request R to /v1/responses:
       collect the completed Responses object (the plan route's completed event has an empty output: rebuild it from output_item.done)
       send R + {stream:true, delegation:{continuation, response | error}} to Pareto; relay its stream in place of the first
   if R had stream:false: assemble the relayed stream's response.completed and answer JSON
-  provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); 401/403 or a failed token refresh → until the user signs in again (re-checked hourly)
+  provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); 401 or a dead refresh token → stop declaring and open the browser to sign in again, once; 403 → stop declaring until the stored sign-in changes
 ```
 
 ### 5. Transport note
