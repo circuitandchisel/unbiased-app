@@ -500,6 +500,18 @@ type ScheduledTaskView = {
   runningThreadId: string | null;
 };
 
+/** What the delegation proxy reports about its credential (unbiased-proxy README: GET /unbiased-proxy/status). */
+type DelegationStatus =
+  | { reachable: false }
+  | {
+      reachable: true;
+      provider: string;
+      cred: "plan" | "key";
+      declared: boolean;
+      withdrawn?: { reason: "limit" | "signin" | "ineligible"; since: string; until: string };
+      signIn?: { pending: boolean; last?: { startedAt: number; url?: string; outcome?: "ok" | "failed"; error?: string } };
+    };
+
 declare global {
   interface Window {
     unbiased: {
@@ -523,6 +535,8 @@ declare global {
       authDeviceCancel: () => Promise<{ ok: boolean }>;
       delegationGet: () => Promise<{ proxyUrl: string | null }>;
       delegationSet: (proxyUrl: string | null) => Promise<{ ok: true; proxyUrl: string | null } | { ok: false; error: string }>;
+      delegationStatus: () => Promise<DelegationStatus | null>;
+      delegationSignIn: () => Promise<{ result: string; url?: string }>;
       sendMessage: (
         paneId: PaneId,
         text: string,
@@ -15453,6 +15467,34 @@ function SettingsView({
       setDelegationError(r.error);
     }
   }
+  // The proxy's credential state, polled while the Account tab shows a proxy:
+  // declared, or why not — and the sign-in button when a sign-in would fix it.
+  const [delegationStatus, setDelegationStatus] = useState<DelegationStatus | null>(null);
+  useEffect(() => {
+    if (tab !== "account" || !delegationSaved) return;
+    let live = true;
+    const poll = () => void window.unbiased.delegationStatus().then((s) => { if (live) setDelegationStatus(s); });
+    poll();
+    const timer = setInterval(poll, 30_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [tab, delegationSaved]);
+  async function delegationSignIn() {
+    await window.unbiased.delegationSignIn();
+    setDelegationStatus(await window.unbiased.delegationStatus());
+  }
+  const delegationStatusText = (() => {
+    const s = delegationStatus;
+    if (!s) return null;
+    if (!s.reachable) return "The proxy is not reachable; Pareto answers on its own.";
+    const on = s.cred === "plan" ? "your ChatGPT plan" : "your OpenAI API key";
+    if (s.declared) return `Frontier escalations run on ${on}.`;
+    switch (s.withdrawn?.reason) {
+      case "limit": return `Your ChatGPT plan's usage limit was reached; Pareto answers on its own until ${new Date(s.withdrawn.until).toLocaleTimeString()}.`;
+      case "signin": return s.signIn?.pending ? "Waiting for the ChatGPT sign-in in your browser…" : "Your ChatGPT sign-in lapsed; Pareto answers on its own until you sign in again.";
+      case "ineligible": return "Your ChatGPT plan is not available to this app (see chatgpt.com/settings/usage); Pareto answers on its own.";
+      default: return "Pareto answers on its own.";
+    }
+  })();
 
   useEffect(() => {
     if (tab === "account" && !account) void window.unbiased.authValidate().then(setAccount);
@@ -15904,6 +15946,22 @@ function SettingsView({
                 <span style={{ fontSize: 12, color: colors.err }}>{delegationError}</span>
               ) : delegationSaved ? (
                 <span style={{ fontSize: 12, color: colors.dim }}>Engine routed through {delegationSaved}.</span>
+              ) : null}
+              {delegationSaved && delegationStatusText ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: delegationStatus?.reachable && delegationStatus.declared ? colors.dim : colors.err }}>{delegationStatusText}</span>
+                  {delegationStatus?.reachable && delegationStatus.withdrawn?.reason === "signin" && !delegationStatus.signIn?.pending ? (
+                    <button
+                      onClick={() => void delegationSignIn()}
+                      style={{ background: "transparent", border: `1px solid ${colors.border}`, color: "inherit", borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+                    >
+                      Sign in to ChatGPT
+                    </button>
+                  ) : null}
+                  {delegationStatus?.reachable && delegationStatus.signIn?.last?.outcome === "failed" && delegationStatus.signIn.last.error ? (
+                    <span style={{ fontSize: 12, color: colors.dim }}>Last attempt: {delegationStatus.signIn.last.error}</span>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           </div>

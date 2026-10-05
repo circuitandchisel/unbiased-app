@@ -7815,6 +7815,31 @@ app.whenReady().then(async () => {
     if (readStoredKey()) await startEngine();
     return { ok: true as const, proxyUrl: url || null };
   });
+  // The proxy's own status and sign-in routes (unbiased-proxy README): what
+  // the Account panel shows about the credential, and the button that opens
+  // the browser to sign in with ChatGPT again when the sign-in lapsed.
+  const delegationOrigin = (url: string) => url.replace(/\/v1\/?$/, "");
+  ipcMain.handle("delegation:status", async () => {
+    const url = readDelegationProxy();
+    if (!url) return null;
+    try {
+      const r = await fetch(`${delegationOrigin(url)}/unbiased-proxy/status`, { signal: AbortSignal.timeout(2000) });
+      if (!r.ok) return { reachable: false as const };
+      return { reachable: true as const, ...((await r.json()) as Record<string, unknown>) };
+    } catch {
+      return { reachable: false as const };
+    }
+  });
+  ipcMain.handle("delegation:signin", async () => {
+    const url = readDelegationProxy();
+    if (!url) return { result: "unreachable" as const };
+    try {
+      const r = await fetch(`${delegationOrigin(url)}/unbiased-proxy/signin`, { method: "POST", signal: AbortSignal.timeout(2000) });
+      return r.ok ? ((await r.json()) as { result: string; url?: string }) : { result: "unreachable" as const };
+    } catch {
+      return { result: "unreachable" as const };
+    }
+  });
 
   ipcMain.handle("auth:login", async (_e, payload: { key?: string }) => {
     const key = (payload?.key ?? process.env.UNBIASED_API_KEY?.trim() ?? readStoredKey()?.key ?? "").trim();

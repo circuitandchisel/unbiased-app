@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   authDeviceCancel: () => ipcRenderer.invoke("auth:device-cancel"),
   delegationGet: () => ipcRenderer.invoke("delegation:get"),
   delegationSet: (proxyUrl: string | null) => ipcRenderer.invoke("delegation:set", { proxyUrl }),
+  delegationStatus: () => ipcRenderer.invoke("delegation:status"),
+  delegationSignIn: () => ipcRenderer.invoke("delegation:signin"),
 
   sendMessage: (
     paneId: string,
