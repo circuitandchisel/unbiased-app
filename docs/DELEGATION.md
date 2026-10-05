@@ -4,19 +4,19 @@
 
 ## Why
 
-Pareto answers most requests on our GPUs and the hard ones on a frontier model, on our provider account. BYOK customers want their prompts in their own account, and OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call — but its Terms require the request to come from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call ([SIGN-IN-WITH-CHATGPT.md](SIGN-IN-WITH-CHATGPT.md) has the clause-by-clause read). The server keeps deciding *when* to escalate and *what* to send; the client only executes.
+Pareto answers the hard requests on a frontier model, on our provider account. OpenAI's Sign in with ChatGPT lets a user's Plus or Pro plan pay for that call instead, but its Terms require the request to come from the user's local runtime with the token stored only there ([SIGN-IN-WITH-CHATGPT.md](SIGN-IN-WITH-CHATGPT.md)), so the gateway can neither hold the credential nor make the call. The server keeps deciding *when* to escalate and *what* to send; the client only executes.
 
 ## Use case
 
-The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Pareto never sees the credential or makes the call; the client never learns why Pareto escalated or what it does with the result.
+The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Neither side sees the other's secrets: not the credential, not the reason for escalating.
 
 ## Design rules
 
-- **The client is dumb.** It declares a credential, sends a request it was given, reports what came back. Which models a plan serves, what to send, how to fail over, how to judge or bill the result: all server-side, so Pareto's internals change without a client release.
-- **Every wire field is necessary.** v1 carried `kind`, `reason`, `window`, `model`, `fallbacks`, `cred`, `api`, a patch vocabulary, a model list in the header and an echo header; none changed what a correct client did. v2 has four fields on the hand-off and two on the post-back, each with a stated decision.
-- **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in; always before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
+- **The client is dumb.** It declares a credential, sends the request it is given, reports what came back. Which models a plan serves, what to send, how to fail over, how to judge or bill the result: all server-side, so Pareto's internals change without a client release.
+- **Every wire field is necessary.** v1's `kind`, `reason`, `window`, `model`, `fallbacks`, `cred`, `api`, patch vocabulary, header model list and echo header changed nothing a correct client did; they are gone. Each remaining field drives one stated decision.
+- **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in, always before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
 - **The post-back is a normal request.** Pareto sees the delegated output at once, bills it with the plumbing it already has (the rule is a separate decision), and may judge or synthesise before answering. The cost is streaming: the frontier answer is collected before it is posted back, so a delegated one-shot's time-to-first-token is the frontier's full generation time.
-- **Failure is Pareto's to handle.** The client reports a timeout, a limit or a refusal; Pareto escalates on its own seats and the user gets a Pareto answer on their Pareto plan. A client whose credential is exhausted stops declaring it for a while (the plan route names no reset time), so no request fails because a plan ran out.
+- **Failure is Pareto's to handle.** The client reports a timeout, a limit or a refusal; Pareto escalates on its own seats and the user gets a Pareto answer on their Pareto plan. An exhausted credential is simply not declared for a while (the plan route names no reset time), so no request fails because a plan ran out.
 
 **Out of scope for v2:** the billing rule for a delegated request; ZDR-organization policy; hand-off after partial output; streaming the post-back; providers other than OpenAI (the grammar admits them; only the Responses wire is defined).
 
@@ -101,4 +101,4 @@ on request R to /v1/responses:
 
 ### 5. Transport note
 
-Inside our stack the hand-off is the cascade's in-band error chunk, translated to `response.failed` by gpu-router (whose pre-stream failure gate passes this code through and whose error-envelope parser admits it past the size cap) and relayed byte-for-byte by the gateway. The post-back's `delegation` field crosses the router's request translation untouched. The cascade reads the signed claim, never the header, and refuses a continuation it did not mint.
+Inside our stack the hand-off is the cascade's in-band error chunk, translated to `response.failed` by gpu-router (its pre-stream failure gate and error-envelope size cap both admit this code) and relayed byte-for-byte by the gateway; the post-back's `delegation` field crosses the router's request translation untouched. The cascade reads the signed claim, never the header, and refuses a continuation it did not mint.
