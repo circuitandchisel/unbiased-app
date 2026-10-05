@@ -54,17 +54,16 @@ event: response.failed
 data: {"type":"response.failed","response":{"id":"resp_…","status":"failed","usage":null,
   "error":{"code":"delegation_required","type":"delegation_required",
     "message":"This request opted into delegated escalation (Delegation header), which the Unbiased proxy performs. Use the proxy, or drop the header.",
-    "delegation":{"v":1,"kind":"escalation","reason":"leader-takeover",
+    "delegation":{"v":1,"kind":"escalation",
       "provider":"openai","api":"responses","model":"gpt-6-astra","fallbacks":["gpt-6.1-sol"],
       "patch":{"instructions_prepend":"<identity prompt>",
                "input_append":[{"role":"user","content":"[Self-check] …judge advice…"}],
                "reasoning":{"effort":"medium"},"prompt_cache_key":"pc_…",
                "drop":["max_output_tokens","service_tier","temperature","…"]},
-      "window":{"remaining":5},
       "continuation":null}}}}
 ```
 
-`reason` is `leader-takeover` (an agentic step; `window.remaining` is the takeover steps left after it) or `seqr-escalate` (a one-shot whose tier-1 panel disagreed). `drop` lists what the chosen credential's route rejects; empty for `cred=key`. `continuation` is reserved for v2. With `stream: false` the same `error` object is the body of an HTTP 422.
+`kind` is the only classification on the wire; why Pareto escalated and any takeover-window state are Pareto internals and stay on its cost row. `drop` lists what the chosen credential's route rejects; empty for `cred=key`. `continuation` is reserved for v2. With `stream: false` the same `error` object is the body of an HTTP 422.
 
 ### 3. Applying the patch (client)
 
