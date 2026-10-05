@@ -17,7 +17,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import type { NativeImage } from "electron";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { homedir, hostname } from "node:os";
-import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
@@ -38,6 +38,7 @@ import type { ChildProcess } from "node:child_process";
 import { get as httpGet } from "node:http";
 import { EngineClient, engineVersionFromUserAgent, type EngineStatus } from "./engine";
 import { pollDeviceToken, requestDeviceAuthorization } from "./device-auth";
+import { delegationProxyOrigin, isDelegationProxyUrl, parseDelegationFile } from "./delegation";
 import { RendererCrashRecovery } from "./crash-recovery";
 import { mcpApplyDecision, mcpConfigOverride, overridableServerNames, parseThreadMcp, serializeThreadMcp, THREAD_MCP_FILE } from "./thread-mcp";
 import {
@@ -4938,19 +4939,16 @@ function credentialsPath(): string {
   return join(app.getPath("home"), ".unbiased", "credentials.json");
 }
 
-// Delegation (docs/DELEGATION.md): when set, the engine's Unbiased base URL
-// points at a local proxy that executes Pareto's frontier escalations on this
-// machine's own provider credential. Stored beside the credentials; absent =
-// the engine talks to the gateway directly. Loopback only — the protocol's
-// whole point is that the credential never leaves this machine.
-const DELEGATION_PROXY_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?\/v1\/?$/;
+// Delegation (docs/DELEGATION.md, src/main/delegation.ts): when set, the
+// engine's Unbiased base URL points at a local proxy that executes Pareto's
+// frontier escalations on this machine's own provider credential. Stored
+// beside the credentials; absent = the engine talks to the gateway directly.
 function delegationPath(): string {
   return join(app.getPath("home"), ".unbiased", "delegation.json");
 }
 function readDelegationProxy(): string | null {
   try {
-    const d = JSON.parse(readFileSync(delegationPath(), "utf8")) as { proxyUrl?: unknown };
-    return typeof d.proxyUrl === "string" && DELEGATION_PROXY_URL.test(d.proxyUrl.trim()) ? d.proxyUrl.trim() : null;
+    return parseDelegationFile(readFileSync(delegationPath(), "utf8"));
   } catch {
     return null;
   }
@@ -7680,6 +7678,9 @@ async function startEngine(): Promise<void> {
   resetSubAgentState();
   // The engine reads its base URL once, at launch (unbiased-app-engine
   // main.go: UNBIASED_BASE_URL); a delegation proxy is applied by restarting it.
+  // Through the proxy, the engine's UNBIASED_API_KEY is not what reaches the
+  // gateway: the proxy substitutes its own, read from the same credentials
+  // file (unbiased-proxy src/cli.ts) — the same key today.
   const delegationProxy = readDelegationProxy();
   engine.start(bin, {
     UNBIASED_API_KEY: stored.key,
@@ -7806,9 +7807,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("delegation:get", () => ({ proxyUrl: readDelegationProxy() }));
   ipcMain.handle("delegation:set", async (_e, payload: { proxyUrl?: string | null }) => {
     const url = (payload?.proxyUrl ?? "").trim();
-    if (url && !DELEGATION_PROXY_URL.test(url)) {
+    if (url && !isDelegationProxyUrl(url)) {
       return { ok: false as const, error: "The delegation proxy must be a local URL such as http://127.0.0.1:4040/v1." };
     }
+    // An unchanged value restarts nothing: the restart stops every conversation on the engine.
+    if ((url || null) === readDelegationProxy()) return { ok: true as const, proxyUrl: url || null };
     mkdirSync(dirname(delegationPath()), { recursive: true });
     if (url) writeFileSync(delegationPath(), JSON.stringify({ proxyUrl: url }, null, 2), { mode: 0o600 });
     else rmSync(delegationPath(), { force: true });
@@ -7818,12 +7821,11 @@ app.whenReady().then(async () => {
   // The proxy's own status and sign-in routes (unbiased-proxy README): what
   // the Account panel shows about the credential, and the button that opens
   // the browser to sign in with ChatGPT again when the sign-in lapsed.
-  const delegationOrigin = (url: string) => url.replace(/\/v1\/?$/, "");
   ipcMain.handle("delegation:status", async () => {
     const url = readDelegationProxy();
     if (!url) return null;
     try {
-      const r = await fetch(`${delegationOrigin(url)}/unbiased-proxy/status`, { signal: AbortSignal.timeout(2000) });
+      const r = await fetch(`${delegationProxyOrigin(url)}/unbiased-proxy/status`, { signal: AbortSignal.timeout(2000) });
       if (!r.ok) return { reachable: false as const };
       return { reachable: true as const, ...((await r.json()) as Record<string, unknown>) };
     } catch {
@@ -7834,8 +7836,9 @@ app.whenReady().then(async () => {
     const url = readDelegationProxy();
     if (!url) return { result: "unreachable" as const };
     try {
-      const r = await fetch(`${delegationOrigin(url)}/unbiased-proxy/signin`, { method: "POST", signal: AbortSignal.timeout(2000) });
-      return r.ok ? ((await r.json()) as { result: string; url?: string }) : { result: "unreachable" as const };
+      const r = await fetch(`${delegationProxyOrigin(url)}/unbiased-proxy/signin`, { method: "POST", signal: AbortSignal.timeout(2000) });
+      // A 409 means the proxy holds an API key, not a sign-in: nothing to open.
+      return r.ok ? ((await r.json()) as { result: string; url?: string }) : { result: r.status === 409 ? ("no_signin" as const) : ("unreachable" as const) };
     } catch {
       return { result: "unreachable" as const };
     }

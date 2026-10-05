@@ -1,3 +1,4 @@
+import { delegationSignInOffered, delegationSignInResultText, delegationStatusText, type DelegationStatus } from "./delegation-status";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
@@ -499,18 +500,6 @@ type ScheduledTaskView = {
   /** The conversation a run is happening in, while it is happening. */
   runningThreadId: string | null;
 };
-
-/** What the delegation proxy reports about its credential (unbiased-proxy README: GET /unbiased-proxy/status). */
-type DelegationStatus =
-  | { reachable: false }
-  | {
-      reachable: true;
-      provider: string;
-      cred: "plan" | "key";
-      declared: boolean;
-      withdrawn?: { reason: "limit" | "signin" | "ineligible"; since: string; until: string };
-      signIn?: { pending: boolean; last?: { startedAt: number; url?: string; outcome?: "ok" | "failed"; error?: string } };
-    };
 
 declare global {
   interface Window {
@@ -15478,23 +15467,12 @@ function SettingsView({
     const timer = setInterval(poll, 30_000);
     return () => { live = false; clearInterval(timer); };
   }, [tab, delegationSaved]);
+  const [delegationSignInNote, setDelegationSignInNote] = useState<string | null>(null);
   async function delegationSignIn() {
-    await window.unbiased.delegationSignIn();
+    const r = await window.unbiased.delegationSignIn();
+    setDelegationSignInNote(delegationSignInResultText(r.result) ?? (r.result === "no_signin" ? "This proxy holds an API key; there is no ChatGPT sign-in to redo." : null));
     setDelegationStatus(await window.unbiased.delegationStatus());
   }
-  const delegationStatusText = (() => {
-    const s = delegationStatus;
-    if (!s) return null;
-    if (!s.reachable) return "The proxy is not reachable; Pareto answers on its own.";
-    const on = s.cred === "plan" ? "your ChatGPT plan" : "your OpenAI API key";
-    if (s.declared) return `Frontier escalations run on ${on}.`;
-    switch (s.withdrawn?.reason) {
-      case "limit": return `Your ChatGPT plan's usage limit was reached; Pareto answers on its own until ${new Date(s.withdrawn.until).toLocaleTimeString()}.`;
-      case "signin": return s.signIn?.pending ? "Waiting for the ChatGPT sign-in in your browser…" : "Your ChatGPT sign-in lapsed; Pareto answers on its own until you sign in again.";
-      case "ineligible": return "Your ChatGPT plan is not available to this app (see chatgpt.com/settings/usage); Pareto answers on its own.";
-      default: return "Pareto answers on its own.";
-    }
-  })();
 
   useEffect(() => {
     if (tab === "account" && !account) void window.unbiased.authValidate().then(setAccount);
@@ -15947,10 +15925,10 @@ function SettingsView({
               ) : delegationSaved ? (
                 <span style={{ fontSize: 12, color: colors.dim }}>Engine routed through {delegationSaved}.</span>
               ) : null}
-              {delegationSaved && delegationStatusText ? (
+              {delegationSaved && delegationStatus ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 12, color: delegationStatus?.reachable && delegationStatus.declared ? colors.dim : colors.err }}>{delegationStatusText}</span>
-                  {delegationStatus?.reachable && delegationStatus.withdrawn?.reason === "signin" && !delegationStatus.signIn?.pending ? (
+                  <span style={{ fontSize: 12, color: delegationStatus.reachable && delegationStatus.declared ? colors.dim : colors.err }}>{delegationStatusText(delegationStatus)}</span>
+                  {delegationSignInOffered(delegationStatus) ? (
                     <button
                       onClick={() => void delegationSignIn()}
                       style={{ background: "transparent", border: `1px solid ${colors.border}`, color: "inherit", borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
@@ -15958,7 +15936,8 @@ function SettingsView({
                       Sign in to ChatGPT
                     </button>
                   ) : null}
-                  {delegationStatus?.reachable && delegationStatus.signIn?.last?.outcome === "failed" && delegationStatus.signIn.last.error ? (
+                  {delegationSignInNote ? <span style={{ fontSize: 12, color: colors.dim }}>{delegationSignInNote}</span> : null}
+                  {delegationStatus.reachable && delegationStatus.signIn?.last?.outcome === "failed" && delegationStatus.signIn.last.error ? (
                     <span style={{ fontSize: 12, color: colors.dim }}>Last attempt: {delegationStatus.signIn.last.error}</span>
                   ) : null}
                 </div>
