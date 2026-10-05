@@ -195,6 +195,59 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+function fmtTokensPerSecond(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n < 10) return n.toFixed(1).replace(/\.0$/, "");
+  return String(Math.round(n));
+}
+
+function fmtPercent(n: number): string {
+  if (!Number.isFinite(n)) return "";
+  if (n > 0 && n < 1) return "<1";
+  if (n > 99 && n < 100) return n.toFixed(1);
+  return String(Math.round(n));
+}
+
+type ContextUsage = {
+  used: number;
+  window: number | null;
+  percent: number | null;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  systemInstructionsTokens?: number;
+  toolDefinitionsTokens?: number;
+};
+
+type TurnPerformanceStats = {
+  tokensPerSecond: number | null;
+  cacheHitPercent: number | null;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+};
+
+type ContextBreakdown = {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+};
+
+function estimateContextBreakdown(usage: ContextUsage | null): ContextBreakdown | null {
+  const inputTotal = usage?.inputTokens;
+  if (!inputTotal || usage?.systemInstructionsTokens === undefined || usage.toolDefinitionsTokens === undefined) return null;
+  const systemTokens = Math.min(inputTotal, usage.systemInstructionsTokens);
+  const toolsTokens = Math.min(inputTotal - systemTokens, usage.toolDefinitionsTokens);
+  return {
+    systemTokens,
+    toolsTokens,
+    messageTokens: inputTotal - systemTokens - toolsTokens,
+  };
+}
+
 /** "just now", "40 minutes ago", "3 days ago", else a locale date. */
 function relTime(ms: number): string {
   const s = (Date.now() - ms) / 1000;
@@ -666,11 +719,11 @@ declare global {
       ) => () => void;
       onCompaction: (cb: (p: { paneId: PaneId }) => void) => () => void;
       onTokenUsage: (
-        cb: (p: { paneId: PaneId; used: number; window: number | null; percent: number | null }) => void,
+        cb: (p: { paneId: PaneId } & ContextUsage) => void,
       ) => () => void;
       contextUsage: (
         threadId: string,
-      ) => Promise<{ usage: { used: number; window: number | null; percent: number | null } | null }>;
+      ) => Promise<{ usage: ContextUsage | null }>;
       resourceStats: () => Promise<{ procs: { pid: number; kind: string; memMB: number; cpu: number }[] }>;
       storageStats: () => Promise<{
         threads: Record<
@@ -3937,6 +3990,7 @@ export function App() {
           reset={mainReset}
           threadId={activeThreadId}
           composerDrafts={mainDraftsRef.current}
+          mcpPanelOpen={mcpOpen}
           persistTranscript
           planMode={planMode}
           onTogglePlanMode={togglePlanMode}
@@ -4740,6 +4794,8 @@ export function App() {
             paneId={id}
             connected={connected}
             reset={{ entries: [], nonce: 0 }}
+            mcpThreadId={activeThreadId}
+            mcpPanelOpen={mcpOpen}
             contextChip={sideContexts[id] ?? null}
             onContextClear={() => setSideContexts((m) => ({ ...m, [id]: null }))}
             onPreviewImage={(a) => void openImagePreview(a)}
@@ -8397,6 +8453,8 @@ function ChatPane({
   composerHeader,
   threadId,
   composerDrafts,
+  mcpThreadId,
+  mcpPanelOpen,
   persistTranscript,
   onOpenAgent,
   onOpenScheduled,
@@ -8444,6 +8502,9 @@ function ChatPane({
   // their id from the first send. Drives the transcript cache.
   threadId?: string | null;
   composerDrafts?: ConversationDrafts<Attachment>;
+  // Side panes share the parent conversation's MCP switches and panel.
+  mcpThreadId?: string | null;
+  mcpPanelOpen?: boolean;
   persistTranscript?: boolean;
   // Opens a sub-agent's conversation in the side panel (lifecycle rows).
   onOpenAgent?: (a: { threadId: string; name: string }) => void;
@@ -8674,7 +8735,25 @@ function ChatPane({
   const nextQueueIdRef = useRef(1);
   const [sendHover, setSendHover] = useState(false);
   // Live context occupancy (per turn, from the engine) + the usage popover.
-  const [ctxUsage, setCtxUsage] = useState<{ used: number; window: number | null; percent: number | null } | null>(null);
+  const [ctxUsage, setCtxUsage] = useState<ContextUsage | null>(null);
+  const [turnPerf, setTurnPerf] = useState<TurnPerformanceStats | null>(null);
+  const turnPerfRef = useRef<{
+    firstTokenAt: number | null;
+    completedAt: number | null;
+    tokensPerSecond: number | null;
+    inputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteInputTokens: number;
+    outputTokens: number;
+  }>({
+    firstTokenAt: null,
+    completedAt: null,
+    tokensPerSecond: null,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+  });
   const [compacting, setCompacting] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [billing, setBilling] = useState<BillingResult | null>(null);
@@ -8685,9 +8764,19 @@ function ChatPane({
   useEffect(() => {
     let alive = true;
     setCtxUsage(null);
+    resetTurnPerf();
     if (!threadId) return;
     void window.unbiased.contextUsage(threadId).then((r) => {
-      if (alive && r.usage) setCtxUsage(r.usage);
+      if (!alive || !r.usage) return;
+      setCtxUsage(r.usage);
+      turnPerfRef.current = {
+        ...turnPerfRef.current,
+        inputTokens: r.usage.inputTokens ?? 0,
+        cachedInputTokens: r.usage.cachedInputTokens ?? 0,
+        cacheWriteInputTokens: r.usage.cacheWriteInputTokens ?? 0,
+        outputTokens: r.usage.outputTokens ?? 0,
+      };
+      publishTurnPerf(true);
     });
     return () => {
       alive = false;
@@ -8752,6 +8841,36 @@ function ChatPane({
   function setBusy(b: boolean) {
     setBusyState(b);
     onBusyChange?.(b);
+  }
+
+  function publishTurnPerf(restored = false) {
+    const p = turnPerfRef.current;
+    if (!restored && p.completedAt === null) return;
+    const cacheHitPercent = p.inputTokens > 0
+      ? (p.cachedInputTokens / p.inputTokens) * 100
+      : null;
+    if (p.tokensPerSecond === null && cacheHitPercent === null) return;
+    setTurnPerf({
+      tokensPerSecond: p.tokensPerSecond,
+      cacheHitPercent,
+      inputTokens: p.inputTokens,
+      cachedInputTokens: p.cachedInputTokens,
+      cacheWriteInputTokens: p.cacheWriteInputTokens,
+      outputTokens: p.outputTokens,
+    });
+  }
+
+  function resetTurnPerf(clearDisplay = true) {
+    turnPerfRef.current = {
+      firstTokenAt: null,
+      completedAt: null,
+      tokensPerSecond: null,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: 0,
+    };
+    if (clearDisplay) setTurnPerf(null);
   }
 
   const threadIdRef = useRef<string | null>(threadId ?? null);
@@ -8855,6 +8974,7 @@ function ChatPane({
     // being entered. The [threadId] effect below also clears it, but only when
     // the id actually changes — this covers a reset where it does not.
     setCtxUsage(null);
+    resetTurnPerf();
     setCompacting(false);
     // A card persisted in the transcript looks exactly like a live one, so
     // anything restored has to be checked against what main is actually
@@ -8940,9 +9060,16 @@ function ChatPane({
 
   useEffect(() => {
     const offs = [
+      window.unbiased.onTurnStarted((p) => {
+        if (p.paneId !== paneId) return;
+        resetTurnPerf(false);
+      }),
       window.unbiased.onDelta((p) => {
         if (p.paneId !== paneId) return;
         producedRef.current = true;
+        if (p.delta && turnPerfRef.current.firstTokenAt === null) {
+          turnPerfRef.current = { ...turnPerfRef.current, firstTokenAt: Date.now() };
+        }
         const boundary = messageBoundaryRef.current;
         messageBoundaryRef.current = false;
         setEntries((es) => {
@@ -8965,6 +9092,8 @@ function ChatPane({
         if (p.paneId !== paneId) return;
         const output = settleTurnOutput(p.status, !!p.narrated, producedRef.current, emptyStreakRef.current);
         emptyStreakRef.current = output.emptyStreak;
+        turnPerfRef.current = { ...turnPerfRef.current, completedAt: Date.now() };
+        publishTurnPerf();
         setBusy(false);
         onTurnLanded?.();
         // Read-and-clear OUTSIDE the updater: React can invoke updaters
@@ -9128,7 +9257,33 @@ function ChatPane({
       }),
       window.unbiased.onTokenUsage((p) => {
         if (p.paneId !== paneId) return;
-        setCtxUsage({ used: p.used, window: p.window, percent: p.percent });
+        const firstTokenAt = turnPerfRef.current.firstTokenAt;
+        const responseMs = firstTokenAt === null ? 0 : Math.max(0, Date.now() - firstTokenAt);
+        const tokensPerSecond = responseMs > 0 && (p.outputTokens ?? 0) > 0
+          ? (p.outputTokens ?? 0) / (responseMs / 1000)
+          : turnPerfRef.current.tokensPerSecond;
+        setCtxUsage({
+          used: p.used,
+          window: p.window,
+          percent: p.percent,
+          inputTokens: p.inputTokens,
+          cachedInputTokens: p.cachedInputTokens,
+          cacheWriteInputTokens: p.cacheWriteInputTokens,
+          outputTokens: p.outputTokens,
+          totalTokens: p.totalTokens,
+          systemInstructionsTokens: p.systemInstructionsTokens,
+          toolDefinitionsTokens: p.toolDefinitionsTokens,
+        });
+        turnPerfRef.current = {
+          ...turnPerfRef.current,
+          firstTokenAt: null,
+          tokensPerSecond,
+          inputTokens: p.inputTokens ?? 0,
+          cachedInputTokens: p.cachedInputTokens ?? 0,
+          cacheWriteInputTokens: p.cacheWriteInputTokens ?? 0,
+          outputTokens: p.outputTokens ?? 0,
+        };
+        publishTurnPerf();
       }),
       window.unbiased.onPlan((p) => {
         if (p.paneId !== paneId) return;
@@ -9300,7 +9455,7 @@ function ChatPane({
 
   const lastEntry = entries[entries.length - 1];
   const showThinking = busy && !(lastEntry?.kind === "assistant" && lastEntry.text !== "");
-  const canSend = connected && (draft.trim() !== "" || annotations.length > 0);
+  const canSend = connected && (draft.trim() !== "" || annotations.length > 0 || attachments.length > 0);
   // Compaction is offerable only when there IS uncompacted content: a
   // non-empty conversation whose last entry isn't already a compaction
   // divider, and nothing else in flight.
@@ -9354,7 +9509,7 @@ function ChatPane({
     const text = draft.trim();
     // Annotations alone are a sendable message — the excerpts plus their
     // comments carry the intent even without accompanying prose.
-    if ((!text && annotations.length === 0) || !connected) return;
+    if ((!text && annotations.length === 0 && attachments.length === 0) || !connected) return;
     const anns = annotations;
     const message = (
       anns.length > 0
@@ -9869,6 +10024,21 @@ function ChatPane({
     return null;
   };
 
+  const tokPerSecText = turnPerf?.tokensPerSecond ? fmtTokensPerSecond(turnPerf.tokensPerSecond) : "";
+  const cacheHitText = turnPerf?.cacheHitPercent !== null && turnPerf?.cacheHitPercent !== undefined
+    ? fmtPercent(turnPerf.cacheHitPercent)
+    : "";
+  const contextBreakdown = useMemo(
+    () => estimateContextBreakdown(ctxUsage),
+    [ctxUsage],
+  );
+  const contextBreakdownRows = contextBreakdown
+    ? [
+        { key: "system", label: "System instructions", tokens: contextBreakdown.systemTokens, color: colors.dim },
+        { key: "tools", label: "Tool definitions", tokens: contextBreakdown.toolsTokens, color: "#9b7cff" },
+        { key: "messages", label: "Messages + other", tokens: contextBreakdown.messageTokens, color: colors.accent },
+      ]
+    : [];
   return (
     <div
       ref={paneRef}
@@ -10625,7 +10795,7 @@ function ChatPane({
                   +
                 </button>
               </span>
-              <ConversationMcp threadId={threadId ?? null} onOpenMcp={() => onOpenMcp?.()} />
+              <ConversationMcp threadId={mcpThreadId ?? threadId ?? null} panelOpen={mcpPanelOpen} onOpenMcp={() => onOpenMcp?.()} />
               {planMode && (
                 <button
                   onClick={onTogglePlanMode}
@@ -10696,9 +10866,47 @@ function ChatPane({
                 </button>
               </span>
             </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexShrink: 0 }}>
-            {ctxUsage && ctxUsage.percent !== null && (
-              <span ref={usageRef} style={{ position: "relative", display: "flex" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto", flexShrink: 0 }}>
+              {tokPerSecText && (
+                <span
+                  title="Approximate receive throughput for the latest streamed response: output tokens divided by the time from first visible text to that response's usage event."
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    color: colors.dim,
+                    fontSize: 13.5,
+                    fontVariantNumeric: "tabular-nums",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                    <SpeedIcon size={18} />
+                  </span>
+                  {tokPerSecText} tok/s
+                </span>
+              )}
+              {cacheHitText && (
+                <span
+                  title="Cache hit for the most recently measured turn: cached input tokens divided by input tokens."
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    color: colors.dim,
+                    fontSize: 13.5,
+                    fontVariantNumeric: "tabular-nums",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                    <DatabaseIcon size={16} />
+                  </span>
+                  Cache hit {cacheHitText}%
+                </span>
+              )}
+              {ctxUsage && ctxUsage.percent !== null && (
+                <span ref={usageRef} style={{ position: "relative", display: "flex" }}>
                 <button
                   onClick={async () => {
                     if (usageOpen) {
@@ -10715,8 +10923,12 @@ function ChatPane({
                     background: "transparent",
                     border: "none",
                     padding: 2,
+                    width: 20,
+                    height: 20,
                     cursor: "pointer",
                     display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
                   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -10752,11 +10964,14 @@ function ChatPane({
                       fontSize: 13,
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", color: colors.dim, marginBottom: 6 }}>
-                      <span>Context window</span>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16, color: colors.dim, marginBottom: 8 }}>
                       <span>
-                        {fmtTokens(ctxUsage.used)}
-                        {ctxUsage.window ? ` / ${fmtTokens(ctxUsage.window)} (${ctxUsage.percent}%)` : ""}
+                        <span style={{ color: colors.fg, fontVariantNumeric: "tabular-nums" }}>{ctxUsage.percent}%</span>{" "}
+                        of context used
+                      </span>
+                      <span style={{ color: colors.fg, fontVariantNumeric: "tabular-nums" }}>
+                        ~{fmtTokens(ctxUsage.used)}
+                        {ctxUsage.window ? ` / ${fmtTokens(ctxUsage.window)}` : ""}
                       </span>
                     </div>
                     <div style={{ height: 4, borderRadius: 2, background: "var(--panel-2)", overflow: "hidden" }}>
@@ -10770,6 +10985,52 @@ function ChatPane({
                         }}
                       />
                     </div>
+                    {contextBreakdownRows.length > 0 && (
+                      <div
+                        title="System instructions and tool definitions are estimated from the request; messages and other input make up the remainder."
+                        style={{ display: "grid", gap: 7, color: colors.dim, marginTop: 12 }}
+                      >
+                        {contextBreakdownRows.map((row) => (
+                          <div key={row.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 18 }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                              <span
+                                aria-hidden="true"
+                                style={{ width: 8, height: 8, borderRadius: 2, background: row.color, flexShrink: 0 }}
+                              />
+                              {row.label}
+                            </span>
+                            <span style={{ color: colors.fg, fontVariantNumeric: "tabular-nums" }}>
+                              ~{fmtTokens(row.tokens)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {ctxUsage.inputTokens && !contextBreakdown && (
+                      <div style={{ color: colors.dim, marginTop: 12 }}>
+                        Breakdown unavailable for this response.
+                      </div>
+                    )}
+                    {turnPerf && (
+                      <div style={{ display: "grid", gap: 6, color: colors.dim, margin: "12px 0 0", paddingTop: 10, borderTop: `1px solid ${colors.border}` }}>
+                        {tokPerSecText && (
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span>Receive throughput</span>
+                            <span style={{ color: colors.fg, fontVariantNumeric: "tabular-nums" }}>
+                              {tokPerSecText} tok/s
+                            </span>
+                          </div>
+                        )}
+                        {cacheHitText && (
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span>Cache hit</span>
+                            <span style={{ color: colors.fg, fontVariantNumeric: "tabular-nums" }}>
+                              {cacheHitText}% ({fmtTokens(turnPerf.cachedInputTokens)} / {fmtTokens(turnPerf.inputTokens)})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {ctxUsage.percent > 80 && (
                       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
                         <span style={{ flex: 1, minWidth: 0, color: ctxUsage.percent > 100 ? colors.err : colors.dim }}>
@@ -13526,10 +13787,15 @@ function McpPanel({ onClose, threadId }: { onClose: () => void; threadId: string
     const next = convEnabled.includes(name) ? convEnabled.filter((n) => n !== name) : [...convEnabled, name];
     setConvEnabled(next);
     setConvNote(null);
-    const r = await window.unbiased.mcpThreadSet(threadId, next);
-    if (r.status === "queued") setConvPending(true);
-    else if (r.status === "saved") setConvNote("Saved. It applies when this conversation is next opened.");
-    void refresh();
+    try {
+      const r = await window.unbiased.mcpThreadSet(threadId, next);
+      if (r.status === "queued") setConvPending(true);
+      else if (r.status === "saved") setConvNote("Saved. It applies when this conversation is next opened.");
+    } catch (err) {
+      setConvNote(`Could not save this switch: ${String(err)}`);
+    } finally {
+      refresh();
+    }
   };
   // A server starting or failing while the panel is open should be visible
   // without a manual refresh — this is the only signal that a server died.
@@ -16229,6 +16495,26 @@ function ContrastIcon({ size = 15 }: { size?: number } = {}) {
   );
 }
 
+function SpeedIcon({ size = 15 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+      <path d="m12 14 4-4" />
+      <path d="M12 14h.01" />
+    </svg>
+  );
+}
+
+function DatabaseIcon({ size = 15 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <ellipse cx="12" cy="5" rx="9" ry="3.5" />
+      <path d="M3 5v7c0 2 4 3.5 9 3.5s9-1.5 9-3.5V5" />
+      <path d="M3 12v7c0 2 4 3.5 9 3.5s9-1.5 9-3.5v-7" />
+    </svg>
+  );
+}
+
 function PersonIcon({ size = 15 }: { size?: number } = {}) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -17441,24 +17727,28 @@ function mcpChipLabel(enabled: readonly string[]): string {
  *  the + menu open behind it — and the panel under + was already the place
  *  every other MCP decision was made. So the chip states, and the panel
  *  decides. */
-function ConversationMcp({ threadId, onOpenMcp }: { threadId: string | null; onOpenMcp: () => void }) {
+function ConversationMcp({ threadId, panelOpen, onOpenMcp }: { threadId: string | null; panelOpen?: boolean; onOpenMcp: () => void }) {
   const [enabled, setEnabled] = useState<string[]>([]);
 
-  const refresh = useCallback(() => {
-    void window.unbiased.mcpThreadGet(threadId).then((r) => setEnabled(r.enabled));
-  }, [threadId]);
-  useEffect(refresh, [refresh]);
-  // Every change to the set is broadcast, whether it applied at once, was
-  // queued behind a running turn, or only saved — so the chip never lags the
-  // panel the user just used.
-  useEffect(
-    () =>
-      window.unbiased.onMcpThreadApplied((p) => {
-        if ((p.threadId ?? null) !== threadId) return;
-        setEnabled(p.enabled);
-      }),
-    [threadId],
-  );
+  useEffect(() => {
+    let active = true;
+    let updatedSinceRequest = false;
+    // Subscribe first: an in-flight read must not overwrite a newer switch.
+    const off = window.unbiased.onMcpThreadApplied((p) => {
+      if ((p.threadId ?? null) !== threadId) return;
+      updatedSinceRequest = true;
+      setEnabled(p.enabled);
+    });
+    void window.unbiased.mcpThreadGet(threadId).then((r) => {
+      if (active && !updatedSinceRequest) setEnabled(r.enabled);
+    }).catch(() => {
+      if (active && !updatedSinceRequest) setEnabled([]);
+    });
+    return () => {
+      active = false;
+      off();
+    };
+  }, [threadId, panelOpen]);
 
   const on = enabled.length > 0;
   return (

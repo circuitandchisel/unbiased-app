@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { looksLikeImage, convertedImagePath, sipsArgs, IMAGE_EXTENSIONS, attachmentSizeError, MAX_ATTACHMENT_BYTES } from "./attachments";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { looksLikeImage, convertedImagePath, sipsArgs, fileAttachmentContext, stripFileAttachmentContext, IMAGE_EXTENSIONS, attachmentSizeError, MAX_ATTACHMENT_BYTES } from "./attachments";
 
 test("attachments over 7 MiB are rejected", () => {
   assert.equal(attachmentSizeError("report.pdf", MAX_ATTACHMENT_BYTES), null);
@@ -40,4 +43,62 @@ test("the converted copy is a PNG named after the original, and the same source 
 
 test("the conversion is sips asked for a PNG, with the output path given explicitly", () => {
   assert.deepEqual(sipsArgs("/in/a.webp", "/out/a.png"), ["-s", "format", "png", "/in/a.webp", "--out", "/out/a.png"]);
+});
+
+test("small dropped text files are present in the model's context, including outside the project", () => {
+  const dir = mkdtempSync(join(tmpdir(), "unbiased-attachments-"));
+  try {
+    const file = join(dir, "snowboard-setup.md");
+    writeFileSync(file, "# Snowboard setup\nUse a 15 degree front binding.\n");
+    const context = fileAttachmentContext([{ path: file, kind: "file" }]);
+    assert.ok(context.includes(file));
+    assert.match(context, /complete contents/);
+    assert.match(context, /Use a 15 degree front binding/);
+    assert.equal(stripFileAttachmentContext(`Evaluate this file${context}`), "Evaluate this file");
+    assert.equal(stripFileAttachmentContext("An ordinary message"), "An ordinary message");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("large, binary, and folder attachments give the model a path and an explicit read requirement", () => {
+  const dir = mkdtempSync(join(tmpdir(), "unbiased-attachments-"));
+  try {
+    const large = join(dir, "large.md");
+    const binary = join(dir, "report.pdf");
+    const folder = join(dir, "notes");
+    writeFileSync(large, "x".repeat(65 * 1024));
+    writeFileSync(binary, Buffer.from([0, 1, 2]));
+    mkdirSync(folder);
+    const context = fileAttachmentContext([
+      { path: large, kind: "file" },
+      { path: binary, kind: "file" },
+      { path: folder, kind: "folder" },
+    ]);
+    assert.ok(context.includes(large) && context.includes(binary) && context.includes(folder));
+    assert.equal((context.match(/Read the file before answering/g) ?? []).length, 2);
+    assert.match(context, /Inspect this folder before answering/);
+    assert.ok(!context.includes("x".repeat(100)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("unavailable files are reported and image input is left to the image path", () => {
+  const missing = "/no-such-unbiased-attachment.md";
+  assert.match(fileAttachmentContext([{ path: missing, kind: "file" }]), /could not be opened/);
+  assert.equal(fileAttachmentContext([{ path: "/tmp/image.png", kind: "image" }]), "");
+});
+
+test("many text attachments stay within the total inline budget", () => {
+  const dir = mkdtempSync(join(tmpdir(), "unbiased-attachments-"));
+  try {
+    const paths = ["a.md", "b.md", "c.md"].map((name) => join(dir, name));
+    paths.forEach((path, i) => writeFileSync(path, String(i).repeat(60 * 1024)));
+    const context = fileAttachmentContext(paths.map((path) => ({ path, kind: "file" })));
+    assert.equal((context.match(/complete contents/g) ?? []).length, 2);
+    assert.match(context, /Attached file "c.md".*not included here/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

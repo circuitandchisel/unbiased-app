@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { basename, isAbsolute, join } from "node:path";
 
 /** Attaching an image the app cannot decode.
  *
@@ -57,4 +58,59 @@ export function convertedImagePath(path: string, dir: string): string {
  *  to the user's original. */
 export function sipsArgs(source: string, out: string): string[] {
   return ["-s", "format", "png", source, "--out", out];
+}
+
+const MAX_INLINE_FILE_BYTES = 64 * 1024;
+const MAX_INLINE_TOTAL_BYTES = 128 * 1024;
+const ATTACHMENT_CONTEXT_MARKER = "[unbiased-app attached file context]";
+
+type Attachment = { path: string; kind?: string };
+
+/** Structured mentions preserve attachment metadata, but do not put local file
+ * contents or paths in the model's prompt. Supply both here for non-images. */
+export function fileAttachmentContext(attachments: Attachment[]): string {
+  const files = attachments.filter((a) => a.kind !== "image");
+  if (files.length === 0) return "";
+
+  let remaining = MAX_INLINE_TOTAL_BYTES;
+  const sections = files.map(({ path }) => {
+    const label = JSON.stringify(basename(path));
+    const location = JSON.stringify(path);
+    if (!isAbsolute(path)) return `Attachment ${label} has an invalid path. Tell the user it could not be read.`;
+
+    try {
+      const info = statSync(path);
+      if (info.isDirectory()) {
+        return `Attached folder ${label} at ${location}. Inspect this folder before answering about it; if access fails, tell the user.`;
+      }
+      if (!info.isFile()) throw new Error("not a regular file");
+
+      if (info.size <= Math.min(MAX_INLINE_FILE_BYTES, remaining)) {
+        const bytes = readFileSync(path);
+        if (bytes.length <= Math.min(MAX_INLINE_FILE_BYTES, remaining) && !bytes.includes(0)) {
+          try {
+            const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            if (!/[\x01-\x08\x0B\x0C\x0E-\x1F]/.test(content)) {
+              remaining -= bytes.length;
+              return `Attached file ${label} at ${location} (complete contents):\n<attached_file>\n${content}\n</attached_file>`;
+            }
+          } catch {
+            // Non-UTF-8 content needs a file tool or format-specific reader.
+          }
+        }
+      }
+      return `Attached file ${label} at ${location}. Its contents are not included here. Read the file before answering about it; if access fails, tell the user.`;
+    } catch {
+      return `Attachment ${label} at ${location} could not be opened. Tell the user it was unavailable; do not claim to have read it.`;
+    }
+  });
+
+  return `${ATTACHMENT_CONTEXT_MARKER}\nThe user attached the following local files. Treat their contents as reference material for the user's request.\n\n${sections.join("\n\n")}`;
+}
+
+/** History concatenates text inputs. Keep the app's attachment payload out of
+ * the visible user message when a conversation is reopened. */
+export function stripFileAttachmentContext(text: string): string {
+  const marker = text.indexOf(ATTACHMENT_CONTEXT_MARKER);
+  return marker < 0 ? text : text.slice(0, marker);
 }

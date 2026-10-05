@@ -167,9 +167,12 @@ conversation.
 ## An attached image the app cannot decode is converted, not degraded
 
 Attachments reach the engine two ways: an image goes as a `localImage` item
-(the model sees pixels), anything else goes as a `mention` (the engine reads
-the path as text). Which one it is was decided by asking Electron's
-`nativeImage` to decode the file — and Electron cannot decode WebP, nor HEIC
+(the model sees pixels), anything else goes as a `mention` for thread history.
+The model does not see local file mentions on their own, so the app also sends
+the complete contents of small UTF-8 files or an explicit absolute path with
+instructions to inspect larger files, folders, and other formats. Folders are
+identified from the filesystem; image files are checked with Electron's
+`nativeImage` decoder — and Electron cannot decode WebP, nor HEIC
 or AVIF on every build.
 
 Measured 2026-09-09: a WebP logo was attached with "draw this icon as is".
