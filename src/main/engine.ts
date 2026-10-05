@@ -8,6 +8,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { EventEmitter } from "node:events";
+import { ModelRouting } from "./model-routing";
 
 type Pending = {
   resolve: (result: unknown) => void;
@@ -23,6 +24,10 @@ export class EngineClient extends EventEmitter {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private nextId = 1;
   private pending = new Map<number, Pending>();
+  private routing = new ModelRouting(
+    (method, params) => this.sendRequest(method, params),
+    (message) => this.emit("notification", message),
+  );
 
   /** Engine process id, for resource accounting. Null before start/after exit. */
   get pid(): number | null {
@@ -30,6 +35,7 @@ export class EngineClient extends EventEmitter {
   }
 
   start(enginePath: string, extraEnv?: Record<string, string>): void {
+    this.routing.reset();
     this.emitStatus({ state: "starting" });
     // Held in a local as well as on `this`, because every handler below has to
     // know WHICH process it is speaking for. A restart (stop() then start())
@@ -74,6 +80,7 @@ export class EngineClient extends EventEmitter {
       // Superseded by a newer child: its exit is ours to expect, not to
       // report, and `this.pending` no longer belongs to it.
       if (this.proc !== proc) return;
+      this.routing.reset();
       // Name the signal. "code null" alone is what a kill looks like, and it
       // reads as a mystery crash to anyone who did not send the signal.
       const detail = signal
@@ -87,6 +94,7 @@ export class EngineClient extends EventEmitter {
   }
 
   stop(): void {
+    this.routing.reset();
     this.proc?.kill();
     this.proc = null;
   }
@@ -105,6 +113,10 @@ export class EngineClient extends EventEmitter {
   }
 
   request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    return this.routing.request(method, params);
+  }
+
+  private sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     const proc = this.proc;
     if (!proc) return Promise.reject(new Error("engine not running"));
     const id = this.nextId++;
@@ -128,11 +140,12 @@ export class EngineClient extends EventEmitter {
     if (method !== undefined && id !== undefined) {
       // Server-initiated request: the engine is asking US something
       // (command approval, file-change approval, user input).
+      this.routing.serverRequest(msg.params);
       this.emit("server-request", msg);
       return;
     }
     if (method !== undefined) {
-      this.emit("notification", msg);
+      this.routing.notification(msg);
       return;
     }
     if (typeof id === "number" && this.pending.has(id)) {

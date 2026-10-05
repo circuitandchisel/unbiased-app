@@ -60,6 +60,32 @@ the embedded browser, the API key, and the child engine process.
 it spawns the engine, matches replies to requests, and forwards the
 engine's notifications onward.
 
+`src/main/model-routing.ts` explicitly selects `pareto-26.10-preview` for
+thread creation, resume, fork, and every new turn. A saved conversation can
+retain an older model even after the supervisor's default changes, so new
+turns must carry the explicit model too.
+
+If a preview turn terminates with a service/transport failure before any
+model output, reasoning, tool activity, or approval request, the app makes
+one continuation on the `pareto` alias. The engine has already saved the
+user message; the continuation sends empty input rather than adding that
+message or its attachments twice. Approval, sandbox, and effort settings
+are preserved. A later user turn tries the preview again.
+
+Fallback is limited to structured connection/stream failures with HTTP
+404, 408, 500, 502, 503, or 504, a connection failure without an HTTP status,
+or `serverOverloaded`. It does not bypass authentication, quota/rate limits,
+context limits, cancellation, compaction/busy errors, or tool failures. The
+alias is resolved by the gateway and is not guaranteed to be a different
+backend. This is error recovery, not a timer that retries a slow request.
+
+The routing tests include a mock JSON-RPC engine. To also exercise the real
+bundled engine against a local mock HTTP API (no production inference), run:
+
+```sh
+UNBIASED_TEST_APP_SERVER=/absolute/path/to/pareto-app-server node --import tsx --test src/main/model-routing.integration.test.ts
+```
+
 `src/preload/index.ts` is the seam: a small, typed `window.unbiased` object
 that is the renderer's complete view of the world.
 
@@ -72,7 +98,8 @@ engine **Pareto-only by construction**. On every launch it:
 
 - resolves your API key — `UNBIASED_API_KEY`, else `~/.unbiased/credentials.json`
 - rewrites `~/.unbiased/app-engine/home/config.toml` from a template, pinning
-  `model = "pareto"` and the gateway URL
+  its default Pareto model and the gateway URL; the app explicitly selects
+  the conversation model as described above
 - launches the real engine with `CODEX_HOME` pointed at that directory
 
 Because the config is regenerated every start and the engine never reads
