@@ -121,7 +121,7 @@ import {
   CHECKPOINT_TOOLS, checkpointPath, validateCheckpointNotes, renderCheckpoint, pushFact, checkpointDue,
   checkpointGateText, checkpointPreamble, isGatedTool, pathsInCommand, remeasureNudge, type LedgerEntry,
 } from "./checkpoint";
-import { looksLikeImage, convertedImagePath, sipsArgs, attachmentSizeError } from "./attachments";
+import { looksLikeImage, convertedImagePath, sipsArgs, fileAttachmentContext, stripFileAttachmentContext, attachmentSizeError } from "./attachments";
 import { clipboardImageBuffer } from "./clipboard-image";
 import { IMAGE_OUTLINE_TOOL, outlineOf, renderOutline, outlineReminder, type PendingOutline } from "./image-outline";
 import { isProductionBuild } from "./runtime-mode";
@@ -3559,6 +3559,11 @@ const runningTurns = new Map<string, string>(); // threadId → turnId
 /** threadId → the last token-usage numbers seen, so a retry that re-emits them
  *  unchanged can be told from a new request. */
 const lastUsageSig = new Map<string, string>();
+const pendingPromptComponents = new Map<string, {
+  turnId: string;
+  systemInstructionsTokens: number;
+  toolDefinitionsTokens: number;
+}>();
 // The in-flight assistant message per thread. Deltas reach the renderer only
 // while a pane owns the thread, so this is the sole record of text streamed
 // while a conversation was backgrounded. Cleared when the message completes.
@@ -4067,9 +4072,22 @@ function turnSandbox(cwd: string | null): Record<string, unknown> {
 function ctxUsageFile(): string {
   return join(app.getPath("userData"), "context-usage.json");
 }
-let ctxUsageCache: Record<string, { used: number; window: number | null; percent: number | null }> | null = null;
 let configuredContextWindowCache: { mtimeMs: number; window: number | null } | null = null;
-function loadCtxUsage(): Record<string, { used: number; window: number | null; percent: number | null }> {
+type ContextUsageSnapshot = {
+  used: number;
+  window: number | null;
+  percent: number | null;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  systemInstructionsTokens?: number;
+  toolDefinitionsTokens?: number;
+  promptComponentsTurnId?: string;
+};
+let ctxUsageCache: Record<string, ContextUsageSnapshot> | null = null;
+function loadCtxUsage(): Record<string, ContextUsageSnapshot> {
   if (!ctxUsageCache) {
     try {
       ctxUsageCache = JSON.parse(readFileSync(ctxUsageFile(), "utf8"));
@@ -4100,7 +4118,7 @@ function configuredUsableContextWindow(): number | null {
     return null;
   }
 }
-function currentCtxUsage(threadId: string): { used: number; window: number | null; percent: number | null } | null {
+function currentCtxUsage(threadId: string): ContextUsageSnapshot | null {
   const map = loadCtxUsage();
   const usage = map[threadId] ?? null;
   if (!usage) return null;
@@ -4613,7 +4631,21 @@ function threadToEntries(
           // A user message (initial, or a mid-turn steer) never hides inside
           // a fold — flush what came before it, folded, then show it.
           flush(false);
-          entries.push({ kind: "user", text: item.text ?? contentToText(item.content), ...(startedAt !== null ? { at: startedAt } : {}) });
+          entries.push({
+            kind: "user",
+            text: stripFileAttachmentContext(item.text ?? contentToText(item.content)),
+            attachments: Array.isArray(item.content)
+              ? item.content.flatMap((part: unknown) => {
+                  if (!part || typeof part !== "object") return [];
+                  const a = part as { type?: string; name?: string; path?: string };
+                  if (!a.path || !isAbsolute(a.path)) return [];
+                  if (a.type === "mention") return [{ name: a.name ?? a.path.split("/").pop() ?? a.path, path: a.path, kind: "file" }];
+                  if (a.type === "localImage") return [{ name: a.path.split("/").pop() ?? a.path, path: a.path, kind: "image" }];
+                  return [];
+                })
+              : [],
+            ...(startedAt !== null ? { at: startedAt } : {}),
+          });
           // The running turn's fold starts after its user message, matching
           // where the live path plants its start index on send.
           if (!foldThisTurn) runningTurnStart = entries.length;
@@ -4629,7 +4661,7 @@ function threadToEntries(
           const text = m.text ?? contentToText(m.content);
           if (!text) break;
           if (m.role === "user") {
-            entries.push({ kind: "user", text, ...(startedAt !== null ? { at: startedAt } : {}) });
+            entries.push({ kind: "user", text: stripFileAttachmentContext(text), ...(startedAt !== null ? { at: startedAt } : {}) });
             if (!foldThisTurn) runningTurnStart = entries.length;
           } else {
             bucket.push({ kind: "assistant", text, phase: m.phase ?? null, ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
@@ -6387,20 +6419,58 @@ function wireNotifications(): void {
         }
         break;
       }
+      case "rawResponse/completed": {
+        const components = params.promptComponents as {
+          systemInstructionsTokens?: unknown;
+          toolDefinitionsTokens?: unknown;
+        } | null | undefined;
+        const system = components?.systemInstructionsTokens;
+        const tools = components?.toolDefinitionsTokens;
+        if (threadId && typeof params.turnId === "string" &&
+            typeof system === "number" && Number.isSafeInteger(system) && system >= 0 &&
+            typeof tools === "number" && Number.isSafeInteger(tools) && tools >= 0) {
+          pendingPromptComponents.set(threadId, {
+            turnId: params.turnId,
+            systemInstructionsTokens: system,
+            toolDefinitionsTokens: tools,
+          });
+        }
+        break;
+      }
       case "thread/tokenUsage/updated": {
         const tu = params.tokenUsage as
           | {
-              last?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+              last?: {
+                inputTokens?: number;
+                cachedInputTokens?: number;
+                cacheWriteInputTokens?: number;
+                outputTokens?: number;
+                totalTokens?: number;
+              };
               modelContextWindow?: number | null;
             }
           | undefined;
         const last = tu?.last;
+        const inputTokens = last?.inputTokens ?? 0;
+        const cachedInputTokens = last?.cachedInputTokens ?? 0;
+        const cacheWriteInputTokens = last?.cacheWriteInputTokens ?? 0;
+        const outputTokens = last?.outputTokens ?? 0;
         // Context occupancy ≈ the latest request's full prompt + completion.
         // cachedInputTokens is a SUBSET of inputTokens (the cache-hit
         // breakdown), NOT an addition — summing it double-counted cached
         // history and showed an impossible >100% context.
-        const used = last?.totalTokens ?? (last?.inputTokens ?? 0) + (last?.outputTokens ?? 0);
+        const used = last?.totalTokens ?? inputTokens + outputTokens;
         const window = tu?.modelContextWindow ?? null;
+        const usageKey = String(params.threadId);
+        const usageTurnId = typeof params.turnId === "string" ? params.turnId : null;
+        const pending = pendingPromptComponents.get(usageKey);
+        if (pending && pending.turnId === usageTurnId) pendingPromptComponents.delete(usageKey);
+        const previous = loadCtxUsage()[usageKey];
+        const components = usageTurnId && pending?.turnId === usageTurnId
+          ? pending
+          : usageTurnId && previous?.promptComponentsTurnId === usageTurnId
+            ? previous
+            : null;
         const usage = {
           used,
           window,
@@ -6408,12 +6478,21 @@ function wireNotifications(): void {
           // what the user needs to see. Clamping to 100 showed a calm "100%"
           // at 154% while every request was already failing.
           percent: window ? Math.round((used / window) * 100) : null,
+          inputTokens,
+          cachedInputTokens,
+          cacheWriteInputTokens,
+          outputTokens,
+          totalTokens: used,
+          ...(components && usageTurnId ? {
+            systemInstructionsTokens: components.systemInstructionsTokens,
+            toolDefinitionsTokens: components.toolDefinitionsTokens,
+            promptComponentsTurnId: usageTurnId,
+          } : {}),
         };
         // A retry that never completes leaves tokenUsage.last exactly where it
         // was, so the same numbers arrive again. Marked, not dropped: the
         // repeats are the only evidence here that something retried at all.
-        const usageKey = String(params.threadId);
-        const usageSig = `${last?.inputTokens ?? 0}/${last?.outputTokens ?? 0}/${used}`;
+        const usageSig = `${inputTokens}/${cachedInputTokens}/${cacheWriteInputTokens}/${outputTokens}/${used}`;
         const repeated = lastUsageSig.get(usageKey) === usageSig;
         lastUsageSig.set(usageKey, usageSig);
         metrics.record({
@@ -6424,9 +6503,9 @@ function wireNotifications(): void {
           // `last` is the latest REQUEST's prompt and completion, so input is
           // the whole context re-sent on that turn. Summed over a run that is
           // the real bill; it is not the conversation's size.
-          input: last?.inputTokens ?? 0,
-          cached: (last as { cachedInputTokens?: number } | undefined)?.cachedInputTokens ?? 0,
-          output: last?.outputTokens ?? 0,
+          input: inputTokens,
+          cached: cachedInputTokens,
+          output: outputTokens,
           total: used,
         } satisfies TurnRecord);
         // Persist per thread so the gauge survives restarts and resumes.
@@ -7977,12 +8056,12 @@ app.whenReady().then(async () => {
       threadAccessModes.set(started.thread.id, accessMode);
       created = true;
     }
-    // Attachments ride as `mention` input items — the engine resolves the
-    // path and pulls the content into context itself (same mechanism as
-    // codex's @-mentions), so files AND folders both work. Images go as
-    // `localImage` items instead, which the engine feeds to the model as
-    // actual image input rather than file text.
+    // Mentions preserve attachment metadata in thread history, but local
+    // paths in mentions do not reach the model. Supply readable files (or an
+    // explicit path to inspect) as text; images remain actual image input.
     const input: Record<string, unknown>[] = [{ type: "text", text }];
+    const attachmentContext = fileAttachmentContext(attachments ?? []);
+    if (attachmentContext) input.push({ type: "text", text: attachmentContext });
     for (const a of attachments ?? []) {
       if (a.kind === "image") {
         input.push({ type: "localImage", path: a.path });
