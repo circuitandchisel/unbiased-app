@@ -1,97 +1,104 @@
 # Delegation: client-executed model calls for Pareto
 
-**Protocol version 1 — draft, 2026-10-02.** Implemented behind flags in gpu-router, unbiased-api and the `unbiased-proxy` repo; nothing deployed.
+**Protocol version 2 — draft, 2026-10-05.** Implemented behind flags in gpu-router, unbiased-api and the `unbiased-proxy` repo; nothing deployed. v1 (2026-10-02) sent the client a patch and let it finish the answer itself; v2 moves every decision to the server.
 
 ## Why
 
-Pareto is a cascade: open-weight models on our GPUs answer most requests and a frontier model (today GPT-6 Astra) answers the hard ones, on our provider account. BYOK customers want their prompts to stay in their own account. OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call, but its Terms require the request to originate from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call ([SIGN-IN-WITH-CHATGPT.md](SIGN-IN-WITH-CHATGPT.md) has the clause-by-clause read). The server keeps deciding *when* to escalate; the client executes it.
+Pareto answers most requests on our GPUs and the hard ones on a frontier model, on our provider account. BYOK customers want their prompts in their own account, and OpenAI's Sign in with ChatGPT lets a Plus or Pro plan pay for the frontier call — but its Terms require the request to come from the user's local runtime and forbid storing the token remotely, so the gateway can neither hold the credential nor make the call ([SIGN-IN-WITH-CHATGPT.md](SIGN-IN-WITH-CHATGPT.md) has the clause-by-clause read). The server keeps deciding *when* to escalate and *what* to send; the client only executes.
 
 ## Use case
 
-A user runs the Unbiased proxy, or a harness that speaks this protocol, and it declares which providers it can call and with what credential. When Pareto decides a request needs a frontier model the client declared, it hands the step back instead of dialing the seat; the client re-issues its own request to that provider on the user's credential, with a small patch from the server, and streams the answer as Pareto's. Pareto never sees the credential or makes the call. A later version lets the client post the answer back for Pareto to judge or synthesise.
+The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Pareto never sees the credential or makes the call; the client never learns why Pareto escalated or what it does with the result.
 
-## Why this way
+## Design rules
 
-- **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in; the channel can later carry a continuation. The one invariant is the cascade's own: before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
-- **The standard terminal event**, `response.failed` with `error.code = "delegation_required"`: a client that declared the capability and did not act sees an accurate, actionable failure. Billing the handed-off request is a separate decision; the event carries `usage` either way.
-- **A patch, not a prompt.** The client holds the request; the server sends only what it would have added or changed. Small for every relay hop; no prompt text on the hand-off path.
-- **Capability in a request header**, HTTP's extension point for client capabilities (`OpenAI-Beta`, `anthropic-beta`); RFC 6648 retires `X-`, RFC 8941 gives the grammar. The server delegates only to a client that declared it, and echoes what it accepted. Per provider the client declares credential kind and servable models, so the server picks a seat the client can dial and can offer fallbacks. Plan tier is absent on purpose: tokens do not expose it.
-- **The name.** MCP calls this pattern *sampling*; that word means parameters here, so *delegation*.
+- **The client is dumb.** It declares a credential, sends a request it was given, reports what came back. Which models a plan serves, what to send, how to fail over, how to judge or bill the result: all server-side, so Pareto's internals change without a client release.
+- **Every wire field is necessary.** v1 carried `kind`, `reason`, `window`, `model`, `fallbacks`, `cred`, `api`, a patch vocabulary, a model list in the header and an echo header; none changed what a correct client did. v2 has four fields on the hand-off and two on the post-back, each with a stated decision.
+- **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in; always before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
+- **The post-back is a normal request.** Pareto sees the delegated output at once, bills it with the plumbing it already has (the rule is a separate decision), and may judge or synthesise before answering. The cost is streaming: the frontier answer is collected before it is posted back, so a delegated one-shot's time-to-first-token is the frontier's full generation time.
+- **Failure is Pareto's to handle.** The client reports a timeout, a limit or a refusal; Pareto escalates on its own seats and the user gets a Pareto answer on their Pareto plan. A client whose credential is exhausted stops declaring it for a while (the plan route names no reset time), so no request fails because a plan ran out.
 
-**Out of scope for v1:** billing of pre-hand-off work; ZDR-organization policy; hand-off after partial output; the continuation post-back (handle reserved); providers other than OpenAI (the grammar admits them; only the Responses patch is defined).
+**Out of scope for v2:** the billing rule for a delegated request; ZDR-organization policy; hand-off after partial output; streaming the post-back; providers other than OpenAI (the grammar admits them; only the Responses wire is defined).
 
 ## Protocol
 
 ### 1. Capability declaration
 
-`Delegation` is an RFC 8941 Dictionary: keys are providers, parameters describe the credential; unknown keys and parameters are ignored. The server echoes the accepted entries on every response; no echo means it does not speak the protocol.
+`Delegation` is an RFC 8941 Dictionary: keys are providers, parameters describe the credential. Unknown keys and parameters are ignored; a malformed header declares nothing.
 
 ```http
-Delegation: openai;v=1;cred=plan;models="gpt-6-astra gpt-6.1-sol";api=responses
-Delegation: openai;v=1;cred=key;models="gpt-6-astra";api=responses, anthropic;v=1;cred=key;models="claude-opus-5";api=messages
+Delegation: openai;v=2;cred=plan
+Delegation: openai;v=2;cred=key, anthropic;v=2;cred=key
 ```
 
-| Parameter | Meaning |
+| Field | Decides |
 |---|---|
-| `v` | schema version of this entry; v1 is this document |
-| `cred` | `plan` (a Sign in with ChatGPT token: the plan route's restrictions apply) or `key` (a provider API key) |
-| `models` | space-separated model ids this credential can serve, from the provider's catalog |
-| `api` | the wire the client can speak to this provider: `responses` (v1), `messages` (reserved) |
+| key | which provider the client can dial |
+| `v` | the schema of the entry; v2 is this document |
+| `cred` | `plan` (a Sign in with ChatGPT token: the plan's catalog and route restrictions apply) or `key` (a provider API key) |
 
-The gateway mints the accepted entries into the signed caller token it already attaches to every Pareto call:
-
-```json
-{ "org": "…", "workload": "…", "rid": "…", "byok": false,
-  "delegation": [ { "provider": "openai", "v": 1, "cred": "plan", "models": ["gpt-6-astra", "gpt-6.1-sol"], "api": "responses" } ] }
-```
+The gateway mints the accepted entries into the signed caller token every Pareto call carries: `"delegation": [{"provider": "openai", "v": 2, "cred": "plan"}]`.
 
 ### 2. The hand-off event
 
-At an escalation decision the cascade takes the first seat of its escalation chain the client declared, or escalates server-side as today if none matches. Instead of dialing the seat it ends the response:
+At an escalation decision the cascade takes the first seat of its chain the credential can serve (or escalates server-side as today) and, instead of dialing it, ends the response:
 
 ```
 event: response.failed
 data: {"type":"response.failed","response":{"id":"resp_…","status":"failed","usage":null,
   "error":{"code":"delegation_required","type":"delegation_required",
     "message":"This request opted into delegated escalation (Delegation header), which the Unbiased proxy performs. Use the proxy, or drop the header.",
-    "delegation":{"v":1,"kind":"escalation",
-      "provider":"openai","api":"responses","model":"gpt-6-astra","fallbacks":["gpt-6.1-sol"],
-      "patch":{"instructions_prepend":"<identity prompt>",
-               "input_append":[{"role":"user","content":"[Self-check] …judge advice…"}],
-               "reasoning":{"effort":"medium"},"prompt_cache_key":"pc_…",
-               "drop":["max_output_tokens","service_tier","temperature","…"]},
-      "continuation":null}}}}
+    "delegation":{
+      "provider":"openai",
+      "request":{"model":"gpt-6-astra","store":false,"stream":true,
+                 "instructions":"<identity prompt + the caller's system prompt>",
+                 "input":[…the conversation as the cascade would send it…],
+                 "tools":[…],"reasoning":{"effort":"medium"},"prompt_cache_key":"pc_…"},
+      "timeout_ms":180000,
+      "continuation":"<opaque>"}}}}
 ```
 
-`kind` is the only classification on the wire; why Pareto escalated and any takeover-window state are Pareto internals and stay on its cost row. `drop` lists what the chosen credential's route rejects; empty for `cred=key`. `continuation` is reserved for v2. With `stream: false` the same `error` object is the body of an HTTP 422.
+| Field | Decides |
+|---|---|
+| `provider` | which credential and endpoint to use |
+| `request` | the complete provider request, sent as given, never edited |
+| `timeout_ms` | when to give up and report a timeout |
+| `continuation` | opaque; echoed on the post-back so Pareto resumes |
 
-### 3. Applying the patch (client)
+With `stream: false` the same `error` object is the body of an HTTP 422.
 
-```text
-req ← the client's own Responses request
-for f in delegation.patch.drop: delete req[f]
-req.model ← delegation.model
-req.store ← false; req.stream ← true          # always stream the provider; assemble JSON for a non-streaming caller
-if patch.instructions_prepend: req.instructions ← prepend + "\n\n" + req.instructions
-if patch.input_append: req.input ← asArray(req.input) ++ patch.input_append
-if patch.reasoning:  req.reasoning ← merge(req.reasoning, patch.reasoning)
-if patch.text:       req.text ← patch.text
-if patch.prompt_cache_key: req.prompt_cache_key ← patch.prompt_cache_key
-POST {provider base}/responses with the user's credential; on a provider 4xx try the next of `fallbacks`
+### 3. The post-back
+
+The client re-sends its original request with one added field; Pareto answers it as a normal response:
+
+```json
+{ "model": "pareto", "input": [...], "stream": true,
+  "delegation": { "continuation": "<opaque>", "response": { "...": "the provider's completed Responses object" } } }
 ```
 
-### 4. Proxy flow
+| Field | Decides |
+|---|---|
+| `continuation` | which hand-off this outcome answers |
+| `response` | the provider's completed Responses object: Pareto's answer is made from it |
+| `error` | in place of `response`: `{"status": 429, "code": "subscription_sharing_usage_limit_exceeded"}` as the provider said it, or `{"code": "timeout"}`; Pareto escalates on its own seats |
+
+A hand-off in reply to a post-back is a protocol error; the client refuses it rather than loop.
+
+### 4. Client flow
 
 ```text
-on client request R to /v1/responses:
-  send R' = R + {stream:true} to Pareto with the Delegation header
-  hold Pareto's pre-content events (response.created, in_progress); forward SSE comments (heartbeats)
-  if first content/tool item arrives: flush held events, relay Pareto's stream to the end
-  if response.failed with error.code == "delegation_required": discard held events,
-      apply the patch (§3), stream the provider's response to the client in its place
-  if R had stream:false: collect the chosen stream's response.completed and answer JSON
+on request R to /v1/responses:
+  send R + {stream:true} to Pareto, with the Delegation header while the credential is declared
+  hold pre-content events (response.created, in_progress); forward SSE comments (heartbeats)
+  first content/tool item → flush what was held, relay Pareto's stream to the end
+  response.failed with error.code == "delegation_required" →
+      POST delegation.request to the provider with the user's credential, bounded by timeout_ms
+      collect the completed Responses object (the plan route's completed event has an empty output: rebuild it from output_item.done)
+      send R + {stream:true, delegation:{continuation, response | error}} to Pareto; relay its stream in place of the first
+  if R had stream:false: assemble the relayed stream's response.completed and answer JSON
+  provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); 401/403 → until the user signs in again
 ```
 
 ### 5. Transport note
 
-Inside our stack the event is the cascade's in-band error chunk, translated to `response.failed` by gpu-router (whose pre-stream failure gate passes this code through) and relayed byte-for-byte by the gateway. The cascade reads the signed claim, never the header.
+Inside our stack the hand-off is the cascade's in-band error chunk, translated to `response.failed` by gpu-router (whose pre-stream failure gate passes this code through and whose error-envelope parser admits it past the size cap) and relayed byte-for-byte by the gateway. The post-back's `delegation` field crosses the router's request translation untouched. The cascade reads the signed claim, never the header, and refuses a continuation it did not mint.
