@@ -8740,6 +8740,7 @@ function ChatPane({
   const turnPerfRef = useRef<{
     firstTokenAt: number | null;
     completedAt: number | null;
+    tokensPerSecond: number | null;
     inputTokens: number;
     cachedInputTokens: number;
     cacheWriteInputTokens: number;
@@ -8747,6 +8748,7 @@ function ChatPane({
   }>({
     firstTokenAt: null,
     completedAt: null,
+    tokensPerSecond: null,
     inputTokens: 0,
     cachedInputTokens: 0,
     cacheWriteInputTokens: 0,
@@ -8844,18 +8846,12 @@ function ChatPane({
   function publishTurnPerf(restored = false) {
     const p = turnPerfRef.current;
     if (!restored && p.completedAt === null) return;
-    const decodeMs = p.firstTokenAt !== null && p.completedAt !== null
-      ? Math.max(0, p.completedAt - p.firstTokenAt)
-      : 0;
-    const tokensPerSecond = decodeMs > 0 && p.outputTokens > 0
-      ? p.outputTokens / (decodeMs / 1000)
-      : null;
     const cacheHitPercent = p.inputTokens > 0
       ? (p.cachedInputTokens / p.inputTokens) * 100
       : null;
-    if (tokensPerSecond === null && cacheHitPercent === null) return;
+    if (p.tokensPerSecond === null && cacheHitPercent === null) return;
     setTurnPerf({
-      tokensPerSecond,
+      tokensPerSecond: p.tokensPerSecond,
       cacheHitPercent,
       inputTokens: p.inputTokens,
       cachedInputTokens: p.cachedInputTokens,
@@ -8868,6 +8864,7 @@ function ChatPane({
     turnPerfRef.current = {
       firstTokenAt: null,
       completedAt: null,
+      tokensPerSecond: null,
       inputTokens: 0,
       cachedInputTokens: 0,
       cacheWriteInputTokens: 0,
@@ -9260,6 +9257,11 @@ function ChatPane({
       }),
       window.unbiased.onTokenUsage((p) => {
         if (p.paneId !== paneId) return;
+        const firstTokenAt = turnPerfRef.current.firstTokenAt;
+        const responseMs = firstTokenAt === null ? 0 : Math.max(0, Date.now() - firstTokenAt);
+        const tokensPerSecond = responseMs > 0 && (p.outputTokens ?? 0) > 0
+          ? (p.outputTokens ?? 0) / (responseMs / 1000)
+          : turnPerfRef.current.tokensPerSecond;
         setCtxUsage({
           used: p.used,
           window: p.window,
@@ -9274,6 +9276,8 @@ function ChatPane({
         });
         turnPerfRef.current = {
           ...turnPerfRef.current,
+          firstTokenAt: null,
+          tokensPerSecond,
           inputTokens: p.inputTokens ?? 0,
           cachedInputTokens: p.cachedInputTokens ?? 0,
           cacheWriteInputTokens: p.cacheWriteInputTokens ?? 0,
@@ -10865,7 +10869,7 @@ function ChatPane({
             <span style={{ display: "flex", alignItems: "center", gap: 12, marginLeft: "auto", flexShrink: 0 }}>
               {tokPerSecText && (
                 <span
-                  title="Receive throughput for the most recently measured turn: output tokens divided by the time from first streamed text to turn completion."
+                  title="Approximate receive throughput for the latest streamed response: output tokens divided by the time from first visible text to that response's usage event."
                   style={{
                     display: "flex",
                     alignItems: "center",
