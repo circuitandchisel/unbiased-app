@@ -6,6 +6,12 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.12 — October 6, 2026
+
+### Fixed
+
+- **Running commands show their details right away.** The output panel opens even before a command prints anything, then closes when the command finishes. A panel you reopen yourself stays open.
+
 ## 1.13.11 — October 6, 2026
 
 ### Improved
