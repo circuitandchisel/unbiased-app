@@ -6194,6 +6194,12 @@ function wireNotifications(): void {
         if (threadId && subAgents.has(threadId)) send("chat:subagent-delta", { threadId, delta });
         break;
       }
+      case "item/commandExecution/outputDelta": {
+        const itemId = params.itemId as string | undefined;
+        const delta = params.delta as string | undefined;
+        if (paneId && itemId && delta) send("chat:command-output", { paneId, itemId, delta });
+        break;
+      }
       case "item/started":
       case "item/completed": {
         // Phase tracking, to catch a turn that narrates and then stops.

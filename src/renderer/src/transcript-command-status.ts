@@ -1,5 +1,14 @@
 type CommandPhase = "started" | "completed";
 
+export function appendCommandOutputDelta<T extends { itemId: string; status: string; output?: string }>(
+  entry: T,
+  itemId: string,
+  delta: string,
+): T {
+  if (entry.itemId !== itemId || entry.status !== "inProgress" || !delta) return entry;
+  return { ...entry, output: (entry.output ?? "") + delta };
+}
+
 export function commandStatusAfterEvent(
   current: string | undefined,
   reported: string | undefined,

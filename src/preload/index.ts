@@ -138,6 +138,7 @@ contextBridge.exposeInMainWorld("unbiased", {
   onApprovalRequest: (cb: (p: unknown) => void) => subscribe("chat:approval-request", cb),
   onApprovalCanceled: (cb: (p: unknown) => void) => subscribe("chat:approval-canceled", cb),
   onCommand: (cb: (p: unknown) => void) => subscribe("chat:command", cb),
+  onCommandOutput: (cb: (p: unknown) => void) => subscribe("chat:command-output", cb),
   onCompaction: (cb: (p: unknown) => void) => subscribe("chat:compaction", cb),
   onTokenUsage: (cb: (p: unknown) => void) => subscribe("chat:token-usage", cb),
   readBilling: () => ipcRenderer.invoke("usage:billing"),
