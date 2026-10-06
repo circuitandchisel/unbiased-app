@@ -94,7 +94,7 @@ A hand-off in reply to a post-back is a protocol error; the client refuses it ra
 
 ```text
 on request R to /v1/responses, /v1/chat/completions or /v1/messages:
-  send R to Pareto verbatim — same body, same stream flag — with the Delegation header while the credential is declared
+  send R to Pareto verbatim — same body, same stream flag, the client's own Authorization (the client holds no Pareto credential; removing it removes only the delegation) — with the Delegation header while the credential is declared
   non-streaming: relay the answer; a 422 whose error carries the marker is the hand-off
   streaming:    hold the dialect's pre-content events; forward SSE comments (heartbeats)
                 first content → flush what was held, relay Pareto's stream to the end
