@@ -6,6 +6,12 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.13 — October 6, 2026
+
+### Fixed
+
+- **MCP sign-in avoids extra permission requests.** The app asks for the permissions a server advertises instead of requesting others the service may refuse.
+
 ## 1.13.12 — October 6, 2026
 
 ### Fixed
