@@ -65,6 +65,13 @@
         ]
       },
       {
+        "from": "resources/mods",
+        "to": "mods",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "resources/icon.png",
         "to": "icon.png"
       }

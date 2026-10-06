@@ -158,6 +158,7 @@ import {
   resolveSidecarDir,
   sidecarLooksInstalled,
 } from "./learning";
+import { ModsClient, MODS_TOOL, modsEntryPath, parseEnabledMods } from "./mods";
 import { spawn as ptySpawn, type IPty } from "@lydell/node-pty";
 import {
   COMPUTER_CAPTURE_JPEG_QUALITY,
@@ -1879,6 +1880,7 @@ function threadDynamicTools(): Record<string, unknown>[] | undefined {
     ...MEMORY_TOOLS,
     ...CHECKPOINT_TOOLS,
     IMAGE_OUTLINE_TOOL,
+    MODS_TOOL,
     ...(agentBrowserTools() ?? []),
   ];
   return tools.length ? (tools as Record<string, unknown>[]) : undefined;
@@ -3924,6 +3926,61 @@ function memoryDirForCwd(cwd: string | null, threadId: string | null = null): st
     memoryRoot(), cwd, defaultChatDir(), threadId,
     cwd ? loadWorktrees()[cwd]?.project : undefined,
   );
+}
+
+// First-party Mods run out of process. Only event kind and thread ID cross
+// the boundary; this does not make arbitrary third-party code safe to install.
+let mods: ModsClient | null = null;
+let enabledMods = new Set<string>();
+let pendingNewThreadMods = false;
+
+function modsPrefsPath(): string {
+  return join(app.getPath("userData"), "mods-enabled.json");
+}
+
+function loadModsPrefs(): void {
+  try { enabledMods = parseEnabledMods(JSON.parse(readFileSync(modsPrefsPath(), "utf8"))); }
+  catch { enabledMods = new Set(); }
+}
+
+function saveModsPrefs(): void {
+  try { writeFileSync(modsPrefsPath(), JSON.stringify([...enabledMods]) + "\n"); }
+  catch (error) { console.warn("[mods] could not save per-chat setting:", error); }
+}
+
+function modsOn(threadId: string | null): boolean {
+  return threadId ? enabledMods.has(rootThreadOf(threadId)) : pendingNewThreadMods;
+}
+
+function observeMod(threadId: string | null | undefined, kind: "turn_started" | "turn_completed" | "tool_called"): void {
+  if (threadId && modsOn(threadId)) mods?.observe(threadId, kind);
+}
+
+async function startMods(): Promise<void> {
+  if (mods?.isReady) return;
+  const client = new ModsClient(modsEntryPath(productionBuild(), process.resourcesPath, app.getAppPath()));
+  try {
+    await client.start();
+    mods = client;
+  } catch (error) {
+    console.warn("[mods] unavailable:", error);
+    client.stop();
+  }
+}
+
+async function handleModToolCall(tool: string, threadId: string | null): Promise<DynamicToolResponse> {
+  const answer = (text: string, success: boolean): DynamicToolResponse => ({
+    contentItems: [{ type: "inputText", text }], success,
+  });
+  if (tool !== MODS_TOOL.name || !threadId) return answer("Unknown Mods tool or chat.", false);
+  if (!modsOn(threadId)) return answer("Mods are off for this chat.", false);
+  try {
+    const stats = await mods?.sessionStats(threadId);
+    if (!stats) return answer("Mods sidecar is unavailable.", false);
+    return answer(`This chat: ${stats.turnsStarted} turns started, ${stats.turnsCompleted} completed, ${stats.toolsCalled} dynamic tool calls observed since Mods was enabled in this app session.`, true);
+  } catch {
+    return answer("Mods sidecar is unavailable.", false);
+  }
 }
 
 // ── The learning sidecar (observe-only) ─────────────────────────────────
@@ -6169,6 +6226,7 @@ function wireNotifications(): void {
           // gateway's per-org concurrency.
           learning?.setIdle(false);
           runningTurns.set(threadId, turn.id);
+          observeMod(threadId, "turn_started");
           metrics.record({ ...metricNow(threadId), kind: "run", turn: turn.id, phase: "started", status: null } satisfies RunRecord);
           bgStream.delete(threadId);
           send("chat:thread-activity", { threadId, running: true });
@@ -6557,6 +6615,7 @@ function wireNotifications(): void {
           observeLearning("turn_completed", threadId, `turn ${turn?.status ?? "completed"}`, {
             status: turn?.status ?? "completed",
           });
+          observeMod(threadId, "turn_completed");
           // Before runningTurns is cleared below: the id is what pairs this
           // with its start record, and after the delete there is nothing to
           // pair with.
@@ -6818,6 +6877,7 @@ function wireNotifications(): void {
       if (msg.method === "item/tool/call") {
         const tool = String((params as { tool?: unknown }).tool ?? "");
         const args = (params as { arguments?: unknown }).arguments;
+        observeMod(approvalThread, "tool_called");
         // Three families now, dispatched by prefix rather than by assuming
         // the browser owns every dynamic tool.
         const seq = ++toolSeq;
@@ -6831,6 +6891,8 @@ function wireNotifications(): void {
         const call = inToolCall.run({ seq, thread: approvalThread, quiet: quietWrites }, () =>
           tool.startsWith("schedule_")
           ? handleScheduleToolCall(tool, args, approvalThread)
+          : tool === MODS_TOOL.name
+            ? handleModToolCall(tool, approvalThread)
           : tool.startsWith("checkpoint_")
             ? handleCheckpointToolCall(tool, args, approvalThread)
           : tool.startsWith("image_")
@@ -7766,6 +7828,7 @@ async function startEngine(): Promise<void> {
   // After the engine, and never blocking it: an absent or broken sidecar
   // leaves the app exactly as it was.
   void startLearning();
+  void startMods();
   // Before the bridge, so the bridge's own hello is the first thing recorded.
   startMetrics();
   // Same footing as the sidecar: absent or broken, the app is exactly as it was.
@@ -7773,6 +7836,7 @@ async function startEngine(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  loadModsPrefs();
   try {
     const migrated = migrateLegacyPlainMemory(memoryRoot(), defaultChatDir());
     if (migrated.copied || migrated.unassigned || migrated.conflicts) {
@@ -8028,6 +8092,13 @@ app.whenReady().then(async () => {
         mainCwd = (started as { cwd?: string }).cwd ?? cwd;
       }
       pane.threadId = started.thread.id;
+      if (paneId === "main" && pendingNewThreadMods) {
+        enabledMods.add(started.thread.id);
+        pendingNewThreadMods = false;
+        saveModsPrefs();
+      } else if (paneId.startsWith("side") && panes.main.threadId && modsOn(panes.main.threadId)) {
+        enabledMods.add(started.thread.id);
+      }
       // The choice made in the composer before the first message belongs to
       // the thread that message created.
       if (paneId === "main" && pendingNewThreadMcp) {
@@ -8814,6 +8885,23 @@ app.whenReady().then(async () => {
     iconTrimCache.set(src, out);
     return out;
   }
+
+  ipcMain.handle("mods:thread-get", (_e, threadId: string | null) => ({ enabled: modsOn(threadId) }));
+  ipcMain.handle("mods:thread-set", (_e, payload: { threadId: string | null; enabled: boolean }) => {
+    if (!payload || typeof payload.enabled !== "boolean" ||
+        (payload.threadId !== null && (typeof payload.threadId !== "string" || !payload.threadId || payload.threadId.length > 200)))
+      throw new Error("Invalid Mods setting");
+    if (payload.threadId === null) {
+      pendingNewThreadMods = payload.enabled;
+    } else {
+      const root = rootThreadOf(payload.threadId);
+      if (payload.enabled) enabledMods.add(root);
+      else enabledMods.delete(root);
+      saveModsPrefs();
+    }
+    send("mods:thread-applied", { threadId: payload.threadId, enabled: payload.enabled });
+    return { enabled: payload.enabled };
+  });
 
   ipcMain.handle("mcp:thread-get", (_e, threadId: string | null) => {
     const cfg = readMcpConfig();
@@ -11657,6 +11745,8 @@ app.on("window-all-closed", () => {
   ptys.clear();
   void learning?.stop();
   learning = null;
+  mods?.stop();
+  mods = null;
   // Downloads and unpacked archives that were never installed.
   for (const dir of skillStages) {
     try {
