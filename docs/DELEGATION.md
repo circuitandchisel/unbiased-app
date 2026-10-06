@@ -24,7 +24,7 @@ The user runs the Unbiased proxy, or a harness speaking this protocol, which dec
 
 ### 1. Capability declaration
 
-`Delegation` is an RFC 8941 Dictionary: keys are providers, parameters describe the credential. Unknown keys and parameters are ignored; a malformed header declares nothing.
+`Delegation` is an RFC 8941 Dictionary: keys are providers, parameters describe the credential. Unknown keys and parameters are ignored; a malformed header declares nothing; a repeated provider follows RFC 8941 §3.2 — the later entry replaces the earlier.
 
 ```http
 Delegation: openai;v=2;cred=plan
@@ -103,7 +103,8 @@ on request R to /v1/responses, /v1/chat/completions or /v1/messages:
       POST delegation.request to the provider with the user's credential, bounded by timeout_ms
       collect the completed Responses object (the plan route's completed event has an empty output: rebuild it from output_item.done)
       send R + {delegation:{continuation, response | error}} to Pareto, same stream flag; relay its answer in place of the first
-      a streaming client hears `: ping` comments meanwhile; a second hand-off in reply is refused as a loop
+      a streaming client MUST hear `: ping` comments meanwhile (the leg is the provider's whole generation; idle timeouts fire otherwise)
+      a second hand-off in reply is refused as a loop; any other rejection of the post-back → send R once more WITHOUT the header, so the user still gets an answer
   provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); 401 or a dead refresh token → stop declaring and open the browser to sign in again, once; 403 → stop declaring until the stored sign-in changes
 ```
 
