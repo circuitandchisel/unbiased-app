@@ -6,6 +6,16 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.11 — October 6, 2026
+
+### Improved
+
+- **See command output while Pareto works.** Running commands expand automatically and show new output as it arrives. Collapsing a command or scrolling up stays in your control.
+
+### Fixed
+
+- **Side chats stay focused on your question.** Opening one while the main conversation is running no longer carries over its unfinished work or displays the main conversation's messages.
+
 ## 1.13.10 — October 5, 2026
 
 ### Improved
