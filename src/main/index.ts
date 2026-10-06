@@ -150,6 +150,7 @@ import {
   validateMemory,
 } from "./memory";
 import { writeAutomaticMemory } from "./automatic-memory";
+import { sideChatStartTarget } from "./side-chat-start";
 import {
   LearningClient,
   buildEvent,
@@ -7960,42 +7961,27 @@ app.whenReady().then(async () => {
     let created = false;
     if (!pane.threadId) {
       let started: { thread: { id: string } };
-      if (paneId.startsWith("side") && panes.main.threadId) {
-        // The Codex semantics, confirmed from its own client: a side chat is
-        // an ephemeral FORK of the parent conversation — full context copied
-        // into a temporary thread the engine forgets at exit. Paginated
-        // parents require excludeTurns so the fork does not hydrate the full
-        // turn array, which this client does not use.
-        started = (await engine.request("thread/fork", {
-          threadId: panes.main.threadId,
-          ephemeral: true,
-          excludeTurns: true,
+      if (paneId.startsWith("side")) {
+        // A fork made during the parent's active turn can inherit its unfinished
+        // task. Start a separate ephemeral thread in the same directory then;
+        // fork only once the parent is idle so a side chat can still use its
+        // completed conversation as context.
+        const parentId = panes.main.threadId;
+        const sideCwd = mainCwd ?? pendingCwd ?? defaultChatDir();
+        const target = sideChatStartTarget(
+          parentId,
+          Boolean(panes.main.turnId || (parentId && runningTurns.has(parentId))),
+          sideCwd,
+        );
+        started = (await engine.request(target.method, {
+          ...target.params,
           ...threadPolicy(),
-          // A fork copies CONVERSATION, not per-thread config: without these
-          // three a side chat had no browser tools, no app instructions and no
-          // raw item stream, so "use the agent browser" in a side chat was
-          // answered with "I don't have that tool" — correctly, because it
-          // didn't. Every sibling thread/start below passes the same three.
-          // `dynamicTools` and `experimentalRawEvents` are experimentalApi
-          // fields absent from ThreadForkParams in the schema; the engine
-          // ignores params it does not know (verified against 0.147.0), so
-          // this is safe either way — but see the note in HOW-IT-WORKS: a
-          // version bump could start dropping them without any error.
           dynamicTools: threadDynamicTools(),
-          developerInstructions: developerInstructionsFor(mainCwd),
+          developerInstructions: developerInstructionsFor(sideCwd),
           experimentalRawEvents: true,
-          // A side chat sees what its conversation sees.
-          config: mcpOverrideFor(panes.main.threadId),
-        })) as { thread: { id: string } };
-      } else if (paneId.startsWith("side")) {
-        // No parent conversation yet: a plain scratch thread.
-        started = (await engine.request("thread/start", {
-          ...threadPolicy(),
-          ephemeral: true,
-          experimentalRawEvents: true,
-          dynamicTools: threadDynamicTools(),
-          developerInstructions: developerInstructionsFor(mainCwd),
-          config: mcpOverrideFor(null),
+          // A side chat keeps its parent's MCP selection even when its turn
+          // must start independently of the parent's in-progress task.
+          config: mcpOverrideFor(parentId),
         })) as { thread: { id: string } };
       } else {
         // Explicit default when no project is chosen — left implicit, the
@@ -8035,10 +8021,9 @@ app.whenReady().then(async () => {
         pendingNewThreadMcp = null;
         saveThreadMcp();
       }
-      // Side/fork threads inherit the main conversation's cwd; the main
-      // branch just set mainCwd above. Recorded so a memory_save from any of
-      // them resolves to the right project's store.
-      threadCwds.set(started.thread.id, mainCwd ?? defaultChatDir());
+      // Record the directory used by this thread so memory and turn policy
+      // remain scoped to its project, including a scratch side chat.
+      threadCwds.set(started.thread.id, mainCwd ?? pendingCwd ?? defaultChatDir());
       // The scope-bearing event, using the SAME resolution memory uses: a
       // worktree belongs to its parent project. The sidecar cannot derive
       // this — cwd cannot tell /a/api from /b/api, and it has no worktree
@@ -8071,6 +8056,9 @@ app.whenReady().then(async () => {
     }
     if (computer) input.unshift({ type: "text", text: COMPUTER_DIRECTIVE });
     if (planMode) input.unshift({ type: "text", text: PLAN_DIRECTIVE });
+    const turnCwd = paneId.startsWith("side") && pane.threadId
+      ? threadCwds.get(pane.threadId) ?? mainCwd
+      : mainCwd;
     const result = (await engine.request("turn/start", {
       threadId: pane.threadId,
       input,
@@ -8078,8 +8066,7 @@ app.whenReady().then(async () => {
       // mode switched mid-conversation takes effect immediately. Plan mode
       // hard-forces read-only regardless of the access mode.
       approvalPolicy: planMode ? "on-request" : threadPolicy().approvalPolicy,
-      // The side pane forks the main thread, so mainCwd is right for both.
-      sandboxPolicy: planMode ? { type: "readOnly" } : turnSandbox(mainCwd),
+      sandboxPolicy: planMode ? { type: "readOnly" } : turnSandbox(turnCwd),
     })) as { turn?: { id?: string } };
     if (result.turn?.id) pane.turnId = result.turn.id;
     return { turnId: pane.turnId, threadId: pane.threadId, created };

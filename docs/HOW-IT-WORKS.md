@@ -243,6 +243,11 @@ three of which accept the override. Side chats and sub-agents key off the
 root, so they see what their conversation sees. Scheduled and authoring
 threads get everything off.
 
+A new side chat forks the main conversation only when the main turn is idle.
+While the main turn is running, it starts an independent ephemeral thread in
+the same working directory instead, so the unfinished main task cannot become
+the side chat's task. Either path keeps the main conversation's MCP selection.
+
 One server cannot be switched this way: a connector carrying an OAuth client
 secret (the Google ones) is written into the engine's config as a managed
 plugin, not as an `[mcp_servers.*]` table. Naming it in the override invents
