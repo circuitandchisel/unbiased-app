@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
+import { appendCommandOutputDelta, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
+
+test("running command output accumulates by item without changing completed steps", () => {
+  const running = { itemId: "a", status: "inProgress", output: "first" };
+  assert.deepEqual(appendCommandOutputDelta(running, "a", " second"), {
+    itemId: "a", status: "inProgress", output: "first second",
+  });
+  assert.equal(appendCommandOutputDelta(running, "b", " ignored"), running);
+  assert.equal(appendCommandOutputDelta({ ...running, status: "completed" }, "a", " late").output, "first");
+});
 
 test("a completion without status settles an existing running step", () => {
   assert.equal(commandStatusAfterEvent("inProgress", undefined, "completed"), "completed");

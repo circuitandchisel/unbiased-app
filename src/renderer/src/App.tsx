@@ -33,7 +33,7 @@ import { SideChatIdleTracker } from "./side-chat-idle";
 import { settleTurnOutput } from "./turn-completion";
 import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
-import { commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
+import { appendCommandOutputDelta, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
 
 type EngineStatus =
@@ -717,6 +717,7 @@ declare global {
       onCommand: (
         cb: (p: { paneId: PaneId; phase: "started" | "completed"; item: CommandItem }) => void,
       ) => () => void;
+      onCommandOutput: (cb: (p: { paneId: PaneId; itemId: string; delta: string }) => void) => () => void;
       onCompaction: (cb: (p: { paneId: PaneId }) => void) => () => void;
       onTokenUsage: (
         cb: (p: { paneId: PaneId } & ContextUsage) => void,
@@ -9435,6 +9436,10 @@ function ChatPane({
             },
           ];
         });
+      }),
+      window.unbiased.onCommandOutput((p) => {
+        if (p.paneId !== paneId) return;
+        setEntries((es) => mapCommandsDeep(es, (e) => appendCommandOutputDelta(e, p.itemId, p.delta)));
       }),
     ];
     return () => offs.forEach((off) => off());
@@ -18694,6 +18699,71 @@ function memoryStepsLabel(items: CommandEntry[]): string | null {
   return `Updated memory · ${items.length} steps`;
 }
 
+function CommandOutputPanel({ entry }: { entry: CommandEntry }) {
+  const outputRef = useRef<HTMLPreElement>(null);
+  const followOutput = useRef(true);
+  useLayoutEffect(() => {
+    if (followOutput.current && outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [entry.output]);
+  const output = entry.output ?? "";
+  const visibleOutput = output.length > 4000
+    ? `… (earlier output omitted)\n${output.slice(-4000)}`
+    : output;
+
+  return (
+    <div
+      style={{
+        margin: "4px 0 10px",
+        borderRadius: 12,
+        border: `1px solid ${colors.border}`,
+        background: "var(--code-bg)",
+        overflow: "hidden",
+        maxWidth: "var(--measure)",
+      }}
+    >
+      <div
+        style={{
+          padding: "7px 12px",
+          borderBottom: `1px solid ${colors.border}`,
+          color: colors.dim,
+          fontSize: 12,
+          letterSpacing: "var(--track-overline)",
+        }}
+      >
+        {isShellStep(entry) ? "Shell" : isComputerStep(entry) ? "Desktop" : "Output"}
+      </div>
+      <pre
+        ref={outputRef}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          followOutput.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+        style={{
+          margin: 0,
+          padding: "10px 12px",
+          color: colors.dim,
+          fontFamily: "var(--font-code)",
+          fontSize: 12.5,
+          lineHeight: 1.55,
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          maxHeight: 240,
+          overflowY: "auto",
+        }}
+      >
+        <span style={{ color: colors.fg }}>
+          <span style={{ color: colors.dim }}>$ </span>
+          {entry.command}
+        </span>
+        {"\n"}
+        {visibleOutput}
+      </pre>
+    </div>
+  );
+}
+
 function StepsGroup({
   items,
   statusLabel,
@@ -18705,6 +18775,7 @@ function StepsGroup({
 }) {
   const [open, setOpen] = useState(false);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
+  const autoOpenedItems = useRef<Set<string>>(new Set());
   const [hoveringSummary, setHoveringSummary] = useState(false);
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const needsApproval = items.some(
@@ -18719,6 +18790,15 @@ function StepsGroup({
       return next;
     });
   const running = items.some((e) => e.status === "inProgress");
+  useEffect(() => {
+    const fresh = items
+      .filter((e) => e.status === "inProgress" && isShellStep(e) && !autoOpenedItems.current.has(e.itemId))
+      .map((e) => e.itemId);
+    if (!fresh.length) return;
+    fresh.forEach((id) => autoOpenedItems.current.add(id));
+    setOpen(true);
+    setOpenItems((current) => new Set([...current, ...fresh]));
+  }, [items]);
   const unconfirmed = items.some((e) => e.status === "unconfirmed");
   const failed = items.some((e) => e.status === "failed" || (e.exitCode ?? 0) !== 0);
   const issueSuffix = `${failed ? " · issues" : ""}${unconfirmed ? " · result not confirmed" : ""}`;
@@ -18915,54 +18995,7 @@ function StepsGroup({
                     onDecide={(d) => void decide(e.itemId, e.approval!.requestId, d)}
                   />
                 ))}
-              {e.output && itemOpen && (
-                <div
-                  style={{
-                    margin: "4px 0 10px",
-                    borderRadius: 12,
-                    border: `1px solid ${colors.border}`,
-                    background: "var(--code-bg)",
-                    overflow: "hidden",
-                    maxWidth: "var(--measure)",
-                  }}
-                >
-                  {/* Naming the surface ("Shell") is what turns a slab of
-                      monospace into a quoted terminal — the reader knows what
-                      they are looking at before they parse a character. */}
-                  <div
-                    style={{
-                      padding: "7px 12px",
-                      borderBottom: `1px solid ${colors.border}`,
-                      color: colors.dim,
-                      fontSize: 12,
-                      letterSpacing: "var(--track-overline)",
-                    }}
-                  >
-                    {isShellStep(e) ? "Shell" : isComputerStep(e) ? "Desktop" : "Output"}
-                  </div>
-                  <pre
-                    style={{
-                      margin: 0,
-                      padding: "10px 12px",
-                      color: colors.dim,
-                      fontFamily: "var(--font-code)",
-                      fontSize: 12.5,
-                      lineHeight: 1.55,
-                      whiteSpace: "pre-wrap",
-                      overflowWrap: "anywhere",
-                      maxHeight: 240,
-                      overflowY: "auto",
-                    }}
-                  >
-                    <span style={{ color: colors.fg }}>
-                      <span style={{ color: colors.dim }}>$ </span>
-                      {e.command}
-                    </span>
-                    {"\n"}
-                    {e.output.length > 4000 ? e.output.slice(0, 4000) + "\n… (truncated)" : e.output}
-                  </pre>
-                </div>
-              )}
+              {e.output && itemOpen && <CommandOutputPanel entry={e} />}
             </div>
           );
         })}
