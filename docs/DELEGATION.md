@@ -8,7 +8,7 @@ Pareto answers the hard requests on a frontier model, on our provider account. O
 
 ## Use case
 
-The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Neither side sees the other's secrets: not the credential, not the reason for escalating.
+The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. The proxy accepts Responses, Chat Completions and Anthropic Messages requests and relays each to Pareto verbatim, streaming or not, as the client sent it; every format conversion stays on the server. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Neither side sees the other's secrets: not the credential, not the reason for escalating.
 
 ## Design rules
 
@@ -18,7 +18,7 @@ The user runs the Unbiased proxy, or a harness speaking this protocol, which dec
 - **The post-back is a normal request.** Pareto sees the delegated output at once, bills it with the plumbing it already has (the rule is a separate decision), and may judge or synthesise before answering. The cost is streaming: the frontier answer is collected before it is posted back, so a delegated one-shot's time-to-first-token is the frontier's full generation time.
 - **Failure is Pareto's to handle.** The client reports a timeout, a limit or a refusal; Pareto escalates on its own seats and the user gets a Pareto answer on their Pareto plan. An exhausted credential is simply not declared for a while (the plan route names no reset time), so no request fails because a plan ran out.
 
-**Out of scope for v2:** the billing rule for a delegated request; ZDR-organization policy; hand-off after partial output; streaming the post-back; providers other than OpenAI (the grammar admits them; only the Responses wire is defined).
+**Out of scope for v2:** the billing rule for a delegated request; ZDR-organization policy; hand-off after partial output; streaming the post-back; providers other than OpenAI (the grammar admits them; only an OpenAI Responses `request` is defined).
 
 ## Protocol
 
@@ -65,11 +65,17 @@ data: {"type":"response.failed","response":{"id":"resp_…","status":"failed","u
 | `timeout_ms` | when to give up and report a timeout |
 | `continuation` | opaque; echoed on the post-back so Pareto resumes |
 
-With `stream: false` the same `error` object is the body of an HTTP 422.
+With `stream: false` the same `error` object is the body of an HTTP 422. The hand-off is spoken in whichever dialect the client used; the `delegation` object is identical in all three, and the handed-over `request` is always an OpenAI Responses request:
+
+| Client dialect | Streaming | Non-streaming | Marker |
+|---|---|---|---|
+| Responses | terminal `response.failed`, `response.error` | HTTP 422, `error` | `error.code = "delegation_required"` |
+| Chat Completions | the in-band `{"error": {…}}` chunk | HTTP 422, `error` | `error.code = "delegation_required"` |
+| Anthropic Messages | `event: error` | HTTP 422, `error` | `error.type = "delegation_required"` (the Anthropic error object has no `code`) |
 
 ### 3. The post-back
 
-The client re-sends its original request with one added field; Pareto answers it as a normal response:
+The client re-sends its original request, in its own dialect, with one added top-level field; Pareto answers it as a normal response in that dialect:
 
 ```json
 { "model": "pareto", "input": [...], "stream": true,
@@ -87,18 +93,22 @@ A hand-off in reply to a post-back is a protocol error; the client refuses it ra
 ### 4. Client flow
 
 ```text
-on request R to /v1/responses:
-  send R + {stream:true} to Pareto, with the Delegation header while the credential is declared
-  hold pre-content events (response.created, in_progress); forward SSE comments (heartbeats)
-  first content/tool item → flush what was held, relay Pareto's stream to the end
-  response.failed with error.code == "delegation_required" →
+on request R to /v1/responses, /v1/chat/completions or /v1/messages:
+  send R to Pareto verbatim — same body, same stream flag — with the Delegation header while the credential is declared
+  non-streaming: relay the answer; a 422 whose error carries the marker is the hand-off
+  streaming:    hold the dialect's pre-content events; forward SSE comments (heartbeats)
+                first content → flush what was held, relay Pareto's stream to the end
+                the dialect's hand-off event → discard what was held
+  on a hand-off:
       POST delegation.request to the provider with the user's credential, bounded by timeout_ms
       collect the completed Responses object (the plan route's completed event has an empty output: rebuild it from output_item.done)
-      send R + {stream:true, delegation:{continuation, response | error}} to Pareto; relay its stream in place of the first
-  if R had stream:false: assemble the relayed stream's response.completed and answer JSON
+      send R + {delegation:{continuation, response | error}} to Pareto, same stream flag; relay its answer in place of the first
+      a streaming client hears `: ping` comments meanwhile; a second hand-off in reply is refused as a loop
   provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); 401 or a dead refresh token → stop declaring and open the browser to sign in again, once; 403 → stop declaring until the stored sign-in changes
 ```
 
+The client's dialect knowledge is this table and nothing more: which event carries the hand-off (§2), and which events precede content and are discarded when a hand-off replaces them — `response.created`, `response.in_progress` and `response.queued` for Responses; the role-only first chunk for Chat Completions; `message_start` and `ping` for Messages.
+
 ### 5. Transport note
 
-Inside our stack the hand-off is the cascade's in-band error chunk, translated to `response.failed` by gpu-router (its pre-stream failure gate and error-envelope size cap both admit this code) and relayed byte-for-byte by the gateway; the post-back's `delegation` field crosses the router's request translation untouched. The cascade reads the signed claim, never the header, and refuses a continuation it did not mint.
+Inside our stack the hand-off is the cascade's in-band error chunk, relayed as-is to a Chat Completions client and translated by gpu-router's Responses and Messages dialects (its pre-stream failure gate and error-envelope size cap both admit this code), then relayed byte-for-byte by the gateway; the post-back's `delegation` field crosses both request translations untouched. The cascade reads the signed claim, never the header, and refuses a continuation it did not mint.
