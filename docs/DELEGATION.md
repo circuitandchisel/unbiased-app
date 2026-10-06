@@ -1,6 +1,6 @@
 # Delegation: client-executed model calls for Pareto
 
-**Protocol version 2 — draft, 2026-10-05.** Implemented behind flags in gpu-router, unbiased-api and the `unbiased-proxy` repo; nothing deployed. v1 (2026-10-02) sent the client a patch and let it finish the answer itself; v2 moves every decision to the server.
+**Protocol version 2 — draft, 2026-10-06.** Implemented in gpu-router, unbiased-api, the `unbiased-proxy` repo and unbiased-cli (the Go helper, the second client); nothing deployed. The cascade's switch, `LC_DELEGATION_ENABLED`, defaults to on and is the quick way off. v1 (2026-10-02) sent the client a patch and let it finish the answer itself; v2 moves every decision to the server.
 
 ## Why
 
@@ -8,15 +8,16 @@ Pareto answers the hard requests on a frontier model, on our provider account. O
 
 ## Use case
 
-The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. The proxy accepts Responses, Chat Completions and Anthropic Messages requests and relays each to Pareto verbatim, streaming or not, as the client sent it; every format conversion stays on the server. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Neither side sees the other's secrets: not the credential, not the reason for escalating.
+The user runs the Unbiased proxy, or a harness speaking this protocol, which declares the credential it holds. The proxy accepts Responses, Chat Completions and Anthropic Messages requests and relays each to Pareto verbatim, streaming or not, as the client sent it; every format conversion stays on the server. When Pareto decides a request needs a frontier model that credential can serve, it hands the client the exact request it would have sent; the client sends it on the user's credential, posts the outcome back, and Pareto composes the answer the user sees. Neither side sees the other's secrets: Pareto never sees the credential, and the client never learns why Pareto escalated — the continuation it carries is sealed, not merely signed.
 
 ## Design rules
 
 - **The client is dumb.** It declares a credential, sends the request it is given, reports what came back. Which models a plan serves, what to send, how to fail over, how to judge or bill the result: all server-side, so Pareto's internals change without a client release.
 - **Every wire field is necessary.** v1's `kind`, `reason`, `window`, `model`, `fallbacks`, `cred`, `api`, patch vocabulary, header model list and echo header changed nothing a correct client did; they are gone. Each remaining field drives one stated decision.
 - **A stream event, not an HTTP status.** In-band on the committed SSE stream, so heartbeats keep flowing and the decision may come minutes in, always before the first content byte. A non-streaming request gets the same payload as an HTTP 422.
-- **The post-back is a normal request.** Pareto sees the delegated output at once, bills it with the plumbing it already has (the rule is a separate decision), and may judge or synthesise before answering. The cost is streaming: the frontier answer is collected before it is posted back, so a delegated one-shot's time-to-first-token is the frontier's full generation time.
+- **The post-back is a normal request.** Pareto sees the delegated output at once, judges it like any step, and may synthesise before answering. Billing is a separate decision, under three invariants the rule must keep: the delegated leg is the user's and Pareto never bills it; Pareto's own work on the request is billed from Pareto's own measurements; nothing in the post-back's `usage` reaches a bill. The cost is streaming: the frontier answer is collected before it is posted back, so a delegated one-shot's time-to-first-token is the frontier's full generation time.
 - **Failure is Pareto's to handle.** The client reports a timeout, a limit or a refusal; Pareto escalates on its own seats and the user gets a Pareto answer on their Pareto plan. An exhausted credential is simply not declared for a while (the plan route names no reset time), so no request fails because a plan ran out.
+- **A zero-data-retention request is never delegated.** Its data stays on Pareto's ZDR lanes; a client's own credential is not one.
 
 **Out of scope for v2:** the billing rule for a delegated request; ZDR-organization policy; hand-off after partial output; streaming the post-back; providers other than OpenAI (the grammar admits them; only an OpenAI Responses `request` is defined).
 
@@ -86,9 +87,9 @@ The client re-sends its original request, in its own dialect, with one added top
 |---|---|
 | `continuation` | which hand-off this outcome answers |
 | `response` | the provider's completed Responses object: Pareto's answer is made from it |
-| `error` | in place of `response`: `{"status": 429, "code": "subscription_sharing_usage_limit_exceeded"}` as the provider said it, or `{"code": "timeout"}`; Pareto escalates on its own seats |
+| `error` | in place of `response`: `{"status": 429, "code": "subscription_sharing_usage_limit_exceeded"}` as the provider said it, or `{"code": "timeout"}`; any `error` object means "escalate here" — a client maps no codes |
 
-A hand-off in reply to a post-back is a protocol error; the client refuses it rather than loop.
+A hand-off in reply to a post-back is a protocol error; the client refuses it rather than loop. A continuation is good for one post-back of the same request from the same caller, until shortly after `timeout_ms`; a client never retries a stale one.
 
 ### 4. Client flow
 
@@ -105,7 +106,7 @@ on request R to /v1/responses, /v1/chat/completions or /v1/messages:
       send R + {delegation:{continuation, response | error}} to Pareto, same stream flag; relay its answer in place of the first
       a streaming client MUST hear `: ping` comments meanwhile (the leg is the provider's whole generation; idle timeouts fire otherwise)
       a second hand-off in reply is refused as a loop; any other rejection of the post-back → send R once more WITHOUT the header, so the user still gets an answer
-  provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); 401 or a dead refresh token → stop declaring and open the browser to sign in again, once; 403 → stop declaring until the stored sign-in changes
+  provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); a plan's 401 or dead refresh token → stop declaring and open the browser to sign in again, once (a refused API key just stops declaring); 403 → stop declaring until the stored sign-in changes
 ```
 
 The client's dialect knowledge is this table and nothing more: which event carries the hand-off (§2), and which events precede content and are discarded when a hand-off replaces them — `response.created`, `response.in_progress` and `response.queued` for Responses; the role-only first chunk for Chat Completions; `message_start` and `ping` for Messages.
