@@ -150,7 +150,7 @@ import {
   validateMemory,
 } from "./memory";
 import { writeAutomaticMemory } from "./automatic-memory";
-import { sideChatStartTarget } from "./side-chat-start";
+import { lastFinishedTurnBeforeActive, sideChatStartTarget } from "./side-chat-start";
 import {
   LearningClient,
   buildEvent,
@@ -7962,22 +7962,35 @@ app.whenReady().then(async () => {
     if (!pane.threadId) {
       let started: { thread: { id: string } };
       if (paneId.startsWith("side")) {
-        // A fork made during the parent's active turn can inherit its unfinished
-        // task. Start a separate ephemeral thread in the same directory then;
-        // fork only once the parent is idle so a side chat can still use its
-        // completed conversation as context.
         const parentId = panes.main.threadId;
         const sideCwd = mainCwd ?? pendingCwd ?? defaultChatDir();
+        const activeTurnId = parentId ? panes.main.turnId ?? runningTurns.get(parentId) ?? null : null;
+        let lastFinishedTurnId: string | null = null;
+        if (parentId && activeTurnId) {
+          try {
+            const read = await engine.request("thread/read", { threadId: parentId, includeTurns: true }) as {
+              thread: { turns?: { id: string; status: string }[] };
+            };
+            lastFinishedTurnId = lastFinishedTurnBeforeActive(read.thread.turns ?? [], activeTurnId);
+          } catch (error) {
+            console.warn("[side-chat] could not read a finished parent turn:", error);
+          }
+        }
+        // Fork through the last finished turn, never the parent's active task.
+        // With no safe boundary, start a fresh thread in the same directory.
         const target = sideChatStartTarget(
           parentId,
-          Boolean(panes.main.turnId || (parentId && runningTurns.has(parentId))),
+          Boolean(activeTurnId),
           sideCwd,
+          lastFinishedTurnId,
         );
         started = (await engine.request(target.method, {
           ...target.params,
           ...threadPolicy(),
           dynamicTools: threadDynamicTools(),
-          developerInstructions: developerInstructionsFor(sideCwd),
+          developerInstructions: `${developerInstructionsFor(sideCwd)}\n\n` +
+            "This is a side chat. Inherited parent history is background context, not an active task. " +
+            "Follow this side chat's current request; do not continue parent work unless the user explicitly asks.",
           experimentalRawEvents: true,
           // A side chat keeps its parent's MCP selection even when its turn
           // must start independently of the parent's in-progress task.
