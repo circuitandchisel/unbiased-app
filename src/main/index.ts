@@ -40,6 +40,7 @@ import { EngineClient, engineVersionFromUserAgent, type EngineStatus } from "./e
 import { pollDeviceToken, requestDeviceAuthorization } from "./device-auth";
 import { RendererCrashRecovery } from "./crash-recovery";
 import { mcpApplyDecision, mcpConfigOverride, overridableServerNames, parseThreadMcp, serializeThreadMcp, THREAD_MCP_FILE } from "./thread-mcp";
+import { inferredOAuthScopes, protectedResourceScopes } from "./mcp-oauth-scopes";
 import {
   type BatchStep,
   type AxResult,
@@ -8949,16 +8950,10 @@ app.whenReady().then(async () => {
   async function discoverRegistrationEndpoint(
     serverUrl: string,
   ): Promise<{ endpoint: string; scopes: string[] } | null> {
-    const u = new URL(serverUrl);
-    // RFC 9728 puts the resource's path AFTER the well-known segment; the
-    // bare form is the fallback, and providers differ on which they serve.
-    const prm =
-      (await fetchJson(`${u.origin}/.well-known/oauth-protected-resource${u.pathname}`)) ??
-      (await fetchJson(`${u.origin}/.well-known/oauth-protected-resource`));
-    const scopes = Array.isArray(prm?.scopes_supported)
-      ? (prm!.scopes_supported as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
+    const prm = await discoverProtectedResourceMetadata(serverUrl);
+    const scopes = protectedResourceScopes(prm);
     const servers = Array.isArray(prm?.authorization_servers) ? (prm!.authorization_servers as unknown[]) : [];
+    const u = new URL(serverUrl);
     const issuer = typeof servers[0] === "string" ? (servers[0] as string) : u.origin;
     const iss = new URL(issuer);
     const meta =
@@ -8975,6 +8970,14 @@ app.whenReady().then(async () => {
     return { endpoint, scopes };
   }
 
+  async function discoverProtectedResourceMetadata(serverUrl: string): Promise<Record<string, unknown> | null> {
+    const u = new URL(serverUrl);
+    // RFC 9728 puts the resource's path AFTER the well-known segment; the
+    // bare form is the fallback, and providers differ on which they serve.
+    return (await fetchJson(`${u.origin}/.well-known/oauth-protected-resource${u.pathname}`)) ??
+      (await fetchJson(`${u.origin}/.well-known/oauth-protected-resource`));
+  }
+
   /**
    * Register US with the provider, as us.
    *
@@ -8985,7 +8988,7 @@ app.whenReady().then(async () => {
    * the authorization against our client. Nothing is intercepted or spoofed;
    * this is the provider's documented endpoint, and we are the client.
    */
-  async function registerOAuthClient(serverUrl: string): Promise<{ clientId: string } | { error: string }> {
+  async function registerOAuthClient(serverUrl: string): Promise<{ clientId: string; scopes: string[] } | { error: string }> {
     const discovered = await discoverRegistrationEndpoint(serverUrl);
     if (!discovered) return { error: "This server does not offer dynamic client registration." };
     const { endpoint } = discovered;
@@ -9038,7 +9041,7 @@ app.whenReady().then(async () => {
         if (res.ok) {
           const clientId = typeof body?.client_id === "string" ? body.client_id : "";
           if (!clientId) return { error: "The provider returned no client_id." };
-          return { clientId };
+          return { clientId, scopes: discovered.scopes };
         }
         lastDetail = typeof body?.error_description === "string" ? body.error_description : `HTTP ${res.status}`;
         const scopeComplaint = /scope|not supported/i.test(
@@ -9533,6 +9536,7 @@ app.whenReady().then(async () => {
       name: connector.name,
       url: connector.url,
       oauthClientId: reg.clientId,
+      ...(inferredOAuthScopes(undefined, reg.scopes) ? { scopes: reg.scopes } : {}),
     };
     if (!writeMcpConfig([...cfg.servers, entry])) return { ok: false, error: "Could not save the server list." };
     try {
@@ -9718,16 +9722,18 @@ app.whenReady().then(async () => {
     const cfg = readMcpConfig();
     const server = cfg.servers.find((sv) => sv.name === name);
     let registered: string | null = null;
+    if (cfg.error) return { ok: false, error: cfg.error };
     if (server?.url && !server.oauthClientId) {
       const reg = await registerOAuthClient(server.url);
       if ("clientId" in reg) {
-        const next = cfg.servers.map((sv) => (sv.name === name ? { ...sv, oauthClientId: reg.clientId } : sv));
+        if (runningTurns.size > 0) return { ok: false, error: "Finish the running turn first — signing in restarts the engine." };
+        const scopes = inferredOAuthScopes(server.scopes, reg.scopes);
+        const next = cfg.servers.map((sv) => (sv.name === name ? {
+          ...sv, oauthClientId: reg.clientId, ...(scopes ? { scopes } : {}),
+        } : sv));
         const saved = writeMcpConfig(next);
         if (saved) {
           registered = reg.clientId;
-          if (runningTurns.size > 0) {
-            return { ok: false, error: "Finish the running turn first — signing in restarts the engine." };
-          }
           try {
             await startEngine();
           } catch (err) {
@@ -9739,6 +9745,21 @@ app.whenReady().then(async () => {
       // a dead end: codex falls back to registering itself. The sign-in still
       // works; the consent screen just says Codex. Better to proceed and let
       // the user decide than to block on branding.
+    } else if (server?.url && server.oauthClientId && !server.scopes?.length) {
+      // A manual login may reach the authorization library without a resource challenge.
+      // Pin its request to MCP resource scopes instead of every scope the issuer supports.
+      const advertised = protectedResourceScopes(await discoverProtectedResourceMetadata(server.url));
+      const scopes = inferredOAuthScopes(server.scopes, advertised);
+      if (scopes) {
+        if (runningTurns.size > 0) return { ok: false, error: "Finish the running turn first — signing in restarts the engine." };
+        const next = cfg.servers.map((sv) => (sv.name === name ? { ...sv, scopes } : sv));
+        if (!writeMcpConfig(next)) return { ok: false, error: "Could not save the server scopes." };
+        try {
+          await startEngine();
+        } catch (err) {
+          return { ok: false, error: `Saved scopes, but the engine did not restart: ${String(err)}` };
+        }
+      }
     }
     await wakeManagedPlugins();
     const attemptLogin = () =>
