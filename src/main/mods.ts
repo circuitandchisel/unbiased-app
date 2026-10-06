@@ -1,15 +1,52 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-export const MODS_PROTOCOL_VERSION = 1;
-export const MODS_TOOL = {
-  type: "function",
-  name: "mods_session_stats",
-  description: "Read the number of turns and dynamic tool calls observed in this chat by the first-party Mods sidecar. No message contents are recorded. Only use when the user asks about Mods or chat activity.",
-  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+export const MODS_PROTOCOL_VERSION = 2;
+export type ModEventKind = "turn_started" | "turn_completed" | "tool_called";
+export type ModTool = {
+  type: "function";
+  name: string;
+  description: string;
+  inputSchema: { type: "object"; properties: Record<string, unknown>; additionalProperties: false };
 };
+export type ModCatalog = {
+  protocolVersion: 2;
+  plugins: { id: string; name: string; description: string; events: ModEventKind[]; tools: ModTool[] }[];
+};
+
+export function readModsCatalog(entryPath: string): ModCatalog {
+  const raw: unknown = JSON.parse(readFileSync(join(dirname(entryPath), "manifest.json"), "utf8"));
+  const value = raw as Partial<ModCatalog>;
+  if (!value || value.protocolVersion !== MODS_PROTOCOL_VERSION || !Array.isArray(value.plugins) ||
+      value.plugins.length === 0 || value.plugins.length > 8) throw new Error("Invalid Mods manifest");
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const plugin of value.plugins) {
+    if (!plugin || typeof plugin.id !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(plugin.id) ||
+        ids.has(plugin.id) || typeof plugin.name !== "string" || typeof plugin.description !== "string" ||
+        !Array.isArray(plugin.events) || !Array.isArray(plugin.tools) || plugin.tools.length > 8 ||
+        plugin.events.some((event) => !["turn_started", "turn_completed", "tool_called"].includes(event)))
+      throw new Error("Invalid Mods plugin declaration");
+    ids.add(plugin.id);
+    for (const tool of plugin.tools) {
+      if (!tool || tool.type !== "function" || typeof tool.name !== "string" ||
+          !/^mods_[a-z0-9_]{1,64}$/.test(tool.name) || names.has(tool.name) ||
+          typeof tool.description !== "string" || tool.description.length > 500 ||
+          !tool.inputSchema || tool.inputSchema.type !== "object" ||
+          !tool.inputSchema.properties || typeof tool.inputSchema.properties !== "object" ||
+          Array.isArray(tool.inputSchema.properties) || tool.inputSchema.additionalProperties !== false)
+        throw new Error("Invalid or duplicate Mods tool declaration");
+      names.add(tool.name);
+    }
+  }
+  return value as ModCatalog;
+}
+
+export function modsDynamicTools(catalog: ModCatalog): ModTool[] {
+  return catalog.plugins.flatMap((plugin) => plugin.tools);
+}
 
 export function modsEntryPath(isPackaged: boolean, resourcesPath: string, appPath: string): string {
   return isPackaged ? join(resourcesPath, "mods", "entry.cjs") : join(appPath, "resources", "mods", "entry.cjs");
@@ -21,8 +58,6 @@ export function parseEnabledMods(raw: unknown): Set<string> {
 }
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
-export type ModEventKind = "turn_started" | "turn_completed" | "tool_called";
-export type ModStats = { turnsStarted: number; turnsCompleted: number; toolsCalled: number };
 
 export class ModsClient {
   private proc: ChildProcess | null = null;
@@ -30,7 +65,7 @@ export class ModsClient {
   private nextId = 1;
   private ready = false;
 
-  constructor(private entryPath: string) {}
+  constructor(private entryPath: string, private catalog: ModCatalog) {}
 
   get isReady(): boolean { return this.ready; }
 
@@ -63,8 +98,12 @@ export class ModsClient {
     proc.on("exit", () => this.disconnect(proc, new Error("Mods sidecar exited")));
     try {
       const response = await this.request("mods/initialize", { protocolVersion: MODS_PROTOCOL_VERSION });
-      const info = response as { protocolVersion?: number; tools?: string[] };
-      if (info?.protocolVersion !== MODS_PROTOCOL_VERSION || !info.tools?.includes(MODS_TOOL.name))
+      const info = response as { protocolVersion?: number; plugins?: string[]; tools?: string[] };
+      const expectedPlugins = this.catalog.plugins.map((plugin) => plugin.id);
+      const expectedTools = modsDynamicTools(this.catalog).map((tool) => tool.name);
+      if (info?.protocolVersion !== MODS_PROTOCOL_VERSION ||
+          JSON.stringify(info.plugins) !== JSON.stringify(expectedPlugins) ||
+          JSON.stringify(info.tools) !== JSON.stringify(expectedTools))
         throw new Error("Mods sidecar handshake mismatch");
       this.ready = true;
     } catch (error) {
@@ -111,12 +150,14 @@ export class ModsClient {
     catch { /* optional sidecar cannot break a turn */ }
   }
 
-  async sessionStats(threadId: string): Promise<ModStats> {
+  async callTool(threadId: string, tool: string): Promise<string> {
     if (!this.ready) throw new Error("Mods sidecar unavailable");
-    const result = await this.request("mods/tool/call", { threadId, tool: MODS_TOOL.name }) as ModStats;
-    if (![result?.turnsStarted, result?.turnsCompleted, result?.toolsCalled].every(Number.isSafeInteger))
+    if (!modsDynamicTools(this.catalog).some((declaration) => declaration.name === tool))
+      throw new Error("Unknown Mods tool");
+    const result = await this.request("mods/tool/call", { threadId, tool }) as { text?: unknown };
+    if (typeof result?.text !== "string" || result.text.length > 2000)
       throw new Error("Invalid Mods sidecar response");
-    return result;
+    return result.text;
   }
 
   stop(): void {

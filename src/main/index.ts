@@ -158,7 +158,7 @@ import {
   resolveSidecarDir,
   sidecarLooksInstalled,
 } from "./learning";
-import { ModsClient, MODS_TOOL, modsEntryPath, parseEnabledMods } from "./mods";
+import { ModsClient, modsDynamicTools, modsEntryPath, parseEnabledMods, readModsCatalog, type ModCatalog } from "./mods";
 import { spawn as ptySpawn, type IPty } from "@lydell/node-pty";
 import {
   COMPUTER_CAPTURE_JPEG_QUALITY,
@@ -1880,7 +1880,7 @@ function threadDynamicTools(): Record<string, unknown>[] | undefined {
     ...MEMORY_TOOLS,
     ...CHECKPOINT_TOOLS,
     IMAGE_OUTLINE_TOOL,
-    MODS_TOOL,
+    ...(modsCatalog ? modsDynamicTools(modsCatalog) : []),
     ...(agentBrowserTools() ?? []),
   ];
   return tools.length ? (tools as Record<string, unknown>[]) : undefined;
@@ -3931,8 +3931,18 @@ function memoryDirForCwd(cwd: string | null, threadId: string | null = null): st
 // First-party Mods run out of process. Only event kind and thread ID cross
 // the boundary; this does not make arbitrary third-party code safe to install.
 let mods: ModsClient | null = null;
+let modsCatalog: ModCatalog | null = null;
 let enabledMods = new Set<string>();
 let pendingNewThreadMods = false;
+
+function loadModsCatalog(): void {
+  try {
+    modsCatalog = readModsCatalog(modsEntryPath(productionBuild(), process.resourcesPath, app.getAppPath()));
+  } catch (error) {
+    modsCatalog = null;
+    console.warn("[mods] catalog unavailable:", error);
+  }
+}
 
 function modsPrefsPath(): string {
   return join(app.getPath("userData"), "mods-enabled.json");
@@ -3957,8 +3967,8 @@ function observeMod(threadId: string | null | undefined, kind: "turn_started" | 
 }
 
 async function startMods(): Promise<void> {
-  if (mods?.isReady) return;
-  const client = new ModsClient(modsEntryPath(productionBuild(), process.resourcesPath, app.getAppPath()));
+  if (mods?.isReady || !modsCatalog) return;
+  const client = new ModsClient(modsEntryPath(productionBuild(), process.resourcesPath, app.getAppPath()), modsCatalog);
   try {
     await client.start();
     mods = client;
@@ -3972,12 +3982,13 @@ async function handleModToolCall(tool: string, threadId: string | null): Promise
   const answer = (text: string, success: boolean): DynamicToolResponse => ({
     contentItems: [{ type: "inputText", text }], success,
   });
-  if (tool !== MODS_TOOL.name || !threadId) return answer("Unknown Mods tool or chat.", false);
+  if (!threadId || !modsCatalog || !modsDynamicTools(modsCatalog).some((item) => item.name === tool))
+    return answer("Unknown Mods tool or chat.", false);
   if (!modsOn(threadId)) return answer("Mods are off for this chat.", false);
   try {
-    const stats = await mods?.sessionStats(threadId);
-    if (!stats) return answer("Mods sidecar is unavailable.", false);
-    return answer(`This chat: ${stats.turnsStarted} turns started, ${stats.turnsCompleted} completed, ${stats.toolsCalled} dynamic tool calls observed since Mods was enabled in this app session.`, true);
+    const text = await mods?.callTool(threadId, tool);
+    if (!text) return answer("Mods sidecar is unavailable.", false);
+    return answer(text, true);
   } catch {
     return answer("Mods sidecar is unavailable.", false);
   }
@@ -6891,7 +6902,7 @@ function wireNotifications(): void {
         const call = inToolCall.run({ seq, thread: approvalThread, quiet: quietWrites }, () =>
           tool.startsWith("schedule_")
           ? handleScheduleToolCall(tool, args, approvalThread)
-          : tool === MODS_TOOL.name
+          : tool.startsWith("mods_")
             ? handleModToolCall(tool, approvalThread)
           : tool.startsWith("checkpoint_")
             ? handleCheckpointToolCall(tool, args, approvalThread)
@@ -7836,6 +7847,7 @@ async function startEngine(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  loadModsCatalog();
   loadModsPrefs();
   try {
     const migrated = migrateLegacyPlainMemory(memoryRoot(), defaultChatDir());
