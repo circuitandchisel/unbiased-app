@@ -1,5 +1,27 @@
 type CommandPhase = "started" | "completed";
 
+export function showsCommandOutputPanel(
+  entry: { status: string; output?: string },
+  isShell: boolean,
+): boolean {
+  return Boolean(entry.output) || (isShell && entry.status === "inProgress");
+}
+
+export function closeFinishedAutoOpenedPanels<T extends { itemId: string; status: string }>(
+  items: T[],
+  openItems: ReadonlySet<string>,
+  autoOpenedItems: ReadonlySet<string>,
+  manuallyOpenedItems: ReadonlySet<string>,
+): Set<string> {
+  const next = new Set(openItems);
+  for (const item of items) {
+    if (item.status !== "inProgress" && autoOpenedItems.has(item.itemId) && !manuallyOpenedItems.has(item.itemId)) {
+      next.delete(item.itemId);
+    }
+  }
+  return next;
+}
+
 export function appendCommandOutputDelta<T extends { itemId: string; status: string; output?: string }>(
   entry: T,
   itemId: string,

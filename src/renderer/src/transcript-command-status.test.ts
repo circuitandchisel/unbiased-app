@@ -1,6 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appendCommandOutputDelta, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
+import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
+
+test("a running shell command has an output panel before its first output", () => {
+  assert.equal(showsCommandOutputPanel({ status: "inProgress" }, true), true);
+  assert.equal(showsCommandOutputPanel({ status: "inProgress", output: "" }, true), true);
+  assert.equal(showsCommandOutputPanel({ status: "inProgress" }, false), false);
+  assert.equal(showsCommandOutputPanel({ status: "completed" }, true), false);
+  assert.equal(showsCommandOutputPanel({ status: "completed", output: "done" }, true), true);
+});
+
+test("finished commands close only panels opened automatically", () => {
+  const items = [
+    { itemId: "first", status: "completed" },
+    { itemId: "second", status: "inProgress" },
+    { itemId: "manual", status: "failed" },
+  ];
+  assert.deepEqual(
+    closeFinishedAutoOpenedPanels(
+      items,
+      new Set(["first", "second", "manual"]),
+      new Set(["first", "second", "manual"]),
+      new Set(["manual"]),
+    ),
+    new Set(["second", "manual"]),
+  );
+});
 
 test("running command output accumulates by item without changing completed steps", () => {
   const running = { itemId: "a", status: "inProgress", output: "first" };
