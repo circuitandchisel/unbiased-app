@@ -6,6 +6,19 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.10 — October 5, 2026
+
+### Improved
+
+- **Long conversations can use Pareto 26.10 Preview's 1M context window.** If an eligible service error happens before a reply starts, the app tries Pareto once instead.
+- **Context usage is easier to understand.** The context window shows estimated system instructions, tool definitions, messages, receive speed, and cache hits.
+- **Context details use consistent text sizing.**
+
+### Fixed
+
+- **Small text files are included in the request.** Larger files, binary files, and folders remain attached by path.
+- **The MCP status stays current.** The composer reflects the servers enabled for the open conversation.
+
 ## 1.13.9 — October 2, 2026
 
 ### Fixed
