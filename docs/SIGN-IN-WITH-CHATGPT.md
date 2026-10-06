@@ -25,7 +25,7 @@ Everything else is gated. The docs say "Sign in with ChatGPT is currently availa
 | "Use the user's plan only for the application they connected. Do not provide general-purpose API access for other tools or unrelated requests." | **Legal call.** A proxy any harness can sit in front of reads as "other tools." Our position: the proxy registers as Unbiased, never exposes OpenAI generally, and executes only the escalations Pareto instructs, for the user's own requests. | — |
 | "Users must be able to use their ChatGPT plan through SIWC without paying you or upgrading to a paid version of your application." | **Legal call.** Delegations happen inside paid Pareto requests. The Help Center says an app "may charge separately for its subscription, infrastructure, services, or premium features," which supports charging for the open-source leg, but it is not settled. It weighs against the "keep prices the same" option. | — |
 | Prohibited: "Creating multiple accounts, splitting usage, rotating accounts, or otherwise bypassing usage limits"; "Pooling, transferring, reselling, gifting, or sharing ChatGPT plan usage or Authentication Tokens"; "Using one user's subscription to fulfill another user's requests." | Document and enforce one proxy per user. A team proxy on a shared box is out. | — |
-| "Use your app's own name during sign-in and activation. Do not impersonate OpenAI, another application, or another open-source project." | Register as Unbiased. Do **not** reuse Codex's first-party client (the engine's built-in `chatgpt` login type) or its `backend-api` route: "do not point it at ChatGPT's backend-api endpoints." | — |
+| "Use your app's own name during sign-in and activation. Do not impersonate OpenAI, another application, or another open-source project." | Register as "Unbiased helper" — one name for both clients, the TypeScript proxy and the Go helper, so a user sees one connected app. Do **not** reuse Codex's first-party client (the engine's built-in `chatgpt` login type) or its `backend-api` route: "do not point it at ChatGPT's backend-api endpoints." | — |
 | "Use OpenAI names, logos, and buttons only as authorized." / "We may suspend or disable your application's access to SIWC if it violates these Terms." | Follow the UI/UX guidelines: "Continue with ChatGPT," a first-sign-in confirmation, a "Using ChatGPT plan" indicator, a "Manage usage" link, and "Your app must clearly show which of its plans support ChatGPT plan usage." | — |
 
 ## Product constraints that follow from the docs
@@ -36,18 +36,18 @@ Everything else is gated. The docs say "Sign in with ChatGPT is currently availa
 
 ## Observed on a real Plus account (2026-10-02)
 
-The proxy's `login` registered the client as "Unbiased" through the dynamic flow with no review step; plan usage was granted on the first consent. Against that token:
+The proxy's `login` registered a client through the dynamic flow (as "Unbiased" at the time; both clients now register as "Unbiased helper") with no review step; plan usage was granted on the first consent. Against that token:
 
 - The catalog (`GET /v1/models`, `visibility: "list"`) was `gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5` — Astra is available to Plus; `gpt-6.1-sol` is not listed, yet a request for it was served, so the list is a display catalog, not an entitlement check.
 - Codex-style **flat function tools work**: the model returned `function_call` items without namespacing or `additional_tools`.
-- `service_tier: flex` is refused before admission with the documented non-standard body `{"detail":"Unsupported service_tier: flex"}` (HTTP 400). `max_output_tokens` and `temperature` were accepted on the calls tried, so the rejected-fields list is enforced unevenly; the proxy keeps dropping all of them for a plan credential.
-- A string `input` is refused (HTTP 400); `input` must be an array, as the preview limitations say. The proxy lifts a string prompt into one user turn.
+- `service_tier: flex` is refused before admission with the documented non-standard body `{"detail":"Unsupported service_tier: flex"}` (HTTP 400). `max_output_tokens` and `temperature` were accepted on the calls tried, so the rejected-fields list is enforced unevenly; the cascade drops all of them for a plan credential when it builds the hand-off's request (`PLAN_ROUTE_DROP_FIELDS`); the proxy sends that request as given.
+- A string `input` is refused (HTTP 400); `input` must be an array, as the preview limitations say. The cascade builds the array `input` in the hand-off's request; the proxy sends it as given.
 - `response.completed` carries **`output: []`**; the answer is only in the `output_item.*` and `*.delta` events. Any client that assembles from the terminal event alone sees nothing (fixed in the proxy).
 - Latency: a short Astra reply in 3–4 s; delegated steps in the spike ran 3.6–4.5 s for a tool call and 13.5 s for a three-paragraph answer.
 
 ## What we do about it
 
-- The spike runs on an API key and makes no Sign in with ChatGPT call, so it has no Terms exposure. Phase 4 (the credential flow in the proxy) waits on the two legal calls above and on making the proxy repo public.
+- What the spike did: a dynamic client registration on bdj's own Plus account, used only from this machine, to measure the route (the section above) and the sign-in flow end to end — including a lapsed sign-in and a re-login. Both clients ship the sign-in. The exposure is therefore the two legal calls above, not none: delegations happen inside paid Pareto requests ("no charge"), and the helper is a connected application only in the sense that a user must still run it with their own Unbiased account. Making the proxy repo public before any real user registers keeps the open-source condition true.
 - Hosted use of a user's token — the gateway or cascade calling OpenAI with it — is the partnership conversation, not an engineering option.
 - If OpenAI ever offers a commercial plan-usage agreement, the "connected application" and "no charge" questions are the ones to put in it.
 
