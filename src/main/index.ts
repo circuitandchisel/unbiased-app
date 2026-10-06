@@ -7678,9 +7678,9 @@ async function startEngine(): Promise<void> {
   resetSubAgentState();
   // The engine reads its base URL once, at launch (unbiased-app-engine
   // main.go: UNBIASED_BASE_URL); a delegation proxy is applied by restarting it.
-  // Through the proxy, the engine's UNBIASED_API_KEY is not what reaches the
-  // gateway: the proxy substitutes its own, read from the same credentials
-  // file (unbiased-proxy src/cli.ts) — the same key today.
+  // Through the proxy, the engine's UNBIASED_API_KEY still reaches the
+  // gateway: the proxy passes each request's Authorization through and holds
+  // no Pareto credential of its own, so removing it removes only the delegation.
   const delegationProxy = readDelegationProxy();
   engine.start(bin, {
     UNBIASED_API_KEY: stored.key,
