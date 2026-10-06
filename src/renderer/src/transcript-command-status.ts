@@ -1,5 +1,12 @@
 type CommandPhase = "started" | "completed";
 
+export function showsCommandOutputPanel(
+  entry: { status: string; output?: string },
+  isShell: boolean,
+): boolean {
+  return Boolean(entry.output) || (isShell && entry.status === "inProgress");
+}
+
 export function appendCommandOutputDelta<T extends { itemId: string; status: string; output?: string }>(
   entry: T,
   itemId: string,

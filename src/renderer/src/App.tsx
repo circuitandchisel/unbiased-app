@@ -33,7 +33,7 @@ import { SideChatIdleTracker } from "./side-chat-idle";
 import { settleTurnOutput } from "./turn-completion";
 import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
-import { appendCommandOutputDelta, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps } from "./transcript-command-status";
+import { appendCommandOutputDelta, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
 
 type EngineStatus =
@@ -18758,7 +18758,7 @@ function CommandOutputPanel({ entry }: { entry: CommandEntry }) {
           {entry.command}
         </span>
         {"\n"}
-        {visibleOutput}
+        {visibleOutput || (entry.status === "inProgress" ? "Waiting for output..." : "")}
       </pre>
     </div>
   );
@@ -18928,7 +18928,7 @@ function StepsGroup({
       {expanded &&
         items.map((e) => {
           const label = statusLabel(e);
-          const hasOutput = Boolean(e.output);
+          const hasOutputPanel = showsCommandOutputPanel(e, isShellStep(e));
           const itemOpen = openItems.has(e.itemId);
           const awaiting = e.status === "awaitingApproval" && e.approval && !e.approval.decision;
           const failed = e.status === "failed" || (e.exitCode ?? 0) !== 0;
@@ -18940,14 +18940,14 @@ function StepsGroup({
                   whole story is one sentence; the command itself belongs in
                   the panel below, where a terminal is the right metaphor. */}
               <div
-                onClick={hasOutput ? () => toggleItem(e.itemId) : undefined}
+                onClick={hasOutputPanel ? () => toggleItem(e.itemId) : undefined}
                 onMouseEnter={() => setHoveredItemId(e.itemId)}
                 onMouseLeave={() => setHoveredItemId((id) => (id === e.itemId ? null : id))}
                 style={{
                   display: "flex",
                   gap: 8,
                   alignItems: "center",
-                  cursor: hasOutput ? "pointer" : "default",
+                  cursor: hasOutputPanel ? "pointer" : "default",
                   padding: "3px 0",
                   color: itemColor,
                   fontSize: 15.5,
@@ -18981,7 +18981,7 @@ function StepsGroup({
                 {(failed || (e.status !== "completed" && !awaiting)) && (
                   <span style={{ color: label.color, flexShrink: 0, fontSize: 13 }}>{label.text}</span>
                 )}
-                {hasOutput && <TranscriptChevron open={itemOpen} />}
+                {hasOutputPanel && <TranscriptChevron open={itemOpen} />}
               </div>
               {awaiting &&
                 (e.approval!.expired ? (
@@ -18995,7 +18995,7 @@ function StepsGroup({
                     onDecide={(d) => void decide(e.itemId, e.approval!.requestId, d)}
                   />
                 ))}
-              {e.output && itemOpen && <CommandOutputPanel entry={e} />}
+              {hasOutputPanel && itemOpen && <CommandOutputPanel entry={e} />}
             </div>
           );
         })}
