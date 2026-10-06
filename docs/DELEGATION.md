@@ -109,7 +109,7 @@ on request R to /v1/responses, /v1/chat/completions or /v1/messages:
   provider 429 → stop declaring for a cool-off that doubles (5 min … 1 h); a plan's 401 or dead refresh token → stop declaring and open the browser to sign in again, once (a refused API key just stops declaring); 403 → stop declaring until the stored sign-in changes
 ```
 
-The client's dialect knowledge is this table and nothing more: which event carries the hand-off (§2), and which events precede content and are discarded when a hand-off replaces them — `response.created`, `response.in_progress` and `response.queued` for Responses; the role-only first chunk for Chat Completions; `message_start` and `ping` for Messages.
+The client's dialect knowledge is this table and one rule, nothing more: which event carries the hand-off (§2); which events precede content and are discarded when a hand-off replaces them — `response.created`, `response.in_progress` and `response.queued` for Responses; the role-only first chunk for Chat Completions; `message_start` and `ping` for Messages; and that a Chat Completions delta whose only payload is `reasoning_content` (Pareto's narration while it decides) is forwarded as it arrives without counting as content, so a hand-off after it still delegates.
 
 ### 5. Transport note
 
