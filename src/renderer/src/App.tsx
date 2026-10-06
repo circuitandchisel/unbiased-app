@@ -11050,7 +11050,7 @@ function ChatPane({
                             border: `1px solid ${colors.border}`,
                             borderRadius: 8,
                             color: canCompact ? colors.fg : colors.dim,
-                            fontSize: 12.5,
+                            fontSize: 13,
                             padding: "5px 10px",
                             cursor: canCompact ? "pointer" : "default",
                             fontFamily: "inherit",
@@ -11099,7 +11099,7 @@ function ChatPane({
                               display: "flex",
                               justifyContent: "space-between",
                               color: colors.dim,
-                              fontSize: 12,
+                              fontSize: 13,
                               marginTop: 8,
                             }}
                           >
@@ -11154,7 +11154,7 @@ function ChatPane({
                           ? "Nothing new to compact"
                           : "Compact conversation"}
                     </button>
-                    <div style={{ color: colors.dim, fontSize: 11.5, lineHeight: 1.4 }}>
+                    <div style={{ color: colors.dim, fontSize: 13, lineHeight: 1.4 }}>
                       Summarizes older history to free context and fix a long conversation that returns empty replies.
                     </div>
                   </div>
