@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 2,
+  "plugins": [
+    {
+      "id": "session-activity",
+      "name": "Session activity",
+      "description": "Counts turns and dynamic tool calls in this app session.",
+      "events": ["turn_started", "turn_completed", "tool_called"],
+      "tools": [
+        {
+          "type": "function",
+          "name": "mods_session_stats",
+          "description": "Read turn and dynamic tool counts observed in this chat by the first-party Mods sidecar. No message contents are recorded. Use when the user asks about Mods or chat activity.",
+          "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        }
+      ]
+    },
+    {
+      "id": "turn-timing",
+      "name": "Turn timing",
+      "description": "Measures elapsed time between turn events without reading content.",
+      "events": ["turn_started", "turn_completed"],
+      "tools": [
+        {
+          "type": "function",
+          "name": "mods_turn_timing",
+          "description": "Read the elapsed time of this chat's latest completed turn and current turn, as observed by the first-party Mods sidecar. Use when the user asks about Mods or turn timing.",
+          "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        }
+      ]
+    }
+  ]
+}

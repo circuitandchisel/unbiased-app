@@ -78,6 +78,10 @@ contextBridge.exposeInMainWorld("unbiased", {
   mcpThreadSet: (threadId: string | null, enabled: string[]) =>
     ipcRenderer.invoke("mcp:thread-set", { threadId, enabled }),
   onMcpThreadApplied: (cb: (p: unknown) => void) => subscribe("mcp:thread-applied", cb),
+  modsThreadGet: (threadId: string | null) => ipcRenderer.invoke("mods:thread-get", threadId),
+  modsThreadSet: (threadId: string | null, enabled: boolean) =>
+    ipcRenderer.invoke("mods:thread-set", { threadId, enabled }),
+  onModsThreadApplied: (cb: (p: unknown) => void) => subscribe("mods:thread-applied", cb),
   skillsList: (cwd?: string | null) => ipcRenderer.invoke("skills:list", { cwd }),
   skillsSetEnabled: (path: string, enabled: boolean) =>
     ipcRenderer.invoke("skills:set-enabled", { path, enabled }),

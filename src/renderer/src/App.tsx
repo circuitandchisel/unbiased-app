@@ -25,7 +25,7 @@ import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import "./side-tab-scrollbar.css";
-import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, Puzzle, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
@@ -624,6 +624,9 @@ declare global {
       onMcpThreadApplied: (
         cb: (p: { threadId: string; enabled: string[]; error?: string }) => void,
       ) => () => void;
+      modsThreadGet: (threadId: string | null) => Promise<{ enabled: boolean }>;
+      modsThreadSet: (threadId: string | null, enabled: boolean) => Promise<{ enabled: boolean }>;
+      onModsThreadApplied: (cb: (p: { threadId: string | null; enabled: boolean }) => void) => () => void;
       skillsList: (cwd?: string | null) => Promise<{
         skills: SkillEntry[];
         cwd: string | null;
@@ -10801,6 +10804,7 @@ function ChatPane({
                 </button>
               </span>
               <ConversationMcp threadId={mcpThreadId ?? threadId ?? null} panelOpen={mcpPanelOpen} onOpenMcp={() => onOpenMcp?.()} />
+              <ConversationMods threadId={threadId ?? null} />
               {planMode && (
                 <button
                   onClick={onTogglePlanMode}
@@ -17777,6 +17781,42 @@ function ConversationMcp({ threadId, panelOpen, onOpenMcp }: { threadId: string 
     >
       <McpIcon size={13} />
       {mcpChipLabel(enabled)}
+    </button>
+  );
+}
+
+function ConversationMods({ threadId }: { threadId: string | null }) {
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => {
+    let active = true;
+    let changed = false;
+    const off = window.unbiased.onModsThreadApplied((event) => {
+      if (event.threadId !== threadId) return;
+      changed = true;
+      setEnabled(event.enabled);
+    });
+    void window.unbiased.modsThreadGet(threadId).then((value) => {
+      if (active && !changed) setEnabled(value.enabled);
+    });
+    return () => { active = false; off(); };
+  }, [threadId]);
+  return (
+    <button
+      type="button"
+      aria-pressed={enabled}
+      title={enabled ? "Turn off first-party Mods for this chat" : "Turn on first-party Mods for this chat"}
+      onClick={() => {
+        const next = !enabled;
+        void window.unbiased.modsThreadSet(threadId, next).then((value) => setEnabled(value.enabled));
+      }}
+      style={{
+        display: "flex", alignItems: "center", gap: 7,
+        background: "var(--chip)", border: "none", borderRadius: 999,
+        padding: "4px 10px", color: enabled ? colors.accent : colors.dim,
+        fontSize: 13.5, cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      <Puzzle size={13} /> Mods {enabled ? "on" : "off"}
     </button>
   );
 }
