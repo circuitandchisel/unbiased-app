@@ -71,6 +71,9 @@ test("renders a Card with model-generated children and keeps its slider interact
   const root = createRoot(container);
   try {
     await act(async () => root.render(createElement(StrictMode, null, visualSurfaceForFence("a2ui", JSON.stringify(graph)))));
+    const visual = container.querySelector('[aria-label="Interactive visual"]') as HTMLElement | null;
+    assert.equal(visual?.style.overflowX, "clip");
+    assert.equal(visual?.style.getPropertyValue("--a2ui-card-border-radius"), "28px");
     const selected = container.querySelector('[role="meter"][aria-label="Selected"]');
     const slider = container.querySelector('input[type="range"]') as HTMLInputElement | null;
     assert.equal(selected?.getAttribute("aria-valuenow"), "50");

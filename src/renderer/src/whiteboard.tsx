@@ -122,7 +122,7 @@ export function Whiteboard({ title, initialShapes }: { title?: string; initialSh
   const connectors = shapes.filter((shape): shape is ConnectorShape => shape.type === "connector");
   const drawables = shapes.filter((shape): shape is DrawableShape => shape.type !== "connector");
 
-  return <div aria-label={title ?? "Whiteboard"} style={{ width: "100%", maxWidth: BOARD_WIDTH, minWidth: 0, border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", background: "var(--panel)", fontFamily: "var(--font-ui)" }}>
+  return <div aria-label={title ?? "Whiteboard"} style={{ boxSizing: "border-box", width: "100%", maxWidth: BOARD_WIDTH, minWidth: 0, border: "1px solid var(--border)", borderRadius: 28, overflow: "hidden", background: "var(--panel)", boxShadow: "0 16px 40px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255, 255, 255, 0.035)", fontFamily: "var(--font-ui)" }}>
     <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 38, padding: "4px 10px", borderBottom: "1px solid var(--border)" }}>
       <strong style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600 }}>{title ?? "Whiteboard"}</strong>
       <button title="Delete selected shape" aria-label="Delete selected shape" disabled={!selected} style={{ ...buttonStyle, opacity: selected ? 1 : 0.4 }} onClick={() => { setShapes((current) => current.filter((shape) => shape.id !== selected && (shape.type !== "connector" || (shape.from !== selected && shape.to !== selected)))); setSelected(null); }}><Trash2 size={16} /></button>

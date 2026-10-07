@@ -65,7 +65,8 @@ function A2uiVisualSurface({ state }: { state: VisualState }) {
     <div
       aria-label="Interactive visual"
       style={{
-        margin: "12px 0", maxWidth: "100%", overflow: "auto",
+        margin: "16px 0 20px", width: "100%", maxWidth: "100%", minWidth: 0,
+        boxSizing: "border-box", overflowX: "clip", overflowY: "visible",
         fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.5,
         "--a2ui-color-primary": "var(--accent)",
         "--a2ui-color-on-primary": "var(--accent-fg)",
@@ -87,10 +88,11 @@ function A2uiVisualSurface({ state }: { state: VisualState }) {
         "--a2ui-font-size-s": "13px", "--a2ui-font-size-xs": "12px",
         "--a2ui-spacing-xs": "4px", "--a2ui-spacing-s": "6px",
         "--a2ui-spacing-m": "8px", "--a2ui-spacing-l": "12px",
-        "--a2ui-border-radius": "8px", "--a2ui-textfield-border-radius": "6px",
+        "--a2ui-border-radius": "8px", "--a2ui-card-border-radius": "28px",
+        "--a2ui-textfield-border-radius": "6px",
         "--a2ui-choicepicker-chip-border-radius": "6px",
         "--a2ui-card-border": "1px solid var(--border)",
-        "--a2ui-card-box-shadow": "none", "--a2ui-card-margin": "0",
+        "--a2ui-card-box-shadow": "0 14px 36px rgba(0, 0, 0, 0.28)", "--a2ui-card-margin": "0",
         "--a2ui-tabs-header-background-active": "var(--chip)",
         "--a2ui-tabs-content-padding": "0",
         "--a2ui-label-font-weight": "500", "--a2ui-button-margin": "0",
