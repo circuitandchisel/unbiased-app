@@ -8587,16 +8587,10 @@ function ChatPane({
   // side pane's handed-down selection (contextChip) is consumed into the
   // same list, so both panes present selections identically.
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const consumedContextRef = useRef<typeof contextChip>(null);
   // null = the selection toolbar shows its buttons; a string (possibly
   // empty) = the "Add to chat" comment input is open with that draft.
   const [pendingComment, setPendingComment] = useState<string | null>(null);
-  useEffect(() => {
-    if (!contextChip) return;
-    const a = typeof contextChip === "string" ? { text: contextChip, tag: "selection" } : contextChip;
-    setAnnotations((list) => [...list, a]);
-    onContextClear?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextChip]);
 
   // The + button's popup menu, plus whether the clipboard held an image
   // when it was opened (drives the "Image from clipboard" item's state).
@@ -8952,7 +8946,10 @@ function ChatPane({
     });
   }
 
+  const previousResetNonceRef = useRef(reset.nonce);
   useEffect(() => {
+    const conversationChanged = previousResetNonceRef.current !== reset.nonce;
+    previousResetNonceRef.current = reset.nonce;
     threadIdRef.current = threadId ?? null;
     followTranscriptRef.current = true;
     setShowScrollToLatest(false);
@@ -9003,13 +9000,29 @@ function ChatPane({
         );
       });
     }
-    // Staged annotations belong to the conversation they came from.
-    setAnnotations([]);
-    setPendingComment(null);
-    setQueue([]);
-    setComputerSelected(false);
+    // Initial mount already has empty staged state. Clearing it here races
+    // with a selection handed to a newly created side chat.
+    if (conversationChanged) {
+      setAnnotations([]);
+      setPendingComment(null);
+      setQueue([]);
+      setComputerSelected(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reset.nonce]);
+
+  useEffect(() => {
+    if (!contextChip) {
+      consumedContextRef.current = null;
+      return;
+    }
+    if (consumedContextRef.current === contextChip) return;
+    consumedContextRef.current = contextChip;
+    const a = typeof contextChip === "string" ? { text: contextChip, tag: "selection" } : contextChip;
+    setAnnotations((list) => [...list, a]);
+    onContextClear?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextChip]);
 
   // Persist the rendered transcript per thread (debounced) — the engine's
   // own history can't hold renderer-only content.
