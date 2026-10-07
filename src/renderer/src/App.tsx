@@ -10017,11 +10017,6 @@ function ChatPane({
             fontSize: 15.5,
             color: "var(--fg-msg)",
             letterSpacing: "var(--track-body)",
-            // Capped measure: at full pane width a reply runs well past 100
-            // characters per line, and the eye loses its place on the return
-            // sweep. Turn spacing goes up with it (16 → 22) so consecutive
-            // turns read as separate rather than as one wall.
-            maxWidth: "var(--measure)",
           }}
         >
           <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
@@ -18768,7 +18763,6 @@ function CommandOutputPanel({ entry }: { entry: CommandEntry }) {
         border: `1px solid ${colors.border}`,
         background: "var(--code-bg)",
         overflow: "hidden",
-        maxWidth: "var(--measure)",
       }}
     >
       <div
@@ -19014,7 +19008,6 @@ function StepsGroup({
                   fontSize: 15.5,
                   lineHeight: 1.6,
                   letterSpacing: "var(--track-body)",
-                  maxWidth: "var(--measure)",
                 }}
               >
                 <span style={{ display: "flex", flexShrink: 0 }}>{stepIcon(e)}</span>
