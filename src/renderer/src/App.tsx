@@ -25,6 +25,8 @@ import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import "./side-tab-scrollbar.css";
+import "./markdown-table.css";
+import { tableToMarkdown } from "./markdown-table";
 import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
@@ -7163,6 +7165,7 @@ function buildMdComponents(
   openLink?: (url: string) => void,
 ) {
   return {
+    table: (props: { children?: React.ReactNode }) => <MarkdownTable>{props.children}</MarkdownTable>,
     code: (props: { className?: string; children?: React.ReactNode }) => {
       const text = extractText(props.children);
       // Block code: the surrounding <pre> (CodeBlock) owns the chrome. A
@@ -7245,6 +7248,44 @@ function buildMdComponents(
     ),
     li: (props: { children?: React.ReactNode }) => <li style={{ margin: "7px 0" }}>{props.children}</li>,
   };
+}
+
+function MarkdownTable({ children }: { children?: React.ReactNode }) {
+  const tableRef = useRef<HTMLTableElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function copyTable() {
+    const table = tableRef.current;
+    if (!table) return;
+    const rows = Array.from(table.rows, (row) => Array.from(row.cells, (cell) => cell.textContent ?? ""));
+    try {
+      await navigator.clipboard.writeText(tableToMarkdown(rows));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="u-markdown-table">
+      <div className="u-markdown-table-toolbar">
+        <span>Table</span>
+        <button
+          type="button"
+          title={copied ? "Copied table" : "Copy table"}
+          aria-label={copied ? "Copied table" : "Copy table"}
+          data-copied={copied}
+          onClick={() => void copyTable()}
+        >
+          {copied ? <Check size={15} /> : <Copy size={15} />}
+        </button>
+      </div>
+      <div className="u-markdown-table-scroll">
+        <table ref={tableRef}>{children}</table>
+      </div>
+    </div>
+  );
 }
 
 function SubAgentPane({ threadId, status }: { threadId: string; status: string }) {

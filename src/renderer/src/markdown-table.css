@@ -1,0 +1,91 @@
+.u-markdown-table {
+  max-width: 100%;
+  min-width: 0;
+  margin: 16px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, black 12%, transparent);
+}
+
+.u-markdown-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.u-markdown-table-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.u-markdown-table-toolbar button:hover {
+  background: var(--panel-2);
+  color: var(--fg);
+}
+
+.u-markdown-table-toolbar button[data-copied="true"] {
+  color: #5DCAA5;
+}
+
+.u-markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.u-markdown-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.u-markdown-table th,
+.u-markdown-table td {
+  min-width: 9rem;
+  padding: 11px 14px;
+  vertical-align: top;
+  overflow-wrap: break-word;
+  border-bottom: 1px solid var(--border);
+}
+
+.u-markdown-table th + th,
+.u-markdown-table td + td {
+  border-left: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+
+.u-markdown-table th {
+  background: var(--panel-2);
+  color: var(--fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.u-markdown-table td {
+  color: var(--fg-msg);
+}
+
+.u-markdown-table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
+
+.u-markdown-table tbody tr:last-child td {
+  border-bottom: 0;
+}
