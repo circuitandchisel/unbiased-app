@@ -30,6 +30,8 @@ import "./markdown-table.css";
 import { tableToMarkdown } from "./markdown-table";
 import "./user-message-markdown.css";
 import { UserMessageMarkdown } from "./user-message-markdown";
+import { MarkdownComposer, type MarkdownComposerHandle } from "./markdown-composer";
+import "./markdown-composer.css";
 import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
@@ -1135,8 +1137,6 @@ function withoutTrailingPlaceholder(es: Entry[]): Entry[] {
 // fresh one is drawn every time a chat opens.
 // Composer height bounds. The floor keeps the resting two-row shape; past the
 // ceiling it scrolls, so pasting a long document can't swallow the transcript.
-const COMPOSER_MIN_H = 44;
-const COMPOSER_MAX_H = 320;
 
 const CHAT_PLACEHOLDERS = [
   "Start typing, we'll keep up",
@@ -2901,7 +2901,7 @@ export function App() {
     !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog &&
     !moveDialog && !editProj && !envOpen && !sidePlusOpen && !workMenuOpen && !branchMenu;
   const focusMainComposer = () =>
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-pane-id="main"]')?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('[contenteditable="true"][data-pane-id="main"]')?.focus());
   const appCommandRef = useRef<(command: string) => void>(() => {});
   appCommandRef.current = (command) => {
     if (authed !== "in") return;
@@ -8607,39 +8607,7 @@ function ChatPane({
   // tools remain registered for every thread so natural-language desktop
   // requests still work without explicitly selecting this first.
   const [computerSelected, setComputerSelected] = useState(false);
-  // The composer grows with its content instead of scrolling a fixed two-row
-  // box: a pasted URL wraps to three lines, and hiding two of them behind a
-  // scrollbar makes it look like the paste half-failed. Height is measured,
-  // not counted from "\n" — soft-wrapped long tokens have no newline to count.
-  const taRef = useRef<HTMLTextAreaElement | null>(null);
-  const fitComposer = () => {
-    const el = taRef.current;
-    if (!el) return;
-    // Collapse first: scrollHeight only shrinks back if the box isn't already
-    // holding the taller content open.
-    el.style.height = "auto";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, COMPOSER_MIN_H), COMPOSER_MAX_H)}px`;
-  };
-  useLayoutEffect(fitComposer, [draft]);
-  // Width drives wrapping, and wrapping drives height — dragging the side-panel
-  // divider rewraps a draft that never changed, so measuring only on [draft]
-  // leaves the box the wrong size and hides the overflow it was meant to show.
-  const lastWidth = useRef(0);
-  useEffect(() => {
-    const el = taRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      // Width only. Reacting to height would observe the very change this
-      // callback makes and spin the observer against itself.
-      const w = entries[0]?.contentRect.width ?? 0;
-      if (w === lastWidth.current) return;
-      lastWidth.current = w;
-      fitComposer();
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const composerRef = useRef<MarkdownComposerHandle | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const changeDraft = (text: string) => {
@@ -8650,8 +8618,7 @@ function ChatPane({
   canTypeToFocusRef.current = canTypeToFocus;
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      const el = taRef.current;
-      if (!el || el.disabled || !canTypeToFocusRef.current()) return;
+      if (!composerRef.current || !connected || !canTypeToFocusRef.current()) return;
       const target = e.target instanceof Element ? e.target : null;
       if (!isComposerTypingKey(e, target) ||
           !isComposerTypingKey(e, document.activeElement)) return;
@@ -8659,14 +8626,11 @@ function ChatPane({
         .some((overlay) => overlay.getClientRects().length > 0)) return;
 
       e.preventDefault();
-      const text = drafts.current().text + e.key;
-      changeDraft(text);
-      el.focus();
-      requestAnimationFrame(() => el.setSelectionRange(text.length, text.length));
+      composerRef.current.appendText(e.key);
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [drafts]);
+  }, [connected]);
   const changeAttachments = (
     update: Attachment[] | ((current: Attachment[]) => Attachment[]),
     identity = drafts.identity(),
@@ -8773,7 +8737,7 @@ function ChatPane({
       const seen = new Set(list.map((a) => a.path));
       return [...list, ...res.attachments.filter((a) => !seen.has(a.path))];
     }, origin);
-    if (drafts.identity() === origin) taRef.current?.focus();
+    if (drafts.identity() === origin) composerRef.current?.focus();
   }
 
   function openPlusMenu() {
@@ -10900,14 +10864,15 @@ function ChatPane({
               ))}
             </div>
           )}
-          <textarea
-            data-pane-id={paneId}
+          <MarkdownComposer
+            paneId={paneId}
             value={draft}
-            onChange={(e) => changeDraft(e.target.value)}
+            onChange={changeDraft}
             onKeyDown={(e) => {
               // Enter sends immediately when idle and queues while a turn runs.
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
+                e.stopPropagation();
                 // A matching slash command takes Enter before sending.
                 const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : null;
                 if (q !== null && "plan".startsWith(q)) {
@@ -10934,35 +10899,12 @@ function ChatPane({
               const bare = collapseSelfLink(e.clipboardData?.getData("text/plain") ?? "");
               if (bare === null) return;
               e.preventDefault();
-              const el = e.currentTarget;
-              const start = el.selectionStart ?? draft.length;
-              const end = el.selectionEnd ?? start;
-              changeDraft(draft.slice(0, start) + bare + draft.slice(end));
-              // React restores the caret to the end of the value; put it back
-              // after what was inserted, so typing continues where you paused.
-              const caret = start + bare.length;
-              requestAnimationFrame(() => taRef.current?.setSelectionRange(caret, caret));
+              composerRef.current?.replaceSelection(bare);
             }}
             placeholder={!connected ? "Engine starting…" : entries.length > 0 ? chatPlaceholder : "Do anything"}
             title={busy || compacting ? "Enter queues a message while Pareto is working" : "Enter sends a message"}
             disabled={!connected}
-            ref={taRef}
-            rows={2}
-            style={{
-              width: "100%",
-              resize: "none",
-              background: "transparent",
-              color: colors.fg,
-              border: "none",
-              fontSize: 14.5,
-              lineHeight: 1.5,
-              fontFamily: "inherit",
-              outline: "none",
-              display: "block",
-              minHeight: COMPOSER_MIN_H,
-              maxHeight: COMPOSER_MAX_H,
-              overflowY: "auto",
-            }}
+            ref={composerRef}
           />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
             <span style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, minWidth: 0 }}>
