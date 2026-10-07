@@ -52,7 +52,7 @@ function createVisualSurfaceState(messages: VisualMessage[]) {
     const surface = processor.model.getSurface(first.surfaceId);
     if (surface) return { processor, surface };
   } catch {
-    // Keep invalid model output visible through the ordinary code-block path.
+    // Leave invalid model output for the visual-fence fallback.
   }
   processor.dispose();
   return null;
@@ -123,4 +123,24 @@ const plugins: VisualPlugin[] = [
 export function visualSurfaceForFence(language: string, source: string) {
   const plugin = plugins.find((item) => item.language === language);
   return plugin?.render(source) ?? null;
+}
+
+export function visualFenceContent(language: string, source: string, streaming: boolean) {
+  const visual = visualSurfaceForFence(language, source);
+  if (visual || language !== "a2ui") return visual;
+  return (
+    <div
+      role="status"
+      aria-live={streaming ? "polite" : "off"}
+      style={{
+        margin: "16px 0 20px", padding: "24px", minHeight: 96,
+        boxSizing: "border-box", border: "1px solid var(--border)",
+        borderRadius: 28, background: "var(--panel)",
+        boxShadow: "0 14px 36px rgba(0, 0, 0, 0.28)",
+        color: "var(--dim)", fontFamily: "var(--font-ui)", fontSize: 14,
+      }}
+    >
+      {streaming ? "Preparing visual..." : "Could not display this visual."}
+    </div>
+  );
 }

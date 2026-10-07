@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
 // The changelog SHIPS with the build so the Updates tab works offline and on
@@ -35,7 +35,7 @@ import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
-import { visualSurfaceForFence } from "./visual-surface-plugins";
+import { visualFenceContent } from "./visual-surface-plugins";
 
 type EngineStatus =
   | { state: "starting" }
@@ -1062,6 +1062,7 @@ function parseThemeImport(raw: string): ThemeConfig | null {
 }
 
 const REMARK_PLUGINS = [remarkGfm];
+const StreamingVisualContext = createContext(false);
 // File previews render embedded HTML (chat markdown stays text-only).
 // Scripts can't run regardless — the CSP has no unsafe-inline.
 const REHYPE_PLUGINS = [rehypeRaw];
@@ -7367,7 +7368,9 @@ function SubAgentPane({ threadId, status }: { threadId: string; status: string }
         })}
         {tail !== "" && (
           <div style={{ margin: "12px 0", lineHeight: 1.65, fontSize: 14, color: "var(--fg-msg)" }}>
-            <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>{tail}</Markdown>
+            <StreamingVisualContext.Provider value={true}>
+              <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>{tail}</Markdown>
+            </StreamingVisualContext.Provider>
           </div>
         )}
         {status === "running" && (
@@ -9980,9 +9983,11 @@ function ChatPane({
             maxWidth: "var(--measure)",
           }}
         >
-          <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
-            {e.text}
-          </Markdown>
+          <StreamingVisualContext.Provider value={busy && block.key === entries.length - 1}>
+            <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
+              {e.text}
+            </Markdown>
+          </StreamingVisualContext.Provider>
           {e.interrupted && <div style={{ color: colors.dim, fontSize: 12, marginTop: 4 }}>— stopped</div>}
           {/* Receipts sit between the answer and its action row: below the
               thing they are about, above the copy button — and outside the
@@ -11501,6 +11506,7 @@ function fenceClassOf(children?: React.ReactNode): string {
  *  and it re-renders, as it should. */
 const CodeBlock = memo(function CodeBlock({ children }: { children?: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
+  const streamingVisual = useContext(StreamingVisualContext);
   const className: string = fenceClassOf(children);
   const lang = /language-([\w-]+)/.exec(className)?.[1]?.toLowerCase() ?? "";
   const label = LANGUAGE_NAMES[lang] ?? (lang ? lang.toUpperCase() : "Plain text");
@@ -11514,7 +11520,7 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
     () => (grammar ? Prism.highlight(text, grammar, prismLang) : null),
     [text, grammar, prismLang],
   );
-  const visual = useMemo(() => visualSurfaceForFence(lang, text), [lang, text]);
+  const visual = useMemo(() => visualFenceContent(lang, text, streamingVisual), [lang, text, streamingVisual]);
   if (visual) return visual;
 
   return (

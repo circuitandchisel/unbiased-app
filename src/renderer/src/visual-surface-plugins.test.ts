@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { act, createElement, StrictMode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import { VISUAL_CATALOG_ID } from "./a2ui-payload";
 
@@ -51,6 +52,20 @@ test("does not replace unsupported or malformed fences", async () => {
   const invalid = structuredClone(messages);
   invalid[1].updateComponents!.components[2].bars = [];
   assert.equal(visualSurfaceForFence("a2ui", JSON.stringify(invalid)), null);
+});
+
+test("keeps incomplete A2UI source hidden while streaming and after failure", async () => {
+  const { visualFenceContent } = await import("./visual-surface-plugins");
+  const incomplete = '{"private":"raw A2UI source"';
+  const pending = renderToStaticMarkup(visualFenceContent("a2ui", incomplete, true)!);
+  assert.match(pending, /Preparing visual/);
+  assert.doesNotMatch(pending, /raw A2UI source/);
+
+  const failed = renderToStaticMarkup(visualFenceContent("a2ui", incomplete, false)!);
+  assert.match(failed, /Could not display this visual/);
+  assert.doesNotMatch(failed, /raw A2UI source/);
+  assert.equal(visualFenceContent("json", incomplete, true), null);
+  assert.ok(visualFenceContent("a2ui", JSON.stringify(messages), true));
 });
 
 test("renders a Card with model-generated children and keeps its slider interactive", async () => {
