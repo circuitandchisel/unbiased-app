@@ -31,8 +31,10 @@ automatically derived from that path.
 Mermaid accepts a `diagram` string (up to 16,000 characters) and optional
 `title`. Standalone fenced `mermaid` blocks render directly in chat; inside an
 A2UI surface, use a Mermaid component for a diagram alongside other UI.
-Rendering uses Mermaid's strict security mode, so diagram click actions and
-HTML labels are disabled.
+Rendering uses Mermaid's strict security mode, so diagram click actions are
+disabled and embedded HTML is encoded. The viewer fits the diagram to the available chat
+width and height, with zoom controls for closer inspection. Flowchart subgraphs
+without their own direction inherit the diagram direction.
 
 Whiteboard accepts up to 60 bounded shapes: circle, oval, square, rectangle,
 triangle, line, arrow, and connector. Drawable shapes have a unique ID, type,

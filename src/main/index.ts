@@ -1017,6 +1017,8 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "DateTimeInput, Whiteboard, and Mermaid. Text uses text, not value. BarChart has title and bars [{label, value}].",
   "For a static diagram, use a fenced mermaid block; it renders natively in chat. Within an A2UI surface,",
   'Mermaid takes {"diagram":"flowchart LR\\nA-->B"} and an optional title. Do not put Mermaid syntax in Text.',
+  "Keep Mermaid diagrams focused: prefer connected flows, short labels, and an explicit direction;",
+  "avoid unrelated disconnected subgraphs that produce sparse or overly tall layouts.",
   "Use Whiteboard for spatial diagrams and node-edge graphs rather than BarChart. Whiteboard takes",
   "shapes (up to 60) with unique id. Drawable types are circle|oval|square|rectangle|triangle|line|arrow,",
   "with x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Coordinates fit 800x450.",

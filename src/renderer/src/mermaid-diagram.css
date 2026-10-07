@@ -6,17 +6,56 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 28px;
-  background: #191d22;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+  background: #1b1d1f;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
   color: #f4f6f8;
   font-family: var(--font-ui);
   font-size: 14px;
 }
 
-.mermaid-diagram__title {
-  padding: 14px 20px;
+.mermaid-diagram__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  padding: 0 14px 0 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mermaid-diagram__title,
+.mermaid-diagram__embedded-title {
   font-weight: 600;
+}
+
+.mermaid-diagram__tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.mermaid-diagram__tools button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #b6bec6;
+  cursor: pointer;
+}
+
+.mermaid-diagram__tools button:hover:not(:disabled) {
+  background: #303438;
+  color: #f4f6f8;
+}
+
+.mermaid-diagram__tools button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 .mermaid-diagram--embedded {
@@ -27,15 +66,40 @@
   box-shadow: none;
 }
 
-.mermaid-diagram__drawing {
+.mermaid-diagram__embedded-title {
+  padding: 0 0 10px;
+}
+
+.mermaid-diagram__viewport {
+  max-height: min(70vh, 700px);
   overflow: auto;
-  padding: 20px;
+  background-color: #191b1e;
+  background-image: radial-gradient(#34393d 0.6px, transparent 0.6px);
+  background-size: 20px 20px;
+}
+
+.mermaid-diagram__viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.mermaid-diagram__viewport::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #41474c;
+}
+
+.mermaid-diagram__drawing {
+  box-sizing: border-box;
+  width: max(100%, calc(var(--diagram-width, 100%) + 52px));
+  min-width: 0;
+  padding: 26px;
 }
 
 .mermaid-diagram__drawing svg {
   display: block;
-  max-width: 100%;
-  height: auto;
+  width: var(--diagram-width, 100%) !important;
+  max-width: none !important;
+  height: auto !important;
   margin: 0 auto;
 }
 
