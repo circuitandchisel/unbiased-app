@@ -613,6 +613,7 @@ declare global {
       removeWorktree: (dir: string) => Promise<{ ok: boolean; error?: string }>;
       saveTranscript: (threadId: string, entries: Entry[]) => Promise<{ ok: boolean }>;
       loadTranscript: (threadId: string) => Promise<{ entries: Entry[] | null }>;
+      registerVisual: (source: string) => Promise<string | null>;
       conversationInfo: () => Promise<{
         cwd: string | null;
         isWorktree: boolean;

@@ -2,7 +2,9 @@ import { type CSSProperties, type ReactElement } from "react";
 import { z } from "zod";
 import { Catalog, CommonSchemas, MessageProcessor } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, AudioPlayer, Button, Card, CheckBox, ChoicePicker, Column, createComponentImplementation, DateTimeInput, Divider, Icon, Image, List, Modal, Row, Slider, Tabs, Text, TextField, Video, type ReactComponentImplementation } from "@a2ui/react/v0_9";
+import { isInteractiveVisualSource } from "../../shared/interactive-visual";
 import { parseVisualMessages, VISUAL_CATALOG_ID, type VisualMessage } from "./a2ui-payload";
+import { InteractiveHtmlVisual } from "./interactive-html-visual";
 import { MermaidDiagram } from "./mermaid-diagram";
 import { mermaidDiagramSchema, MAX_MERMAID_LENGTH } from "./mermaid-model";
 import { Whiteboard } from "./whiteboard";
@@ -117,6 +119,12 @@ type VisualPlugin = {
 
 const plugins: VisualPlugin[] = [
   {
+    language: "visual-html",
+    render(source) {
+      return isInteractiveVisualSource(source) ? <InteractiveHtmlVisual source={source} /> : null;
+    },
+  },
+  {
     language: "a2ui",
     render(source) {
       const messages = parseVisualMessages(source);
@@ -139,7 +147,7 @@ export function visualFenceContent(language: string, source: string, streaming: 
       ? <MermaidDiagram diagram={source} />
       : <MermaidFenceStatus />;
   }
-  if (language !== "a2ui") return visualSurfaceForFence(language, source);
+  if (language !== "a2ui" && language !== "visual-html") return visualSurfaceForFence(language, source);
   if (!streaming) {
     const visual = visualSurfaceForFence(language, source);
     if (visual) return visual;

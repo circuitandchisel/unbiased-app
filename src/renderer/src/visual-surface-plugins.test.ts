@@ -72,6 +72,35 @@ test("keeps incomplete A2UI source hidden while streaming and after failure", as
   assert.ok(visualFenceContent("a2ui", JSON.stringify(messages), true));
 });
 
+test("loads an interactive HTML fragment only after streaming into a sandboxed frame", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.assign(dom.window, { unbiased: { registerVisual: async () => "unbiased-visual://view/test-id" } });
+  const { createRoot } = await import("react-dom/client");
+  const { visualFenceContent } = await import("./visual-surface-plugins");
+  const source = '<button id="secret-source">Next</button><script>document.querySelector("button").onclick=()=>{}</script>';
+  const pending = renderToStaticMarkup(visualFenceContent("visual-html", source, true)!);
+  assert.match(pending, /Preparing visual/);
+  assert.doesNotMatch(pending, /secret-source/);
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(visualFenceContent("visual-html", source, false)));
+    const frame = container.querySelector("iframe")!;
+    assert.ok(frame);
+    assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
+    assert.equal(frame.getAttribute("src"), "unbiased-visual://view/test-id");
+    assert.doesNotMatch(container.innerHTML, /secret-source/);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
 test("hides Mermaid source while streaming and recognizes Mermaid in A2UI", async () => {
   const { visualFenceContent, visualSurfaceForFence } = await import("./visual-surface-plugins");
   const source = "flowchart LR\nAlice --> Bob";
