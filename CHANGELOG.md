@@ -6,6 +6,23 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.14 — October 7, 2026
+
+### New
+
+- **Visual answers can be explored in chat.** Supported diagrams, charts, and whiteboards render in the conversation instead of appearing as raw code. Whiteboard shapes can be moved, edited, and exported.
+- **Questions can appear as choices or text fields.** When Pareto needs an answer to continue, you can respond in the conversation.
+
+### Improved
+
+- **Tables are easier to scan and copy.** They have a distinct rounded layout and a copy button.
+- **Chat is easier to read and write.** Markdown formatting appears while you compose and in sent messages, replies use the available width, and typing focuses the active composer.
+
+### Fixed
+
+- **Selected text reaches a new side chat.** Asking about a selection now attaches it on the first opening, too.
+- **Waiting time stays visible.** The elapsed duration remains beside the waiting status.
+
 ## 1.13.13 — October 6, 2026
 
 ### Fixed
