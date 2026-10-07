@@ -22,6 +22,7 @@ import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, 
 import { tmpdir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
+import { resolveEngineDir } from "./engine-path";
 import { agentBrowserCandidates, chromeCandidates } from "./browser-binaries";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
 import { epochMillis } from "../shared/conversation-time";
@@ -4863,16 +4864,6 @@ function threadToEntries(
   return { entries, runningTurnStart, runningTurnStartedAt };
 }
 
-/** The engine binary ships beside the app (extraResources) in production;
- *  in development it comes from the sibling unbiased-app-engine checkout's
- *  `make bundle` output. UNBIASED_ENGINE_DIR overrides both for testing. */
-function resolveEngineDir(): string {
-  const override = process.env.UNBIASED_ENGINE_DIR;
-  if (override) return override;
-  if (productionBuild()) return join(process.resourcesPath, "engine");
-  return join(app.getAppPath(), "..", "unbiased-app-engine", "dist", "bundle");
-}
-
 /** Small data-URL preview for attachment cards; full-size stays on disk. */
 function thumbDataUrl(image: NativeImage, max = 112): string {
   const { width, height } = image.getSize();
@@ -7906,7 +7897,12 @@ async function startEngine(): Promise<void> {
   // Fire-and-forget: the page refreshes on open anyway, and nothing about
   // starting the engine should wait on GitHub.
   void refreshCatalogueAtStartup();
-  const engineDir = resolveEngineDir();
+  const engineDir = resolveEngineDir({
+    override: process.env.UNBIASED_ENGINE_DIR,
+    isPackaged: productionBuild(),
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
   const bin = join(engineDir, "unbiased-app-engine");
   if (!existsSync(bin)) {
     pushStatus({

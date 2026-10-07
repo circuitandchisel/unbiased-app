@@ -4046,7 +4046,14 @@ export function App() {
                 <h1 style={{ margin: 0, display: "flex", justifyContent: "center" }}>
                   <Wordmark height={36} />
                 </h1>
-                <p style={{ color: colors.dim, marginTop: 8 }}>Waiting for the engine…</p>
+                <p style={{ color: colors.dim, marginTop: 8 }}>
+                  {status.state === "exited" ? "Engine unavailable" : "Waiting for the engine…"}
+                </p>
+                {status.state === "exited" && (
+                  <p style={{ color: colors.dim, fontSize: 13, maxWidth: 560, overflowWrap: "anywhere" }}>
+                    {status.detail}
+                  </p>
+                )}
               </div>
             ) : (
               <StartPage

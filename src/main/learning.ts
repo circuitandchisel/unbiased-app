@@ -382,10 +382,8 @@ export class LearningClient {
  *  then the packaged resources, then a sibling checkout.
  *
  *  The sibling search walks UP rather than counting `..` the way
- *  resolveEngineDir does. That single `..` is correct only in a plain
- *  checkout: from a git worktree it lands in `.claude/worktrees/`, which is
- *  why running the engine from a worktree needs UNBIASED_ENGINE_DIR every
- *  time. Walking up finds the sibling from either. */
+ *  the old single-`..` engine lookup did. Walking up finds a sibling checkout
+ *  from ordinary nested worktrees too. */
 export function resolveSidecarDir(opts: { isPackaged: boolean; resourcesPath: string; appPath: string }): string {
   const override = process.env.UNBIASED_LEARNING_DIR;
   if (override) return override;
