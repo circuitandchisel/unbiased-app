@@ -10268,14 +10268,14 @@ function ChatPane({
           )}
           {busy && !compacting && (
             // Bare status line, no bubble: "thinking… Ns" until the first
-            // output, then "waiting…" while the turn is still running
-            // (streaming pauses, sub-agents working). Static text while
-            // blocked on the human — shimmer means the MACHINE is busy.
+            // output, then "waiting… Ns" while the turn is still running
+            // (streaming pauses, sub-agents working). The clock freezes
+            // while the turn is blocked on a human approval.
             <div style={{ display: "flex", margin: "10px 0" }}>
               {showThinking && !awaitingApproval ? (
                 <ShimmerText text={`thinking… ${formatDuration(elapsed)}`} fontSize={14} />
               ) : (
-                <ShimmerText text="waiting…" fontSize={14} />
+                <ShimmerText text={`waiting… ${formatDuration(elapsed)}`} fontSize={14} />
               )}
             </div>
           )}
