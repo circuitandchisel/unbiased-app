@@ -59,6 +59,11 @@ export function parseVisualMessages(source: string): VisualMessage[] | null {
         if (!record(component) || typeof component.id !== "string" || component.id.length > 64 ||
             !COMPONENTS.has(String(component.component))) return null;
         if (component.component === "Icon" && record(component.name)) return null;
+        if (component.component === "Text" && "value" in component) {
+          if ("text" in component) return null;
+          component.text = component.value;
+          delete component.value;
+        }
         if (component.id === "root") hasRoot = true;
         if (component.component === "Card" && "children" in component) {
           if ("child" in component || !Array.isArray(component.children) || component.children.length === 0 ||

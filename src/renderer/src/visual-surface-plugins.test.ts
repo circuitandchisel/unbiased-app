@@ -129,3 +129,34 @@ test("renders the bundled local layout and input components", async () => {
     dom.window.close();
   }
 });
+
+test("renders a saved model reply with Text.value inside a Card", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { visualSurfaceForFence } = await import("./visual-surface-plugins");
+  const reply = [
+    { version: "v0.9", createSurface: { surfaceId: "graph-explainer", catalogId: VISUAL_CATALOG_ID } },
+    { version: "v0.9", updateComponents: { surfaceId: "graph-explainer", components: [
+      { id: "root", component: "Column", children: ["intro", "slider", "chart"] },
+      { id: "intro", component: "Card", children: ["intro-text"] },
+      { id: "intro-text", component: "Text", value: "A graph connects dots with lines." },
+      { id: "slider", component: "Slider", label: "Friends", value: { path: "/friends" }, min: 2, max: 10 },
+      { id: "chart", component: "BarChart", title: "Reach", bars: [{ label: "One step", value: { path: "/friends" } }] },
+    ] } },
+    { version: "v0.9", updateDataModel: { surfaceId: "graph-explainer", path: "/", value: { friends: 4 } } },
+  ];
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(StrictMode, null, visualSurfaceForFence("a2ui", JSON.stringify(reply)))));
+    assert.match(container.textContent ?? "", /A graph connects dots with lines/);
+    assert.equal(container.querySelector('[role="meter"][aria-label="One step"]')?.getAttribute("aria-valuenow"), "4");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

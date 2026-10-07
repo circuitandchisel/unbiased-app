@@ -21,6 +21,10 @@ rejects actions, function calls, remote URLs, unknown components, and oversized
 payloads. There is no model-to-Electron IPC path from these surfaces. An
 external plugin loader is deliberately **not** part of this first version:
 renderer implementations are bundled and reviewed with the app.
+For compatibility with model-generated replies, a Text component's `value`
+is normalized to the catalog's `text` property when `text` is absent.
+Slider changes update only the bound data path. Separate chart values are not
+automatically derived from that path.
 
 Example:
 

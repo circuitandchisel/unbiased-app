@@ -73,3 +73,16 @@ test("accepts local controls but rejects remote media and agent actions", () => 
   });
   assert.equal(parseVisualMessages(JSON.stringify(button)), null);
 });
+
+test("normalizes model-generated Text.value without accepting conflicting fields", () => {
+  const alias = structuredClone(valid);
+  const text = alias[1].updateComponents!.components[1] as Record<string, unknown>;
+  text.value = text.text;
+  delete text.text;
+  const parsed = parseVisualMessages(JSON.stringify(alias));
+  assert.ok(parsed);
+  assert.deepEqual((parsed[1].updateComponents as { components: Record<string, unknown>[] }).components[1].text, { path: "/label" });
+
+  text.text = "Different";
+  assert.equal(parseVisualMessages(JSON.stringify(alias)), null);
+});
