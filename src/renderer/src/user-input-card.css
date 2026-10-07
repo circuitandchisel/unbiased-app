@@ -5,6 +5,80 @@
   font-family: var(--font-ui);
 }
 
+.u-user-input-dock {
+  box-sizing: border-box;
+  max-width: 768px;
+  max-height: min(50vh, 520px);
+  min-width: 0;
+  margin: 0 auto 8px;
+  padding: 12px 16px 14px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.14);
+}
+
+.u-user-input-dock .u-user-input {
+  max-width: none;
+  margin: 0;
+}
+
+.u-user-input-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.u-user-input-dock .u-user-input-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: -4px 0 0;
+  padding: 4px 0 8px;
+  background: var(--panel);
+}
+
+.u-user-input-count {
+  margin-left: 4px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.u-user-input-nav {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.u-user-input-nav button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.u-user-input-nav button:hover:not(:disabled) {
+  background: var(--chip-raised);
+}
+
+.u-user-input-nav button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.u-user-input-nav button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .u-user-input-eyebrow {
   display: flex;
   align-items: center;
@@ -74,6 +148,15 @@
   transition: background 140ms ease, border-color 140ms ease;
 }
 
+.u-user-input-dock .u-user-input-option,
+.u-user-input-dock .u-user-input-control {
+  background: var(--panel-2);
+}
+
+.u-user-input-dock .u-user-input-option:hover:not([data-selected="true"]) {
+  background: var(--chip-raised);
+}
+
 .u-user-input-option:hover {
   background: var(--panel-2);
 }
@@ -83,7 +166,7 @@
   background: color-mix(in srgb, var(--accent) 8%, var(--panel));
 }
 
-.u-user-input-option:focus-within {
+.u-user-input-option:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

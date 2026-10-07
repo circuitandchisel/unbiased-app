@@ -46,6 +46,7 @@ import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusA
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
 import { visualFenceContent } from "./visual-surface-plugins";
 import { validateUserInput, withoutUserInputDefaults, type UserInputRequest, type UserInputValue } from "../../shared/user-input";
+import { firstInvalidQuestionIndex, validateQuestion } from "./user-input-navigation";
 
 type EngineStatus =
   | { state: "starting" }
@@ -9170,6 +9171,7 @@ function ChatPane({
   );
   const awaitingInput = entries.some((e, i) =>
     i >= turnScopeStart && e.kind === "userInput" && e.status === "waiting");
+  const pendingUserInput = collectUserInputs(entries).find((entry) => entry.status === "waiting");
 
   // Pareto completes the whole response before its first byte arrives
   // (~3-5s of silence), so the wait needs to look attended, not frozen.
@@ -9937,6 +9939,7 @@ function ChatPane({
     }
     const e = block.entry;
     if (e.kind === "userInput") {
+      if (e.status === "waiting") return null;
       return <UserInputCard key={e.request.requestId} entry={e} onSubmit={submitUserInput} />;
     }
     if (e.kind === "user") {
@@ -10489,6 +10492,9 @@ function ChatPane({
             ))}
           </div>
         )}
+        {pendingUserInput && <div className="u-user-input-dock">
+          <UserInputCard key={pendingUserInput.request.requestId} entry={pendingUserInput} onSubmit={submitUserInput} />
+        </div>}
         <div
           style={{
             position: "relative",
@@ -18433,7 +18439,12 @@ function UserInputCard({
   const [other, setOther] = useState<Record<string, boolean>>({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldIndex, setFieldIndex] = useState(0);
+  const cardRef = useRef<HTMLElement>(null);
   const singleQuestion = request.source !== "mcp" && request.fields.length === 1;
+  useEffect(() => {
+    cardRef.current?.closest(".u-user-input-dock")?.scrollTo({ top: 0 });
+  }, [fieldIndex]);
   const setValue = (id: string, value: UserInputValue | undefined) => {
     setValues((current) => {
       const next = { ...current };
@@ -18447,7 +18458,12 @@ function UserInputCard({
     if (working) return;
     if (action === "submit") {
       const checked = validateUserInput(request.fields, values);
-      if (!checked.ok) { setError(checked.error); return; }
+      if (!checked.ok) {
+        const invalidIndex = firstInvalidQuestionIndex(request.fields, values);
+        if (invalidIndex >= 0) setFieldIndex(invalidIndex);
+        setError(checked.error);
+        return;
+      }
     }
     setWorking(true);
     try {
@@ -18459,24 +18475,46 @@ function UserInputCard({
       setWorking(false);
     }
   };
+  const advance = () => {
+    if (fieldIndex === request.fields.length - 1) {
+      void submit("submit");
+      return;
+    }
+    const checked = validateQuestion(request.fields, values, fieldIndex);
+    if (!checked.ok) { setError(checked.error); return; }
+    setError(null);
+    setFieldIndex(fieldIndex + 1);
+  };
   return (
     <section
+      ref={cardRef}
       aria-label="Question from the agent"
       className="u-user-input"
     >
-      <div className="u-user-input-eyebrow">
-        <MessageSquare size={14} strokeWidth={1.75} aria-hidden="true" />
-        {request.source === "mcp" ? `MCP request: ${request.sourceName ?? "server"}` : request.agentName ? `${request.agentName} asks` : "Question"}
+      <div className="u-user-input-header">
+        <div className="u-user-input-eyebrow">
+          <MessageSquare size={14} strokeWidth={1.75} aria-hidden="true" />
+          {request.source === "mcp" ? `MCP request: ${request.sourceName ?? "server"}` : request.agentName ? `${request.agentName} asks` : "Question"}
+          {status === "waiting" && request.fields.length > 1 && <span className="u-user-input-count">
+            {fieldIndex + 1} of {request.fields.length}
+          </span>}
+        </div>
+        {status === "waiting" && request.fields.length > 1 && <div className="u-user-input-nav" aria-label="Questions">
+          <button type="button" aria-label="Previous question" title="Previous question" disabled={working || fieldIndex === 0}
+            onClick={() => { setError(null); setFieldIndex(fieldIndex - 1); }}><ChevronLeft size={16} /></button>
+          <button type="button" aria-label="Next question" title="Next question" disabled={working || fieldIndex === request.fields.length - 1}
+            onClick={() => { setError(null); setFieldIndex(fieldIndex + 1); }}><ChevronRight size={16} /></button>
+        </div>}
       </div>
-      {(!singleQuestion || status !== "waiting") && <div className="u-user-input-title">
+      {(request.source === "mcp" || status !== "waiting") && <div className="u-user-input-title">
         {singleQuestion ? request.fields[0].label : request.title}
       </div>}
       {status === "waiting" ? (
-        <form onSubmit={(event) => { event.preventDefault(); void submit("submit"); }}>
+        <form onSubmit={(event) => { event.preventDefault(); advance(); }}>
           {request.fields.map((field, index) => (
-            <div key={field.id} className={`u-user-input-field${singleQuestion && index === 0 ? " u-user-input-field--primary" : ""}`}>
+            index === fieldIndex && <div key={field.id} className="u-user-input-field u-user-input-field--primary">
               <label htmlFor={`${request.requestId}-${field.id}`}
-                className={singleQuestion ? "u-user-input-title" : "u-user-input-field-label"}>
+                className="u-user-input-title">
                 {field.label}{field.required ? " *" : ""}
               </label>
               {field.description && <div className="u-user-input-description">
@@ -18553,7 +18591,9 @@ function UserInputCard({
             <button type="button" disabled={working} onClick={() => void submit("cancel")}
               className="u-user-input-action u-user-input-action--secondary">Cancel</button>
             <button type="submit" disabled={working}
-              className="u-user-input-action u-user-input-action--primary">Continue</button>
+              className="u-user-input-action u-user-input-action--primary">
+              {fieldIndex === request.fields.length - 1 ? "Continue" : "Next"}
+            </button>
           </div>
         </form>
       ) : <div className="u-user-input-status">
