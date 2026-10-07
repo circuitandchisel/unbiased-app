@@ -169,9 +169,14 @@ test("registers the whiteboard in the saved A2UI catalog", async () => {
   const board = [
     { version: "v0.9", createSurface: { surfaceId: "board", catalogId: VISUAL_CATALOG_ID } },
     { version: "v0.9", updateComponents: { surfaceId: "board", components: [
-      { id: "root", component: "Column", children: ["drawing"] },
+      { id: "root", component: "Column", children: ["drawing", "directed"] },
       { id: "drawing", component: "Whiteboard", title: "Graph", shapes: [
         { id: "node", type: "circle", x: 100, y: 100, width: 80, fill: "#5da5e8", label: "Maya" },
+      ] },
+      { id: "directed", component: "Whiteboard", title: "Directed graph", shapes: [
+        { id: "source", type: "circle", x: 100, y: 100, width: 80, label: "Maya" },
+        { id: "target", type: "circle", x: 300, y: 100, width: 80, label: "Sam" },
+        { id: "edge", type: "connector", from: "source", to: "target", label: "follows" },
       ] },
     ] } },
   ];

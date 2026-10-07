@@ -1021,7 +1021,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "Lines and arrows may have width 0 or height 0 for vertical or horizontal strokes, but not both.",
   "Emit strict JSON: close the components array and updateComponents object before the message array.",
   "For a graph, use labeled nodes and connector shapes with from/to node IDs, never free lines for edges.",
-  "Connectors attach to node boundaries and follow nodes when moved. Example shapes:",
+  "Connectors may have a short label and directed true for arrows; they follow nodes when moved. Example shapes:",
   '[{"id":"maya","type":"circle","x":100,"y":120,"width":80,"fill":"#5da5e8","label":"Maya"},',
   '{"id":"sam","type":"circle","x":320,"y":120,"width":80,"fill":"#45c9a5","label":"Sam"},',
   '{"id":"friendship","type":"connector","from":"maya","to":"sam","stroke":"#94a3b4"}].',

@@ -32,6 +32,7 @@ const connectorShapeSchema = z.object({
   to: shapeId,
   stroke: color.optional(),
   directed: z.boolean().optional(),
+  label: z.string().max(80).optional(),
 }).strict();
 
 export const whiteboardShapeSchema = z.union([drawableShapeSchema, connectorShapeSchema]);

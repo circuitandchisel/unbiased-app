@@ -31,7 +31,7 @@ Whiteboard accepts up to 60 bounded shapes: circle, oval, square, rectangle,
 triangle, line, arrow, and connector. Drawable shapes have a unique ID, type,
 x/y, width, optional height, fill/stroke hex colors, and optional label.
 Connectors use `from` and `to` IDs of different drawable nodes, an optional
-stroke color, and optional `directed` boolean. Their endpoints follow the
+stroke color, optional short label, and optional `directed` boolean. Their endpoints follow the
 nodes as they move. Use connectors for graph edges and free lines/arrows for
 unattached strokes. Horizontal and vertical lines may use zero on one
 dimension. Coordinates use an

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Arrow, Circle, Ellipse, Layer, Line, Rect, RegularPolygon, Stage, Text } from "react-konva";
+import { Arrow, Circle, Ellipse, Label, Layer, Line, Rect, RegularPolygon, Stage, Tag, Text } from "react-konva";
 import { ArrowRight, Circle as CircleIcon, Download, Ellipse as EllipseIcon, Minus, MousePointer2, RectangleHorizontal, Square, Trash2, Triangle } from "lucide-react";
 import type Konva from "konva";
 import type { ConnectorShape, DrawableShape, WhiteboardShape } from "./whiteboard-model";
@@ -60,9 +60,16 @@ function Connector({ shape, from, to, selected, onSelect }: {
     onClick: onSelect,
     onTap: onSelect,
   };
-  return shape.directed
-    ? <Arrow {...props} fill={props.stroke} pointerLength={10} pointerWidth={9} />
-    : <Line {...props} />;
+  const labelWidth = shape.label ? Math.min(160, Math.max(48, shape.label.length * 7 + 12)) : 0;
+  return <>
+    {shape.directed
+      ? <Arrow {...props} fill={props.stroke} pointerLength={10} pointerWidth={9} />
+      : <Line {...props} />}
+    {shape.label && <Label x={(points[0] + points[2] - labelWidth) / 2} y={(points[1] + points[3]) / 2 - 12} listening={false}>
+      <Tag fill="#252a31" cornerRadius={5} stroke="#4a5563" strokeWidth={1} />
+      <Text text={shape.label} width={labelWidth} padding={4} fontSize={12} fontFamily="sans-serif" align="center" fill="#f4f6f8" />
+    </Label>}
+  </>;
 }
 
 export function Whiteboard({ title, initialShapes }: { title?: string; initialShapes: WhiteboardShape[] }) {

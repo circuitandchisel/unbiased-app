@@ -118,7 +118,7 @@ test("validates whiteboard connectors against distinct node IDs", () => {
   const shapes = [
     { id: "maya", type: "circle", x: 60, y: 80, width: 70, label: "Maya" },
     { id: "sam", type: "circle", x: 250, y: 80, width: 70, label: "Sam" },
-    { id: "edge", type: "connector", from: "maya", to: "sam", directed: true },
+    { id: "edge", type: "connector", from: "maya", to: "sam", directed: true, label: "follows" },
   ];
   components.splice(1, 2, { id: "board", component: "Whiteboard", shapes });
   assert.ok(parseVisualMessages(JSON.stringify(board)));
