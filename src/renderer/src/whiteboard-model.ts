@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 const coordinate = z.number().finite().min(0).max(800);
-const size = z.number().finite().min(4).max(800);
+const size = z.number().finite().min(0).max(800);
 const color = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
 export const whiteboardShapeSchema = z.object({
@@ -14,8 +14,13 @@ export const whiteboardShapeSchema = z.object({
   fill: color.optional(),
   stroke: color.optional(),
   label: z.string().max(80).optional(),
-}).strict().refine(
-  (shape) => shape.x + shape.width <= 800 && shape.y + (shape.height ?? shape.width) <= 450,
+}).strict().refine((shape) => {
+  const isLine = shape.type === "line" || shape.type === "arrow";
+  return isLine
+    ? shape.width > 0 || (shape.height ?? 0) > 0
+    : shape.width >= 4 && (shape.height === undefined || shape.height >= 4);
+}, "Shape must have a visible size").refine(
+  (shape) => shape.x + shape.width <= 800 && shape.y + (shape.height ?? (shape.type === "line" || shape.type === "arrow" ? 0 : shape.width)) <= 450,
   "Shape must fit within the board",
 );
 

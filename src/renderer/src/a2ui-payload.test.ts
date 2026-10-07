@@ -110,3 +110,24 @@ test("accepts a bounded whiteboard but rejects malformed or unsafe shapes", () =
   (components[1].shapes as Record<string, unknown>[]).push({ ...shape });
   assert.equal(parseVisualMessages(JSON.stringify(board)), null);
 });
+
+test("repairs model closing brackets and accepts horizontal and vertical lines", () => {
+  const reply = [
+    { version: "v0.9", createSurface: { surfaceId: "graph", catalogId: VISUAL_CATALOG_ID } },
+    { version: "v0.9", updateComponents: { surfaceId: "graph", components: [
+      { id: "root", component: "Column", children: ["board"] },
+      { id: "board", component: "Whiteboard", shapes: [
+        { id: "horizontal", type: "line", x: 20, y: 40, width: 180, height: 0, stroke: "#b0b8c4" },
+        { id: "vertical", type: "line", x: 200, y: 40, width: 0, height: 120, stroke: "#b0b8c4" },
+        { id: "person", type: "circle", x: 140, y: 120, width: 80, fill: "#4f8ef7", label: "Maya" },
+      ] },
+    ] } },
+  ];
+  const malformed = JSON.stringify(reply).replace(/\]\}\}\]$/, "]]]}");
+  const parsed = parseVisualMessages(malformed);
+  assert.ok(parsed);
+  assert.equal((parsed[1].updateComponents as { components: unknown[] }).components.length, 2);
+
+  const unsafe = malformed.replace('"component":"Whiteboard"', '"component":"Whiteboard","action":{"event":"send"}');
+  assert.equal(parseVisualMessages(unsafe), null);
+});

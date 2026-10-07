@@ -162,7 +162,7 @@ test("renders a saved model reply with Text.value inside a Card", async () => {
 });
 
 test("registers the whiteboard in the saved A2UI catalog", async () => {
-  const { createVisualSurfaceState } = await import("./visual-surface-plugins");
+  const { visualSurfaceForFence } = await import("./visual-surface-plugins");
   const board = [
     { version: "v0.9", createSurface: { surfaceId: "board", catalogId: VISUAL_CATALOG_ID } },
     { version: "v0.9", updateComponents: { surfaceId: "board", components: [
@@ -172,7 +172,5 @@ test("registers the whiteboard in the saved A2UI catalog", async () => {
       ] },
     ] } },
   ];
-  const state = createVisualSurfaceState(board);
-  assert.ok(state);
-  state.processor.dispose();
+  assert.ok(visualSurfaceForFence("a2ui", JSON.stringify(board)));
 });

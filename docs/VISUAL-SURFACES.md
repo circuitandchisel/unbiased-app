@@ -4,7 +4,8 @@ Assistant Markdown can contain a fenced `a2ui` JSON array. The chat renderer
 looks up that language in its bundled visual-surface registry and renders a
 validated A2UI v0.9 surface. The original assistant text is still saved by the
 existing transcript path, so the surface is reconstructed after reopening a
-conversation. Incomplete, malformed, or unsupported fences remain code blocks.
+conversation. A bounded JSON repair pass handles minor model syntax mistakes
+before validation; incomplete or unsupported fences remain code blocks.
 
 The first bundled plugin is in `src/renderer/src/visual-surface-plugins.tsx`.
 It uses `@a2ui/react` with the app-owned catalog
@@ -28,7 +29,8 @@ automatically derived from that path.
 
 Whiteboard accepts up to 60 bounded shapes: circle, oval, square, rectangle,
 triangle, line, and arrow. Each shape has a unique ID, type, x/y, width,
-optional height, fill/stroke hex colors, and optional label. Coordinates use an
+optional height, fill/stroke hex colors, and optional label. Horizontal and
+vertical lines may use zero on one dimension. Coordinates use an
 800x450 board and scale to the chat width. Users can add, select, drag,
 recolor, delete, and export shapes as PNG. Edits are local to the mounted
 view; the saved transcript retains the agent's original shape data.

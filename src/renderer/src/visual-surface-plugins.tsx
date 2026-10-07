@@ -44,7 +44,7 @@ const visualCatalog = new Catalog(VISUAL_CATALOG_ID, "0.9", [
   Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, BarChart, WhiteboardComponent,
 ]);
 
-export function createVisualSurfaceState(messages: VisualMessage[]) {
+function createVisualSurfaceState(messages: VisualMessage[]) {
   const processor = new MessageProcessor<ReactComponentImplementation>([visualCatalog]);
   try {
     processor.processMessages(messages);

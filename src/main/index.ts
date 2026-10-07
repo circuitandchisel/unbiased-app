@@ -1018,6 +1018,8 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "Use Whiteboard for spatial diagrams and node-edge graphs rather than BarChart. Whiteboard takes",
   "shapes (up to 60) with unique id, type circle|oval|square|rectangle|triangle|line|arrow,",
   "x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Coordinates fit 800x450.",
+  "Lines and arrows may have width 0 or height 0 for vertical or horizontal strokes, but not both.",
+  "Emit strict JSON: close the components array and updateComponents object before the message array.",
   "For a graph, use labeled circles and lines/arrows between them. Example shape:",
   '{"id":"maya","type":"circle","x":100,"y":120,"width":80,"fill":"#5da5e8","label":"Maya"}.',
   'Place the board in components as {"id":"root","component":"Column","children":["board"]},',

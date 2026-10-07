@@ -1,5 +1,7 @@
-export const VISUAL_CATALOG_ID = "https://unbiased.ai/a2ui/visual-v1";
+import { jsonrepair } from "jsonrepair";
 import { whiteboardSchema } from "./whiteboard-model";
+
+export const VISUAL_CATALOG_ID = "https://unbiased.ai/a2ui/visual-v1";
 
 export type VisualMessage = Record<string, unknown>;
 
@@ -28,7 +30,13 @@ export function parseVisualMessages(source: string): VisualMessage[] | null {
   try {
     payload = JSON.parse(source);
   } catch {
-    return null;
+    try {
+      const repaired = jsonrepair(source);
+      if (repaired.length > 40_000) return null;
+      payload = JSON.parse(repaired);
+    } catch {
+      return null;
+    }
   }
   if (!Array.isArray(payload) || payload.length < 2 || payload.length > 16 || hasForbiddenKeys(payload)) return null;
 
