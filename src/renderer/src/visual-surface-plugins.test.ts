@@ -86,3 +86,46 @@ test("renders a Card with model-generated children and keeps its slider interact
     dom.window.close();
   }
 });
+
+test("renders the bundled local layout and input components", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { visualSurfaceForFence } = await import("./visual-surface-plugins");
+  const controls = [
+    { version: "v0.9", createSurface: { surfaceId: "controls", catalogId: VISUAL_CATALOG_ID } },
+    { version: "v0.9", updateComponents: { surfaceId: "controls", components: [
+      { id: "root", component: "Column", children: ["icon", "list", "tabs", "name", "agree", "choice", "date"] },
+      { id: "icon", component: "Icon", name: "info" },
+      { id: "list", component: "List", children: ["item"] },
+      { id: "item", component: "Text", text: "First item" },
+      { id: "tabs", component: "Tabs", tabs: [{ title: "First", child: "first" }, { title: "Second", child: "second" }] },
+      { id: "first", component: "Text", text: "First panel" },
+      { id: "second", component: "Text", text: "Second panel" },
+      { id: "name", component: "TextField", label: "Name", value: { path: "/name" } },
+      { id: "agree", component: "CheckBox", label: "Agree", value: { path: "/agree" } },
+      { id: "choice", component: "ChoicePicker", label: "Color", options: [{ label: "Red", value: "red" }], value: { path: "/colors" } },
+      { id: "date", component: "DateTimeInput", label: "Date", value: { path: "/date" }, enableDate: true },
+    ] } },
+    { version: "v0.9", updateDataModel: { surfaceId: "controls", path: "/", value: { name: "Maya", agree: false, colors: [], date: "" } } },
+  ];
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(StrictMode, null, visualSurfaceForFence("a2ui", JSON.stringify(controls)))));
+    assert.match(container.textContent ?? "", /First item/);
+    assert.match(container.textContent ?? "", /First panel/);
+    assert.equal((container.querySelector('input[type="text"]') as HTMLInputElement | null)?.value, "Maya");
+    assert.ok(container.querySelector('input[type="checkbox"]'));
+    await act(async () => {
+      Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Second")?.click();
+    });
+    assert.match(container.textContent ?? "", /Second panel/);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

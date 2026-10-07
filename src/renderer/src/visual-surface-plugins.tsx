@@ -1,7 +1,7 @@
 import { type CSSProperties, type ReactElement } from "react";
 import { z } from "zod";
 import { Catalog, CommonSchemas, MessageProcessor } from "@a2ui/web_core/v0_9";
-import { A2uiSurface, Card, Column, createComponentImplementation, Divider, Row, Slider, Text, type ReactComponentImplementation } from "@a2ui/react/v0_9";
+import { A2uiSurface, AudioPlayer, Button, Card, CheckBox, ChoicePicker, Column, createComponentImplementation, DateTimeInput, Divider, Icon, Image, List, Modal, Row, Slider, Tabs, Text, TextField, Video, type ReactComponentImplementation } from "@a2ui/react/v0_9";
 import { parseVisualMessages, VISUAL_CATALOG_ID, type VisualMessage } from "./a2ui-payload";
 
 const BarChart = createComponentImplementation({
@@ -32,7 +32,10 @@ const BarChart = createComponentImplementation({
   );
 });
 
-const visualCatalog = new Catalog(VISUAL_CATALOG_ID, "0.9", [Text, Column, Row, Card, Divider, Slider, BarChart]);
+const visualCatalog = new Catalog(VISUAL_CATALOG_ID, "0.9", [
+  Text, Image, Icon, Video, AudioPlayer, Row, Column, List, Card, Tabs, Divider,
+  Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, BarChart,
+]);
 
 export function createVisualSurfaceState(messages: VisualMessage[]) {
   const processor = new MessageProcessor<ReactComponentImplementation>([visualCatalog]);
@@ -55,15 +58,35 @@ function A2uiVisualSurface({ state }: { state: VisualState }) {
     <div
       aria-label="Interactive visual"
       style={{
-        background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 8,
-        padding: 16, margin: "12px 0", maxWidth: "100%", overflow: "auto",
-        fontFamily: "inherit", fontSize: 14, lineHeight: 1.5,
+        margin: "12px 0", maxWidth: "100%", overflow: "auto",
+        fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.5,
         "--a2ui-color-primary": "var(--accent)",
+        "--a2ui-color-on-primary": "var(--accent-fg)",
         "--a2ui-color-on-background": "var(--fg-msg)",
         "--a2ui-color-surface": "var(--panel)",
+        "--a2ui-color-on-surface": "var(--fg-msg)",
         "--a2ui-color-border": "var(--border)",
-        "--a2ui-font-size-m": "14px", "--a2ui-font-size-s": "13px",
+        "--a2ui-color-input": "var(--panel-2)",
+        "--a2ui-color-on-input": "var(--fg)",
+        "--a2ui-color-on-secondary": "var(--fg)",
+        "--a2ui-color-secondary": "var(--chip)",
+        "--a2ui-color-secondary-hover": "var(--chip-raised)",
+        "--a2ui-color-primary-hover": "var(--accent)",
+        "--a2ui-color-border-hover": "var(--fg-soft)",
+        "--a2ui-text-caption-color": "var(--dim)",
+        "--a2ui-font-family-title": "var(--font-ui)",
+        "--a2ui-font-size-2xl": "24px", "--a2ui-font-size-xl": "20px",
+        "--a2ui-font-size-l": "17px", "--a2ui-font-size-m": "14px",
+        "--a2ui-font-size-s": "13px", "--a2ui-font-size-xs": "12px",
+        "--a2ui-spacing-xs": "4px", "--a2ui-spacing-s": "6px",
         "--a2ui-spacing-m": "8px", "--a2ui-spacing-l": "12px",
+        "--a2ui-border-radius": "8px", "--a2ui-textfield-border-radius": "6px",
+        "--a2ui-choicepicker-chip-border-radius": "6px",
+        "--a2ui-card-border": "1px solid var(--border)",
+        "--a2ui-card-box-shadow": "none", "--a2ui-card-margin": "0",
+        "--a2ui-tabs-header-background-active": "var(--chip)",
+        "--a2ui-tabs-content-padding": "0",
+        "--a2ui-label-font-weight": "500", "--a2ui-button-margin": "0",
       } as CSSProperties}
     >
       <A2uiSurface surface={state.surface} />

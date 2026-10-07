@@ -2,7 +2,11 @@ export const VISUAL_CATALOG_ID = "https://unbiased.ai/a2ui/visual-v1";
 
 export type VisualMessage = Record<string, unknown>;
 
-const COMPONENTS = new Set(["Text", "Column", "Row", "Card", "Divider", "Slider", "BarChart"]);
+const COMPONENTS = new Set([
+  "Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List",
+  "Card", "Tabs", "Divider", "Modal", "Button", "TextField", "CheckBox",
+  "ChoicePicker", "Slider", "DateTimeInput", "BarChart",
+]);
 const OPERATIONS = new Set(["createSurface", "updateComponents", "updateDataModel"]);
 const FORBIDDEN_KEYS = new Set(["action", "functionCall", "call", "url", "src", "href", "inlineCatalogs"]);
 
@@ -54,6 +58,7 @@ export function parseVisualMessages(source: string): VisualMessage[] | null {
       for (const component of body.components) {
         if (!record(component) || typeof component.id !== "string" || component.id.length > 64 ||
             !COMPONENTS.has(String(component.component))) return null;
+        if (component.component === "Icon" && record(component.name)) return null;
         if (component.id === "root") hasRoot = true;
         if (component.component === "Card" && "children" in component) {
           if ("child" in component || !Array.isArray(component.children) || component.children.length === 0 ||

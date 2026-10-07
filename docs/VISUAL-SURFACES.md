@@ -8,8 +8,11 @@ conversation. Incomplete, malformed, or unsupported fences remain code blocks.
 
 The first bundled plugin is in `src/renderer/src/visual-surface-plugins.tsx`.
 It uses `@a2ui/react` with the app-owned catalog
-`https://unbiased.ai/a2ui/visual-v1`: Text, Column, Row, Card, Divider,
-Slider, and BarChart. Adding a renderer means adding a registry entry and a
+`https://unbiased.ai/a2ui/visual-v1`. The catalog registers the 18 basic A2UI
+components plus the app's BarChart. The model is currently guided toward the
+safe text, layout, form, and chart components. Remote media and action-bearing
+controls are registered but cannot be used until the app has explicit media
+and action handling. Adding a renderer means adding a registry entry and a
 parser; it does not require changing conversation persistence. AG-UI, if
 adopted later, can carry the same A2UI messages through a transport adapter.
 

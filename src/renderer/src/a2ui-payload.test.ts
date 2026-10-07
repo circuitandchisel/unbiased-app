@@ -31,7 +31,7 @@ test("rejects actions, unknown components and extra surfaces", () => {
   assert.equal(parseVisualMessages(JSON.stringify(action)), null);
 
   const unknown = structuredClone(valid);
-  unknown[1].updateComponents!.components[0].component = "Image";
+  unknown[1].updateComponents!.components[0].component = "UnregisteredWidget";
   assert.equal(parseVisualMessages(JSON.stringify(unknown)), null);
 
   const secondSurface = structuredClone(valid);
@@ -51,4 +51,25 @@ test("rejects invalid Card child aliases", () => {
     component: "Card", children: Array(41).fill("label"),
   });
   assert.equal(parseVisualMessages(JSON.stringify(tooMany)), null);
+});
+
+test("accepts local controls but rejects remote media and agent actions", () => {
+  const controls = structuredClone(valid);
+  Object.assign(controls[1].updateComponents!.components[1], {
+    component: "TextField", label: "Name", value: { path: "/name" },
+  });
+  delete controls[1].updateComponents!.components[1].text;
+  assert.ok(parseVisualMessages(JSON.stringify(controls)));
+
+  const media = structuredClone(valid);
+  Object.assign(media[1].updateComponents!.components[1], {
+    component: "Image", url: "https://example.com/pixel.png",
+  });
+  assert.equal(parseVisualMessages(JSON.stringify(media)), null);
+
+  const button = structuredClone(valid);
+  Object.assign(button[1].updateComponents!.components[1], {
+    component: "Button", action: { event: { name: "submit" } },
+  });
+  assert.equal(parseVisualMessages(JSON.stringify(button)), null);
 });
