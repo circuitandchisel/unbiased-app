@@ -35,6 +35,7 @@ import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
+import { validateUserInput, withoutUserInputDefaults, type UserInputRequest, type UserInputValue } from "../../shared/user-input";
 
 type EngineStatus =
   | { state: "starting" }
@@ -57,6 +58,7 @@ type CommandItem = {
 type Entry =
   | { kind: "user"; text: string; at?: number; annotations?: SentAnnotation[]; attachments?: Attachment[] }
   | { kind: "compaction" }
+  | { kind: "userInput"; request: UserInputRequest; status: "waiting" | "answered" | "canceled" | "expired" }
   | {
       kind: "assistant";
       text: string;
@@ -503,6 +505,7 @@ type HeldApproval = {
   // the card renders in the parent's pane, tagged with the agent's name.
   agentName?: string;
 };
+type UserInputEvent = UserInputRequest & { paneId: PaneId };
 
 // A spawned sub-agent (multi-agent v2): its own engine thread, grouped
 // under the parent conversation. name = the model-chosen task name.
@@ -610,6 +613,12 @@ declare global {
         decision: ApprovalDecision,
       ) => Promise<{ ok: boolean; expired?: boolean }>;
       liveApprovals: () => Promise<{ requestIds: string[] }>;
+      liveUserInputs: () => Promise<{ requestIds: string[] }>;
+      submitUserInput: (
+        requestId: string,
+        action: "submit" | "cancel",
+        values?: Record<string, UserInputValue>,
+      ) => Promise<{ ok: boolean; expired?: boolean; error?: string }>;
       mcpList: () => Promise<{ connected: McpConnected[]; configured: McpServerConfig[]; error: string | null; configError: string | null }>;
       mcpSave: (servers: McpServerConfig[]) => Promise<{ ok: boolean; error?: string }>;
       mcpApply: () => Promise<{ ok: boolean; busy?: boolean }>;
@@ -714,6 +723,8 @@ declare global {
           message?: string | null;
         }) => void,
       ) => () => void;
+      onUserInputRequest: (cb: (p: UserInputEvent) => void) => () => void;
+      onUserInputCanceled: (cb: (p: { paneId: PaneId; requestId: string }) => void) => () => void;
       onCommand: (
         cb: (p: { paneId: PaneId; phase: "started" | "completed"; item: CommandItem }) => void,
       ) => () => void;
@@ -747,6 +758,7 @@ declare global {
         running: boolean;
         streamText: string;
         approvals: HeldApproval[];
+        userInputs: UserInputRequest[];
         failure: string | null;
         /** Engine-assigned sub-agent nicknames, recovered from the rollout and
          *  carried with the transcript so they cannot lose a race against it. */
@@ -1739,7 +1751,7 @@ export function App() {
   const [mainReset, setMainReset] = useState<{
     entries: Entry[];
     nonce: number;
-    resume?: { running: boolean; approvals: HeldApproval[] } | null;
+    resume?: { running: boolean; approvals: HeldApproval[]; userInputs: UserInputRequest[] } | null;
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
   }>({ entries: [], nonce: 0 });
@@ -2199,7 +2211,7 @@ export function App() {
     setMainReset((r) => ({
       entries,
       nonce: r.nonce + 1,
-      resume: res.running ? { running: true, approvals: res.approvals } : null,
+      resume: res.running ? { running: true, approvals: res.approvals, userInputs: res.userInputs ?? [] } : null,
     }));
     if (!restoreSideView(id)) resetSideView();
     // The engine may still be running spawns for this thread — pick up the
@@ -8469,7 +8481,7 @@ function ChatPane({
     entries: Entry[];
     nonce: number;
     // Present when the conversation was reopened mid-turn.
-    resume?: { running: boolean; approvals: HeldApproval[] } | null;
+    resume?: { running: boolean; approvals: HeldApproval[]; userInputs: UserInputRequest[] } | null;
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
   };
@@ -8901,6 +8913,20 @@ function ChatPane({
     });
   }
 
+  function mapUserInputsDeep(
+    es: Entry[], f: (e: Extract<Entry, { kind: "userInput" }>) => Entry,
+  ): Entry[] {
+    return es.map((e) => {
+      if (e.kind === "userInput") return f(e);
+      if (e.kind === "work") return { ...e, entries: mapUserInputsDeep(e.entries, f) };
+      return e;
+    });
+  }
+
+  function collectUserInputs(es: Entry[]): Extract<Entry, { kind: "userInput" }>[] {
+    return es.flatMap((e) => e.kind === "userInput" ? [e] : e.kind === "work" ? collectUserInputs(e.entries) : []);
+  }
+
   /** Every command entry, walking into folded work groups — the same reach as
    *  mapCommandsDeep, but reading rather than rewriting. */
   function collectCommands(es: Entry[]): CommandEntry[] {
@@ -8952,6 +8978,18 @@ function ChatPane({
     });
   }
 
+  function applyUserInput(request: UserInputRequest): void {
+    setEntries((entries) => {
+      const cleaned = withoutTrailingPlaceholder(entries);
+      if (collectUserInputs(cleaned).some((entry) => entry.request.requestId === request.requestId)) {
+        return mapUserInputsDeep(cleaned, (entry) => entry.request.requestId === request.requestId
+          ? { ...entry, status: "waiting", request }
+          : entry);
+      }
+      return [...cleaned, { kind: "userInput", request, status: "waiting" }];
+    });
+  }
+
   useEffect(() => {
     threadIdRef.current = threadId ?? null;
     followTranscriptRef.current = true;
@@ -8970,6 +9008,7 @@ function ChatPane({
       : null;
     turnStartedAtRef.current = reset.resume?.running ? (reset.runningTurnStartedAt ?? null) : null;
     for (const held of reset.resume?.approvals ?? []) applyApproval(held);
+    for (const request of reset.resume?.userInputs ?? []) applyUserInput(request);
     // A saved running step in an idle thread has no confirmed outcome.
     // Occupancy is a property of the conversation being left, not the one
     // being entered. The [threadId] effect below also clears it, but only when
@@ -9003,6 +9042,18 @@ function ChatPane({
         );
       });
     }
+    const restoredInputs = new Set(collectUserInputs(reset.entries)
+      .filter((entry) => entry.status === "waiting")
+      .map((entry) => entry.request.requestId));
+    if (restoredInputs.size > 0) {
+      void window.unbiased.liveUserInputs().then(({ requestIds }) => {
+        const live = new Set(requestIds);
+        setEntries((es) => mapUserInputsDeep(es, (entry) =>
+          entry.status === "waiting" && restoredInputs.has(entry.request.requestId) && !live.has(entry.request.requestId)
+            ? { ...entry, status: "expired" }
+            : entry));
+      });
+    }
     // Staged annotations belong to the conversation they came from.
     setAnnotations([]);
     setPendingComment(null);
@@ -9018,7 +9069,11 @@ function ChatPane({
     const id = threadIdRef.current;
     if (!id || entries.length === 0) return;
     const timer = setTimeout(() => {
-      void window.unbiased.saveTranscript(id, entries);
+      const withoutDefaults = (list: Entry[]): Entry[] => list.map((entry) =>
+        entry.kind === "userInput"
+          ? { ...entry, request: withoutUserInputDefaults(entry.request) }
+          : entry.kind === "work" ? { ...entry, entries: withoutDefaults(entry.entries) } : entry);
+      void window.unbiased.saveTranscript(id, withoutDefaults(entries));
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9043,6 +9098,8 @@ function ChatPane({
       !e.approval.decision &&
       !e.approval.expired,
   );
+  const awaitingInput = entries.some((e, i) =>
+    i >= turnScopeStart && e.kind === "userInput" && e.status === "waiting");
 
   // Pareto completes the whole response before its first byte arrives
   // (~3-5s of silence), so the wait needs to look attended, not frozen.
@@ -9052,12 +9109,12 @@ function ChatPane({
       setElapsed(0);
       return;
     }
-    if (awaitingApproval) return; // frozen while the human decides
+    if (awaitingApproval || awaitingInput) return; // frozen while the human decides
     const startedAt = Date.now() - elapsed * 1000;
     const timer = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 100);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, awaitingApproval]);
+  }, [busy, awaitingApproval, awaitingInput]);
 
   useEffect(() => {
     const offs = [
@@ -9137,7 +9194,7 @@ function ChatPane({
               const foldable = work
                 .filter((e) => e.kind !== "memory")
                 .map((e) => (e.kind === "assistant" && e.memories ? { ...e, memories: undefined } : e));
-              const didWork = foldable.some((e) => e.kind === "agent" || e.kind === "command");
+              const didWork = foldable.some((e) => e.kind === "agent" || e.kind === "command" || e.kind === "userInput");
               // Who did the work survives the fold as a pill per sub-agent.
               // Keyed on the thread, latest name wins: an agent is created
               // before it picks a nickname, so the "started" row can carry a
@@ -9243,6 +9300,18 @@ function ChatPane({
         // happen" in one function, disagreeing.
         producedRef.current = true;
         applyApproval(p);
+      }),
+      window.unbiased.onUserInputRequest((p) => {
+        if (p.paneId !== paneId) return;
+        producedRef.current = true;
+        applyUserInput(p);
+      }),
+      window.unbiased.onUserInputCanceled((p) => {
+        if (p.paneId !== paneId) return;
+        setEntries((es) => mapUserInputsDeep(es, (entry) =>
+          entry.request.requestId === p.requestId && entry.status === "waiting"
+            ? { ...entry, status: "canceled" }
+            : entry));
       }),
       // The owning turn died (interrupt/failure) — the engine dropped the
       // request, so live Allow/Deny buttons would decide into the void.
@@ -9610,6 +9679,19 @@ function ChatPane({
     }
   }
 
+  async function submitUserInput(
+    requestId: string, action: "submit" | "cancel", values?: Record<string, UserInputValue>,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const result = await window.unbiased.submitUserInput(requestId, action, values);
+    if (result.ok || result.expired) {
+      setEntries((es) => mapUserInputsDeep(es, (entry) =>
+        entry.request.requestId === requestId
+          ? { ...entry, status: result.expired ? "expired" : action === "submit" ? "answered" : "canceled" }
+          : entry));
+    }
+    return result;
+  }
+
   const statusLabel = (e: CommandEntry) => {
     if (e.status === "awaitingApproval")
       return e.approval?.expired
@@ -9784,6 +9866,9 @@ function ChatPane({
       );
     }
     const e = block.entry;
+    if (e.kind === "userInput") {
+      return <UserInputCard key={e.request.requestId} entry={e} onSubmit={submitUserInput} />;
+    }
     if (e.kind === "user") {
       return (
         <div
@@ -10272,7 +10357,7 @@ function ChatPane({
             // (streaming pauses, sub-agents working). Static text while
             // blocked on the human — shimmer means the MACHINE is busy.
             <div style={{ display: "flex", margin: "10px 0" }}>
-              {showThinking && !awaitingApproval ? (
+              {showThinking && !awaitingApproval && !awaitingInput ? (
                 <ShimmerText text={`thinking… ${formatDuration(elapsed)}`} fontSize={14} />
               ) : (
                 <ShimmerText text="waiting…" fontSize={14} />
@@ -18281,6 +18366,165 @@ function QueuedRow({
 // single card is pending; with more than one, which card Enter means is
 // genuinely ambiguous and guessing approves a command nobody read.
 const mountedPrompts = new Set<object>();
+
+function UserInputCard({
+  entry,
+  onSubmit,
+}: {
+  entry: Extract<Entry, { kind: "userInput" }>;
+  onSubmit: (requestId: string, action: "submit" | "cancel", values?: Record<string, UserInputValue>) =>
+    Promise<{ ok: boolean; error?: string }>;
+}) {
+  const { request, status } = entry;
+  const [values, setValues] = useState<Record<string, UserInputValue>>(() => Object.fromEntries(
+    request.fields.filter((field) => field.defaultValue !== undefined)
+      .map((field) => [field.id, field.defaultValue!]),
+  ));
+  const [other, setOther] = useState<Record<string, boolean>>({});
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setValue = (id: string, value: UserInputValue | undefined) => {
+    setValues((current) => {
+      const next = { ...current };
+      if (value === undefined) delete next[id];
+      else next[id] = value;
+      return next;
+    });
+    setError(null);
+  };
+  const submit = async (action: "submit" | "cancel") => {
+    if (working) return;
+    if (action === "submit") {
+      const checked = validateUserInput(request.fields, values);
+      if (!checked.ok) { setError(checked.error); return; }
+    }
+    setWorking(true);
+    try {
+      const result = await onSubmit(request.requestId, action, action === "submit" ? values : undefined);
+      if (!result.ok && result.error) setError(result.error);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <section
+      aria-label="Question from the agent"
+      style={{
+        margin: "14px 0", padding: "18px 20px", maxWidth: "var(--measure)",
+        border: `1px solid ${colors.border}`, borderRadius: 8,
+        background: "var(--panel-2)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
+        fontFamily: "var(--font-ui)",
+      }}
+    >
+      <div style={{ color: colors.dim, fontSize: 12.5, marginBottom: 5, overflowWrap: "anywhere" }}>
+        {request.source === "mcp" ? `MCP request: ${request.sourceName ?? "server"}` : request.agentName ? `${request.agentName} asks` : "Question"}
+      </div>
+      <div style={{ color: colors.fg, fontSize: 15, fontWeight: 600, lineHeight: 1.45, overflowWrap: "anywhere" }}>
+        {request.title}
+      </div>
+      {status === "waiting" ? (
+        <form onSubmit={(event) => { event.preventDefault(); void submit("submit"); }}>
+          {request.fields.map((field) => (
+            <div key={field.id} style={{ marginTop: 16 }}>
+              <label htmlFor={`${request.requestId}-${field.id}`}
+                style={{ display: "block", color: colors.fg, fontSize: 13.5, fontWeight: 500, lineHeight: 1.45 }}>
+                {field.label}{field.required ? " *" : ""}
+              </label>
+              {field.description && <div style={{ color: colors.dim, fontSize: 12.5, lineHeight: 1.45, marginTop: 3 }}>
+                {field.description}
+              </div>}
+              {field.type === "choice" ? (
+                <div role="radiogroup" aria-label={field.label} style={{ display: "grid", gap: 6, marginTop: 9 }}>
+                  {field.options?.map((option, index) => (
+                    <label key={option.value} style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer", fontSize: 13.5 }}>
+                      <input id={index === 0 ? `${request.requestId}-${field.id}` : undefined}
+                        type="radio" name={`${request.requestId}-${field.id}`} value={option.value}
+                        checked={!other[field.id] && values[field.id] === option.value}
+                        onChange={() => { setOther((current) => ({ ...current, [field.id]: false })); setValue(field.id, option.value); }}
+                        style={{ accentColor: colors.accent, marginTop: 2 }} />
+                      <span style={{ minWidth: 0, overflowWrap: "anywhere" }}><span style={{ color: colors.fg }}>{option.label}</span>
+                        {option.description && <span style={{ color: colors.dim }}> - {option.description}</span>}
+                      </span>
+                    </label>
+                  ))}
+                  {field.allowOther && <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13.5 }}>
+                    <input type="radio" name={`${request.requestId}-${field.id}`} checked={!!other[field.id]}
+                      onChange={() => { setOther((current) => ({ ...current, [field.id]: true })); setValue(field.id, ""); }}
+                      style={{ accentColor: colors.accent }} />
+                    <span>Other</span>
+                  </label>}
+                  {field.allowOther && other[field.id] && <input id={`${request.requestId}-${field.id}-other`}
+                    type={field.secret ? "password" : "text"} autoFocus maxLength={4000}
+                    value={typeof values[field.id] === "string" ? values[field.id] as string : ""}
+                    onChange={(event) => setValue(field.id, event.target.value)}
+                    placeholder="Your answer" style={userInputControlStyle} />}
+                </div>
+              ) : field.type === "multiChoice" ? (
+                <div role="group" aria-label={field.label} style={{ display: "grid", gap: 6, marginTop: 9 }}>
+                  {field.options?.map((option, index) => {
+                    const selected = Array.isArray(values[field.id]) ? values[field.id] as string[] : [];
+                    return <label key={option.value} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13.5 }}>
+                      <input id={index === 0 ? `${request.requestId}-${field.id}` : undefined}
+                        type="checkbox" checked={selected.includes(option.value)}
+                        onChange={() => setValue(field.id, selected.includes(option.value)
+                          ? selected.filter((value) => value !== option.value) : [...selected, option.value])}
+                        style={{ accentColor: colors.accent }} />
+                      <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{option.label}</span>
+                    </label>;
+                  })}
+                </div>
+              ) : field.type === "text" ? (
+                field.secret ? <input id={`${request.requestId}-${field.id}`} type="password"
+                  value={typeof values[field.id] === "string" ? values[field.id] as string : ""}
+                  onChange={(event) => setValue(field.id, event.target.value)}
+                  maxLength={Math.min(field.maxLength ?? 4000, 4000)}
+                  style={{ ...userInputControlStyle, marginTop: 8 }} /> :
+                <textarea id={`${request.requestId}-${field.id}`} rows={2}
+                  value={typeof values[field.id] === "string" ? values[field.id] as string : ""}
+                  onChange={(event) => setValue(field.id, event.target.value)}
+                  placeholder="Your answer" maxLength={Math.min(field.maxLength ?? 4000, 4000)}
+                  style={{ ...userInputControlStyle, resize: "vertical", marginTop: 8 }} />
+              ) : field.type === "number" ? (
+                <input id={`${request.requestId}-${field.id}`} type="number" step={field.integer ? 1 : "any"}
+                  min={field.min} max={field.max} value={typeof values[field.id] === "number" ? values[field.id] as number : ""}
+                  onChange={(event) => setValue(field.id, event.target.value === "" ? undefined : Number(event.target.value))}
+                  style={{ ...userInputControlStyle, marginTop: 8 }} />
+              ) : (
+                <select id={`${request.requestId}-${field.id}`}
+                  value={typeof values[field.id] === "boolean" ? String(values[field.id]) : ""}
+                  onChange={(event) => setValue(field.id, event.target.value === "" ? undefined : event.target.value === "true")}
+                  style={{ ...userInputControlStyle, marginTop: 8 }}>
+                  <option value="">Choose</option><option value="true">Yes</option><option value="false">No</option>
+                </select>
+              )}
+            </div>
+          ))}
+          {error && <div role="alert" style={{ color: colors.err, marginTop: 12, fontSize: 12.5 }}>{error}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+            <button type="button" disabled={working} onClick={() => void submit("cancel")}
+              style={{ ...userInputButtonStyle, color: colors.fg, background: "var(--chip)" }}>Cancel</button>
+            <button type="submit" disabled={working}
+              style={{ ...userInputButtonStyle, color: "var(--accent-fg)", background: colors.accent }}>Continue</button>
+          </div>
+        </form>
+      ) : <div style={{ marginTop: 10, color: colors.dim, fontSize: 13 }}>
+        {status === "answered" ? "Answered" : status === "canceled" ? "Canceled" : "No longer active"}
+      </div>}
+    </section>
+  );
+}
+
+const userInputControlStyle: React.CSSProperties = {
+  width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 6,
+  padding: "9px 11px", background: "var(--chip)", color: "var(--fg)", fontFamily: "var(--font-ui)",
+  fontSize: 13.5, lineHeight: 1.5,
+};
+const userInputButtonStyle: React.CSSProperties = {
+  minWidth: 88, border: "none", borderRadius: 6, padding: "8px 13px", cursor: "pointer",
+  fontFamily: "var(--font-ui)", fontSize: 13.5, fontWeight: 600,
+};
 
 function PermissionsPrompt({
   approval,
