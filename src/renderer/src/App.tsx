@@ -10127,7 +10127,7 @@ function ChatPane({
             letterSpacing: "var(--track-body)",
           }}
         >
-          <StreamingVisualContext.Provider value={busy && block.key === entries.length - 1}>
+          <StreamingVisualContext.Provider value={busy && block.key >= (turnStartIndexRef.current ?? entries.length)}>
             <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
               {e.text}
             </Markdown>

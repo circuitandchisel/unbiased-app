@@ -61,6 +61,10 @@ test("keeps incomplete A2UI source hidden while streaming and after failure", as
   assert.match(pending, /Preparing visual/);
   assert.doesNotMatch(pending, /raw A2UI source/);
 
+  const validMidStream = renderToStaticMarkup(visualFenceContent("a2ui", JSON.stringify(messages), true)!);
+  assert.match(validMidStream, /Preparing visual/);
+  assert.doesNotMatch(validMidStream, /Interactive visual/);
+
   const failed = renderToStaticMarkup(visualFenceContent("a2ui", incomplete, false)!);
   assert.match(failed, /Could not display this visual/);
   assert.doesNotMatch(failed, /raw A2UI source/);

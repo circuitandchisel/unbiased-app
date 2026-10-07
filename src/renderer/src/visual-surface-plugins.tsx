@@ -139,8 +139,11 @@ export function visualFenceContent(language: string, source: string, streaming: 
       ? <MermaidDiagram diagram={source} />
       : <MermaidFenceStatus />;
   }
-  const visual = visualSurfaceForFence(language, source);
-  if (visual || language !== "a2ui") return visual;
+  if (language !== "a2ui") return visualSurfaceForFence(language, source);
+  if (!streaming) {
+    const visual = visualSurfaceForFence(language, source);
+    if (visual) return visual;
+  }
   return (
     <div
       role="status"
