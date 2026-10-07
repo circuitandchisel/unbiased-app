@@ -5,12 +5,13 @@ looks up that language in its bundled visual-surface registry and renders a
 validated A2UI v0.9 surface. The original assistant text is still saved by the
 existing transcript path, so the surface is reconstructed after reopening a
 conversation. A bounded JSON repair pass handles minor model syntax mistakes
-before validation; incomplete or unsupported fences remain code blocks.
+before validation; incomplete A2UI and Mermaid fences show a contained status
+instead of exposing source while a reply streams.
 
 The first bundled plugin is in `src/renderer/src/visual-surface-plugins.tsx`.
 It uses `@a2ui/react` with the app-owned catalog
 `https://unbiased.ai/a2ui/visual-v1`. The catalog registers the 18 basic A2UI
-components plus the app's BarChart and Konva-backed Whiteboard. The model is currently guided toward the
+components plus the app's BarChart, Konva-backed Whiteboard, and Mermaid. The model is currently guided toward the
 safe text, layout, form, and chart components. Remote media and action-bearing
 controls are registered but cannot be used until the app has explicit media
 and action handling. Adding a renderer means adding a registry entry and a
@@ -26,6 +27,12 @@ For compatibility with model-generated replies, a Text component's `value`
 is normalized to the catalog's `text` property when `text` is absent.
 Slider changes update only the bound data path. Separate chart values are not
 automatically derived from that path.
+
+Mermaid accepts a `diagram` string (up to 16,000 characters) and optional
+`title`. Standalone fenced `mermaid` blocks render directly in chat; inside an
+A2UI surface, use a Mermaid component for a diagram alongside other UI.
+Rendering uses Mermaid's strict security mode, so diagram click actions and
+HTML labels are disabled.
 
 Whiteboard accepts up to 60 bounded shapes: circle, oval, square, rectangle,
 triangle, line, arrow, and connector. Drawable shapes have a unique ID, type,

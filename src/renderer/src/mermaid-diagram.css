@@ -1,0 +1,47 @@
+.mermaid-diagram {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 16px 0 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: #191d22;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+  color: #f4f6f8;
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+
+.mermaid-diagram__title {
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-weight: 600;
+}
+
+.mermaid-diagram--embedded {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.mermaid-diagram__drawing {
+  overflow: auto;
+  padding: 20px;
+}
+
+.mermaid-diagram__drawing svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.mermaid-diagram__state {
+  min-height: 96px;
+  box-sizing: border-box;
+  padding: 24px;
+  color: #adb3ba;
+}

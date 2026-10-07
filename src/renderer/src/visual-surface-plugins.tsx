@@ -3,6 +3,8 @@ import { z } from "zod";
 import { Catalog, CommonSchemas, MessageProcessor } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, AudioPlayer, Button, Card, CheckBox, ChoicePicker, Column, createComponentImplementation, DateTimeInput, Divider, Icon, Image, List, Modal, Row, Slider, Tabs, Text, TextField, Video, type ReactComponentImplementation } from "@a2ui/react/v0_9";
 import { parseVisualMessages, VISUAL_CATALOG_ID, type VisualMessage } from "./a2ui-payload";
+import { MermaidDiagram } from "./mermaid-diagram";
+import { mermaidDiagramSchema, MAX_MERMAID_LENGTH } from "./mermaid-model";
 import { Whiteboard } from "./whiteboard";
 import { whiteboardSchema } from "./whiteboard-model";
 
@@ -10,6 +12,11 @@ const WhiteboardComponent = createComponentImplementation({
   name: "Whiteboard",
   schema: whiteboardSchema,
 }, ({ props }) => <Whiteboard title={props.title} initialShapes={props.shapes} />);
+
+const MermaidComponent = createComponentImplementation({
+  name: "Mermaid",
+  schema: mermaidDiagramSchema,
+}, ({ props }) => <MermaidDiagram title={props.title} diagram={props.diagram} embedded />);
 
 const BarChart = createComponentImplementation({
   name: "BarChart",
@@ -41,7 +48,7 @@ const BarChart = createComponentImplementation({
 
 const visualCatalog = new Catalog(VISUAL_CATALOG_ID, "0.9", [
   Text, Image, Icon, Video, AudioPlayer, Row, Column, List, Card, Tabs, Divider,
-  Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, BarChart, WhiteboardComponent,
+  Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, BarChart, WhiteboardComponent, MermaidComponent,
 ]);
 
 function createVisualSurfaceState(messages: VisualMessage[]) {
@@ -126,6 +133,12 @@ export function visualSurfaceForFence(language: string, source: string) {
 }
 
 export function visualFenceContent(language: string, source: string, streaming: boolean) {
+  if (language === "mermaid") {
+    if (streaming) return <MermaidFenceStatus pending />;
+    return source.trim() && source.length <= MAX_MERMAID_LENGTH
+      ? <MermaidDiagram diagram={source} />
+      : <MermaidFenceStatus />;
+  }
   const visual = visualSurfaceForFence(language, source);
   if (visual || language !== "a2ui") return visual;
   return (
@@ -141,6 +154,16 @@ export function visualFenceContent(language: string, source: string, streaming: 
       }}
     >
       {streaming ? "Preparing visual..." : "Could not display this visual."}
+    </div>
+  );
+}
+
+function MermaidFenceStatus({ pending = false }: { pending?: boolean }) {
+  return (
+    <div className="mermaid-diagram" role="status">
+      <div className="mermaid-diagram__state">
+        {pending ? "Preparing diagram..." : "Could not display this diagram."}
+      </div>
     </div>
   );
 }

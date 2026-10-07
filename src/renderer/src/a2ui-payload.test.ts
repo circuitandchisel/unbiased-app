@@ -16,13 +16,32 @@ test("accepts a bounded A2UI visual that can be reconstructed from saved text", 
   assert.deepEqual(parseVisualMessages(JSON.stringify(valid)), valid);
 });
 
-test("leaves malformed and incomplete fences as ordinary code", () => {
+test("rejects malformed and incomplete A2UI fences", () => {
   assert.equal(parseVisualMessages("[{"), null);
   assert.equal(parseVisualMessages(JSON.stringify(valid.slice(0, 1))), null);
   assert.equal(parseVisualMessages(" ".repeat(32_769)), null);
   const noRoot = structuredClone(valid);
   noRoot[1].updateComponents!.components.shift();
   assert.equal(parseVisualMessages(JSON.stringify(noRoot)), null);
+});
+
+test("accepts bounded Mermaid components and rejects invalid diagram props", () => {
+  const visual = structuredClone(valid);
+  const components = visual[1].updateComponents!.components as Record<string, unknown>[];
+  components[0].children = ["diagram"];
+  components.splice(1, 2, {
+    id: "diagram", component: "Mermaid", title: "Connections",
+    diagram: "flowchart LR\nAlice --> Bob",
+  });
+  assert.ok(parseVisualMessages(JSON.stringify(visual)));
+
+  components[1].diagram = " ";
+  assert.equal(parseVisualMessages(JSON.stringify(visual)), null);
+  components[1].diagram = "x".repeat(16_001);
+  assert.equal(parseVisualMessages(JSON.stringify(visual)), null);
+  components[1].diagram = "flowchart LR\nAlice --> Bob";
+  components[1].url = "https://example.com/diagram";
+  assert.equal(parseVisualMessages(JSON.stringify(visual)), null);
 });
 
 test("rejects actions, unknown components and extra surfaces", () => {

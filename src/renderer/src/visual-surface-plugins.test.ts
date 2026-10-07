@@ -68,6 +68,24 @@ test("keeps incomplete A2UI source hidden while streaming and after failure", as
   assert.ok(visualFenceContent("a2ui", JSON.stringify(messages), true));
 });
 
+test("hides Mermaid source while streaming and recognizes Mermaid in A2UI", async () => {
+  const { visualFenceContent, visualSurfaceForFence } = await import("./visual-surface-plugins");
+  const source = "flowchart LR\nAlice --> Bob";
+  const pending = renderToStaticMarkup(visualFenceContent("mermaid", source, true)!);
+  assert.match(pending, /Preparing diagram/);
+  assert.doesNotMatch(pending, /Alice --&gt; Bob/);
+  assert.ok(visualFenceContent("mermaid", source, false));
+
+  const messages = [
+    { version: "v0.9", createSurface: { surfaceId: "diagram", catalogId: VISUAL_CATALOG_ID } },
+    { version: "v0.9", updateComponents: { surfaceId: "diagram", components: [
+      { id: "root", component: "Column", children: ["graph"] },
+      { id: "graph", component: "Mermaid", title: "Connections", diagram: source },
+    ] } },
+  ];
+  assert.ok(visualSurfaceForFence("a2ui", JSON.stringify(messages)));
+});
+
 test("renders a Card with model-generated children and keeps its slider interactive", async () => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
   Object.assign(globalThis, {
