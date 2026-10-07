@@ -16,7 +16,7 @@ Write for the person using the app, not the person who wrote the code.
 ### Improved
 
 - **Tables are easier to scan and copy.** They have a distinct rounded layout and a copy button.
-- **Chat is easier to read and write.** Sent messages render Markdown, replies use the available width, and typing focuses the active composer.
+- **Chat is easier to read and write.** Markdown formatting appears while you compose and in sent messages, replies use the available width, and typing focuses the active composer.
 
 ### Fixed
 
