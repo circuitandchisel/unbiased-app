@@ -28,9 +28,13 @@ Slider changes update only the bound data path. Separate chart values are not
 automatically derived from that path.
 
 Whiteboard accepts up to 60 bounded shapes: circle, oval, square, rectangle,
-triangle, line, and arrow. Each shape has a unique ID, type, x/y, width,
-optional height, fill/stroke hex colors, and optional label. Horizontal and
-vertical lines may use zero on one dimension. Coordinates use an
+triangle, line, arrow, and connector. Drawable shapes have a unique ID, type,
+x/y, width, optional height, fill/stroke hex colors, and optional label.
+Connectors use `from` and `to` IDs of different drawable nodes, an optional
+stroke color, and optional `directed` boolean. Their endpoints follow the
+nodes as they move. Use connectors for graph edges and free lines/arrows for
+unattached strokes. Horizontal and vertical lines may use zero on one
+dimension. Coordinates use an
 800x450 board and scale to the chat width. Users can add, select, drag,
 recolor, delete, and export shapes as PNG. Edits are local to the mounted
 view; the saved transcript retains the agent's original shape data.

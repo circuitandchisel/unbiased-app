@@ -3,9 +3,10 @@ import { z } from "zod";
 const coordinate = z.number().finite().min(0).max(800);
 const size = z.number().finite().min(0).max(800);
 const color = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+const shapeId = z.string().regex(/^[a-zA-Z0-9_-]{1,40}$/);
 
-export const whiteboardShapeSchema = z.object({
-  id: z.string().regex(/^[a-zA-Z0-9_-]{1,40}$/),
+const drawableShapeSchema = z.object({
+  id: shapeId,
   type: z.enum(["circle", "oval", "square", "rectangle", "triangle", "line", "arrow"]),
   x: coordinate,
   y: z.number().finite().min(0).max(450),
@@ -24,12 +25,32 @@ export const whiteboardShapeSchema = z.object({
   "Shape must fit within the board",
 );
 
-export const whiteboardSchema = z.object({
-  title: z.string().max(100).optional(),
-  shapes: z.array(whiteboardShapeSchema).max(60).refine(
-    (shapes) => new Set(shapes.map((shape) => shape.id)).size === shapes.length,
-    "Shape IDs must be unique",
-  ),
+const connectorShapeSchema = z.object({
+  id: shapeId,
+  type: z.literal("connector"),
+  from: shapeId,
+  to: shapeId,
+  stroke: color.optional(),
+  directed: z.boolean().optional(),
 }).strict();
 
+export const whiteboardShapeSchema = z.union([drawableShapeSchema, connectorShapeSchema]);
+
+export const whiteboardSchema = z.object({
+  title: z.string().max(100).optional(),
+  shapes: z.array(whiteboardShapeSchema).max(60),
+}).strict().superRefine((board, context) => {
+  const ids = new Set<string>();
+  const nodes = new Set(board.shapes.filter((shape) => !["connector", "line", "arrow"].includes(shape.type)).map((shape) => shape.id));
+  for (const [index, shape] of board.shapes.entries()) {
+    if (ids.has(shape.id)) context.addIssue({ code: z.ZodIssueCode.custom, path: ["shapes", index, "id"], message: "Shape IDs must be unique" });
+    ids.add(shape.id);
+    if (shape.type === "connector" && (shape.from === shape.to || !nodes.has(shape.from) || !nodes.has(shape.to))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["shapes", index], message: "Connector must join two different nodes" });
+    }
+  }
+});
+
 export type WhiteboardShape = z.infer<typeof whiteboardShapeSchema>;
+export type DrawableShape = Exclude<WhiteboardShape, { type: "connector" }>;
+export type ConnectorShape = Extract<WhiteboardShape, { type: "connector" }>;

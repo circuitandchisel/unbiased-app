@@ -111,6 +111,27 @@ test("accepts a bounded whiteboard but rejects malformed or unsafe shapes", () =
   assert.equal(parseVisualMessages(JSON.stringify(board)), null);
 });
 
+test("validates whiteboard connectors against distinct node IDs", () => {
+  const board = structuredClone(valid);
+  const components = board[1].updateComponents!.components as Record<string, unknown>[];
+  components[0].children = ["board"];
+  const shapes = [
+    { id: "maya", type: "circle", x: 60, y: 80, width: 70, label: "Maya" },
+    { id: "sam", type: "circle", x: 250, y: 80, width: 70, label: "Sam" },
+    { id: "edge", type: "connector", from: "maya", to: "sam", directed: true },
+  ];
+  components.splice(1, 2, { id: "board", component: "Whiteboard", shapes });
+  assert.ok(parseVisualMessages(JSON.stringify(board)));
+
+  shapes[2].to = "missing";
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+  shapes[2].to = "maya";
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+  shapes[2].to = "sam";
+  shapes[2].from = "edge";
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+});
+
 test("repairs model closing brackets and accepts horizontal and vertical lines", () => {
   const reply = [
     { version: "v0.9", createSurface: { surfaceId: "graph", catalogId: VISUAL_CATALOG_ID } },
