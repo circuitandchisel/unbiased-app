@@ -32,6 +32,7 @@ import "./user-message-markdown.css";
 import { UserMessageMarkdown } from "./user-message-markdown";
 import { MarkdownComposer, type MarkdownComposerHandle } from "./markdown-composer";
 import "./markdown-composer.css";
+import "./user-input-card.css";
 import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
@@ -18432,6 +18433,7 @@ function UserInputCard({
   const [other, setOther] = useState<Record<string, boolean>>({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const singleQuestion = request.source !== "mcp" && request.fields.length === 1;
   const setValue = (id: string, value: UserInputValue | undefined) => {
     setValues((current) => {
       const next = { ...current };
@@ -18460,67 +18462,63 @@ function UserInputCard({
   return (
     <section
       aria-label="Question from the agent"
-      style={{
-        margin: "14px 0", padding: "18px 20px", maxWidth: "var(--measure)",
-        border: `1px solid ${colors.border}`, borderRadius: 8,
-        background: "var(--panel-2)", boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
-        fontFamily: "var(--font-ui)",
-      }}
+      className="u-user-input"
     >
-      <div style={{ color: colors.dim, fontSize: 12.5, marginBottom: 5, overflowWrap: "anywhere" }}>
+      <div className="u-user-input-eyebrow">
+        <MessageSquare size={14} strokeWidth={1.75} aria-hidden="true" />
         {request.source === "mcp" ? `MCP request: ${request.sourceName ?? "server"}` : request.agentName ? `${request.agentName} asks` : "Question"}
       </div>
-      <div style={{ color: colors.fg, fontSize: 15, fontWeight: 600, lineHeight: 1.45, overflowWrap: "anywhere" }}>
-        {request.title}
-      </div>
+      {(!singleQuestion || status !== "waiting") && <div className="u-user-input-title">
+        {singleQuestion ? request.fields[0].label : request.title}
+      </div>}
       {status === "waiting" ? (
         <form onSubmit={(event) => { event.preventDefault(); void submit("submit"); }}>
-          {request.fields.map((field) => (
-            <div key={field.id} style={{ marginTop: 16 }}>
+          {request.fields.map((field, index) => (
+            <div key={field.id} className={`u-user-input-field${singleQuestion && index === 0 ? " u-user-input-field--primary" : ""}`}>
               <label htmlFor={`${request.requestId}-${field.id}`}
-                style={{ display: "block", color: colors.fg, fontSize: 13.5, fontWeight: 500, lineHeight: 1.45 }}>
+                className={singleQuestion ? "u-user-input-title" : "u-user-input-field-label"}>
                 {field.label}{field.required ? " *" : ""}
               </label>
-              {field.description && <div style={{ color: colors.dim, fontSize: 12.5, lineHeight: 1.45, marginTop: 3 }}>
+              {field.description && <div className="u-user-input-description">
                 {field.description}
               </div>}
               {field.type === "choice" ? (
-                <div role="radiogroup" aria-label={field.label} style={{ display: "grid", gap: 6, marginTop: 9 }}>
-                  {field.options?.map((option, index) => (
-                    <label key={option.value} style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer", fontSize: 13.5 }}>
-                      <input id={index === 0 ? `${request.requestId}-${field.id}` : undefined}
+                <div role="radiogroup" aria-label={field.label} className="u-user-input-options">
+                  {field.options?.map((option, optionIndex) => (
+                    <label key={option.value} className="u-user-input-option"
+                      data-selected={!other[field.id] && values[field.id] === option.value}>
+                      <input id={optionIndex === 0 ? `${request.requestId}-${field.id}` : undefined}
                         type="radio" name={`${request.requestId}-${field.id}`} value={option.value}
                         checked={!other[field.id] && values[field.id] === option.value}
-                        onChange={() => { setOther((current) => ({ ...current, [field.id]: false })); setValue(field.id, option.value); }}
-                        style={{ accentColor: colors.accent, marginTop: 2 }} />
-                      <span style={{ minWidth: 0, overflowWrap: "anywhere" }}><span style={{ color: colors.fg }}>{option.label}</span>
-                        {option.description && <span style={{ color: colors.dim }}> - {option.description}</span>}
+                        onChange={() => { setOther((current) => ({ ...current, [field.id]: false })); setValue(field.id, option.value); }} />
+                      <span className="u-user-input-option-copy"><span className="u-user-input-option-label">{option.label}</span>
+                        {option.description && <span className="u-user-input-option-description">{option.description}</span>}
                       </span>
                     </label>
                   ))}
-                  {field.allowOther && <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13.5 }}>
+                  {field.allowOther && <label className="u-user-input-option" data-selected={!!other[field.id]}>
                     <input type="radio" name={`${request.requestId}-${field.id}`} checked={!!other[field.id]}
-                      onChange={() => { setOther((current) => ({ ...current, [field.id]: true })); setValue(field.id, ""); }}
-                      style={{ accentColor: colors.accent }} />
-                    <span>Other</span>
+                      onChange={() => { setOther((current) => ({ ...current, [field.id]: true })); setValue(field.id, ""); }} />
+                    <span className="u-user-input-option-label">Other</span>
                   </label>}
                   {field.allowOther && other[field.id] && <input id={`${request.requestId}-${field.id}-other`}
                     type={field.secret ? "password" : "text"} autoFocus maxLength={4000}
                     value={typeof values[field.id] === "string" ? values[field.id] as string : ""}
                     onChange={(event) => setValue(field.id, event.target.value)}
-                    placeholder="Your answer" style={userInputControlStyle} />}
+                    placeholder="Your answer" className="u-user-input-control" />}
                 </div>
               ) : field.type === "multiChoice" ? (
-                <div role="group" aria-label={field.label} style={{ display: "grid", gap: 6, marginTop: 9 }}>
-                  {field.options?.map((option, index) => {
+                <div role="group" aria-label={field.label} className="u-user-input-options">
+                  {field.options?.map((option, optionIndex) => {
                     const selected = Array.isArray(values[field.id]) ? values[field.id] as string[] : [];
-                    return <label key={option.value} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", fontSize: 13.5 }}>
-                      <input id={index === 0 ? `${request.requestId}-${field.id}` : undefined}
+                    return <label key={option.value} className="u-user-input-option" data-selected={selected.includes(option.value)}>
+                      <input id={optionIndex === 0 ? `${request.requestId}-${field.id}` : undefined}
                         type="checkbox" checked={selected.includes(option.value)}
                         onChange={() => setValue(field.id, selected.includes(option.value)
-                          ? selected.filter((value) => value !== option.value) : [...selected, option.value])}
-                        style={{ accentColor: colors.accent }} />
-                      <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{option.label}</span>
+                          ? selected.filter((value) => value !== option.value) : [...selected, option.value])} />
+                      <span className="u-user-input-option-copy"><span className="u-user-input-option-label">{option.label}</span>
+                        {option.description && <span className="u-user-input-option-description">{option.description}</span>}
+                      </span>
                     </label>;
                   })}
                 </div>
@@ -18529,51 +18527,41 @@ function UserInputCard({
                   value={typeof values[field.id] === "string" ? values[field.id] as string : ""}
                   onChange={(event) => setValue(field.id, event.target.value)}
                   maxLength={Math.min(field.maxLength ?? 4000, 4000)}
-                  style={{ ...userInputControlStyle, marginTop: 8 }} /> :
+                  className="u-user-input-control" /> :
                 <textarea id={`${request.requestId}-${field.id}`} rows={2}
                   value={typeof values[field.id] === "string" ? values[field.id] as string : ""}
                   onChange={(event) => setValue(field.id, event.target.value)}
                   placeholder="Your answer" maxLength={Math.min(field.maxLength ?? 4000, 4000)}
-                  style={{ ...userInputControlStyle, resize: "vertical", marginTop: 8 }} />
+                  className="u-user-input-control" />
               ) : field.type === "number" ? (
                 <input id={`${request.requestId}-${field.id}`} type="number" step={field.integer ? 1 : "any"}
                   min={field.min} max={field.max} value={typeof values[field.id] === "number" ? values[field.id] as number : ""}
                   onChange={(event) => setValue(field.id, event.target.value === "" ? undefined : Number(event.target.value))}
-                  style={{ ...userInputControlStyle, marginTop: 8 }} />
+                  className="u-user-input-control" />
               ) : (
                 <select id={`${request.requestId}-${field.id}`}
                   value={typeof values[field.id] === "boolean" ? String(values[field.id]) : ""}
                   onChange={(event) => setValue(field.id, event.target.value === "" ? undefined : event.target.value === "true")}
-                  style={{ ...userInputControlStyle, marginTop: 8 }}>
+                  className="u-user-input-control">
                   <option value="">Choose</option><option value="true">Yes</option><option value="false">No</option>
                 </select>
               )}
             </div>
           ))}
-          {error && <div role="alert" style={{ color: colors.err, marginTop: 12, fontSize: 12.5 }}>{error}</div>}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+          {error && <div role="alert" className="u-user-input-error" style={{ color: colors.err }}>{error}</div>}
+          <div className="u-user-input-actions">
             <button type="button" disabled={working} onClick={() => void submit("cancel")}
-              style={{ ...userInputButtonStyle, color: colors.fg, background: "var(--chip)" }}>Cancel</button>
+              className="u-user-input-action u-user-input-action--secondary">Cancel</button>
             <button type="submit" disabled={working}
-              style={{ ...userInputButtonStyle, color: "var(--accent-fg)", background: colors.accent }}>Continue</button>
+              className="u-user-input-action u-user-input-action--primary">Continue</button>
           </div>
         </form>
-      ) : <div style={{ marginTop: 10, color: colors.dim, fontSize: 13 }}>
+      ) : <div className="u-user-input-status">
         {status === "answered" ? "Answered" : status === "canceled" ? "Canceled" : "No longer active"}
       </div>}
     </section>
   );
 }
-
-const userInputControlStyle: React.CSSProperties = {
-  width: "100%", boxSizing: "border-box", border: "1px solid var(--border)", borderRadius: 6,
-  padding: "9px 11px", background: "var(--chip)", color: "var(--fg)", fontFamily: "var(--font-ui)",
-  fontSize: 13.5, lineHeight: 1.5,
-};
-const userInputButtonStyle: React.CSSProperties = {
-  minWidth: 88, border: "none", borderRadius: 6, padding: "8px 13px", cursor: "pointer",
-  fontFamily: "var(--font-ui)", fontSize: 13.5, fontWeight: 600,
-};
 
 function PermissionsPrompt({
   approval,
