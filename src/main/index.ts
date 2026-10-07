@@ -1032,7 +1032,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "avoid unrelated disconnected subgraphs that produce sparse or overly tall layouts.",
   "Use Whiteboard for spatial diagrams and node-edge graphs rather than BarChart. Whiteboard takes",
   "shapes (up to 60) with unique id. Drawable types are circle|oval|square|rectangle|triangle|line|arrow,",
-  "with x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Coordinates fit 800x450.",
+  "with x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Keep the entire shape inside 800x450: x+width <= 800 and y+(height or width) <= 450.",
   "Lines and arrows may have width 0 or height 0 for vertical or horizontal strokes, but not both.",
   "Emit strict JSON: close the components array and updateComponents object before the message array.",
   "For a graph, use labeled nodes and connector shapes with from/to node IDs, never free lines for edges.",

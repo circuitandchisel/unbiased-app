@@ -1,6 +1,6 @@
 import { jsonrepair } from "jsonrepair";
 import { mermaidDiagramSchema } from "./mermaid-model";
-import { whiteboardSchema } from "./whiteboard-model";
+import { fitMinorWhiteboardOverflow, whiteboardSchema } from "./whiteboard-model";
 
 export const VISUAL_CATALOG_ID = "https://unbiased.ai/a2ui/visual-v1";
 
@@ -69,7 +69,11 @@ export function parseVisualMessages(source: string): VisualMessage[] | null {
         if (!record(component) || typeof component.id !== "string" || component.id.length > 64 ||
             !COMPONENTS.has(String(component.component))) return null;
         if (component.component === "Icon" && record(component.name)) return null;
-        if (component.component === "Whiteboard" && !whiteboardSchema.safeParse({ title: component.title, shapes: component.shapes }).success) return null;
+        if (component.component === "Whiteboard") {
+          const board = whiteboardSchema.safeParse(fitMinorWhiteboardOverflow({ title: component.title, shapes: component.shapes }));
+          if (!board.success) return null;
+          component.shapes = board.data.shapes;
+        }
         if (component.component === "Mermaid" && !mermaidDiagramSchema.safeParse({ title: component.title, diagram: component.diagram }).success) return null;
         if (component.component === "Text" && "value" in component) {
           if ("text" in component) return null;

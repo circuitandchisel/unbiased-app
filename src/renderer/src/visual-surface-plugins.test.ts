@@ -219,3 +219,20 @@ test("registers the whiteboard in the saved A2UI catalog", async () => {
   ];
   assert.ok(visualSurfaceForFence("a2ui", JSON.stringify(board)));
 });
+
+test("renders a mixed journey map after fitting a near-edge node", async () => {
+  const { visualSurfaceForFence } = await import("./visual-surface-plugins");
+  const visual = [
+    { version: "v0.9", createSurface: { surfaceId: "journey", catalogId: VISUAL_CATALOG_ID } },
+    { version: "v0.9", updateComponents: { surfaceId: "journey", components: [
+      { id: "root", component: "Column", children: ["board", "timeline"] },
+      { id: "board", component: "Whiteboard", shapes: [
+        { id: "start", type: "circle", x: 660, y: 80, width: 60, label: "Troy" },
+        { id: "home", type: "circle", x: 745, y: 180, width: 60, label: "Ithaca" },
+        { id: "route", type: "connector", from: "start", to: "home", directed: true },
+      ] },
+      { id: "timeline", component: "Mermaid", diagram: "flowchart LR\nT[Troy] --> I[Ithaca]" },
+    ] } },
+  ];
+  assert.ok(visualSurfaceForFence("a2ui", JSON.stringify(visual)));
+});

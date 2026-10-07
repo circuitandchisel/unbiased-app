@@ -130,6 +130,22 @@ test("accepts a bounded whiteboard but rejects malformed or unsafe shapes", () =
   assert.equal(parseVisualMessages(JSON.stringify(board)), null);
 });
 
+test("fits a slightly overflowing node without accepting distant geometry", () => {
+  const visual = structuredClone(valid);
+  const components = visual[1].updateComponents!.components as Record<string, unknown>[];
+  components[0].children = ["board"];
+  components.splice(1, 2, { id: "board", component: "Whiteboard", shapes: [
+    { id: "ithaca", type: "circle", x: 745, y: 180, width: 60, label: "Ithaca" },
+  ] });
+  const parsed = parseVisualMessages(JSON.stringify(visual));
+  assert.ok(parsed);
+  const board = (parsed[1].updateComponents as { components: Record<string, unknown>[] }).components[1];
+  assert.equal((board.shapes as { x: number }[])[0].x, 740);
+
+  (components[1].shapes as { x: number }[])[0].x = 790;
+  assert.equal(parseVisualMessages(JSON.stringify(visual)), null);
+});
+
 test("validates whiteboard connectors against distinct node IDs", () => {
   const board = structuredClone(valid);
   const components = board[1].updateComponents!.components as Record<string, unknown>[];
