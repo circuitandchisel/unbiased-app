@@ -36,6 +36,7 @@ import { SideChatIdleTracker } from "./side-chat-idle";
 import { settleTurnOutput } from "./turn-completion";
 import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
+import { isComposerTypingKey } from "./type-to-focus";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
 import { visualFenceContent } from "./visual-surface-plugins";
@@ -2889,6 +2890,14 @@ export function App() {
   const sideVisible = sideOpen && (!pageOpen || panelMode === "agentmirror");
   const sideOverlay = sideVisible && windowWidth < (navOpen ? navWidth : NAV_RAIL_WIDTH) + 320 + 300 + 8;
   const sideOverlayWidth = Math.min(420, Math.max(300, (windowWidth - (navOpen ? navWidth : NAV_RAIL_WIDTH)) * 0.65));
+  const typingPaneRef = useRef<PaneId>("main");
+  useEffect(() => {
+    typingPaneRef.current = sideVisible && sideChats.includes(panelMode) ? panelMode : "main";
+  }, [sideVisible, sideChats, panelMode]);
+  const composerTypingAvailable = !pageOpen && !showSettings && !showChangelog &&
+    !mcpOpen && !connectorsPanelOpen && !skillsOpen && !confirmDialog &&
+    !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog &&
+    !moveDialog && !editProj && !envOpen && !sidePlusOpen && !workMenuOpen && !branchMenu;
   const focusMainComposer = () =>
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-pane-id="main"]')?.focus());
   const appCommandRef = useRef<(command: string) => void>(() => {});
@@ -3028,6 +3037,16 @@ export function App() {
       }
     >
     <div
+      onPointerDownCapture={(e) => {
+        const target = e.target as Element;
+        const pane = target.closest<HTMLElement>("[data-chat-pane-id]");
+        if (pane?.dataset.chatPaneId) typingPaneRef.current = pane.dataset.chatPaneId;
+        else if (target.closest(".u-sidebar")) typingPaneRef.current = "main";
+      }}
+      onFocusCapture={(e) => {
+        const pane = (e.target as Element).closest<HTMLElement>("[data-chat-pane-id]");
+        if (pane?.dataset.chatPaneId) typingPaneRef.current = pane.dataset.chatPaneId;
+      }}
       style={{
         ...themeVars(theme),
         height: "100vh",
@@ -4004,6 +4023,8 @@ export function App() {
         </header>
         <ChatPane
           paneId="main"
+          canTypeToFocus={() => composerTypingAvailable &&
+            (typingPaneRef.current === "main" || !sideVisible || !sideChats.includes(typingPaneRef.current))}
           connected={connected}
           reset={mainReset}
           threadId={activeThreadId}
@@ -4810,6 +4831,7 @@ export function App() {
           <ChatPane
             key={sideNonce}
             paneId={id}
+            canTypeToFocus={() => composerTypingAvailable && sideVisible && panelMode === id && typingPaneRef.current === id}
             connected={connected}
             reset={{ entries: [], nonce: 0 }}
             mcpThreadId={activeThreadId}
@@ -8492,6 +8514,7 @@ function useEntryTransition(open = true): boolean {
 
 function ChatPane({
   paneId,
+  canTypeToFocus,
   connected,
   reset,
   contextChip,
@@ -8522,6 +8545,7 @@ function ChatPane({
   onOpenSkills,
 }: {
   paneId: PaneId;
+  canTypeToFocus: () => boolean;
   connected: boolean;
   reset: {
     entries: Entry[];
@@ -8621,6 +8645,27 @@ function ChatPane({
     drafts.setText(text);
     setDraft(text);
   };
+  const canTypeToFocusRef = useRef(canTypeToFocus);
+  canTypeToFocusRef.current = canTypeToFocus;
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = taRef.current;
+      if (!el || el.disabled || !canTypeToFocusRef.current()) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (!isComposerTypingKey(e, target) ||
+          !isComposerTypingKey(e, document.activeElement)) return;
+      if (Array.from(document.querySelectorAll('[role="dialog"], [data-popover]'))
+        .some((overlay) => overlay.getClientRects().length > 0)) return;
+
+      e.preventDefault();
+      const text = drafts.current().text + e.key;
+      changeDraft(text);
+      el.focus();
+      requestAnimationFrame(() => el.setSelectionRange(text.length, text.length));
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [drafts]);
   const changeAttachments = (
     update: Attachment[] | ((current: Attachment[]) => Attachment[]),
     identity = drafts.identity(),
@@ -10193,6 +10238,7 @@ function ChatPane({
   return (
     <div
       ref={paneRef}
+      data-chat-pane-id={paneId}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
@@ -10670,6 +10716,7 @@ function ChatPane({
           {modeOpen && (
             <div
               ref={modeMenuRef}
+              data-popover
               style={{
                 position: "absolute",
                 bottom: "calc(100% + 8px)",
@@ -11101,6 +11148,7 @@ function ChatPane({
                 </button>
                 {usageOpen && (
                   <div
+                    data-popover
                     style={{
                       position: "absolute",
                       bottom: "calc(100% + 10px)",
