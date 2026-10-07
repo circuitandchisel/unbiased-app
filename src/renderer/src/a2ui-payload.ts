@@ -1,11 +1,12 @@
 export const VISUAL_CATALOG_ID = "https://unbiased.ai/a2ui/visual-v1";
+import { whiteboardSchema } from "./whiteboard-model";
 
 export type VisualMessage = Record<string, unknown>;
 
 const COMPONENTS = new Set([
   "Text", "Image", "Icon", "Video", "AudioPlayer", "Row", "Column", "List",
   "Card", "Tabs", "Divider", "Modal", "Button", "TextField", "CheckBox",
-  "ChoicePicker", "Slider", "DateTimeInput", "BarChart",
+  "ChoicePicker", "Slider", "DateTimeInput", "BarChart", "Whiteboard",
 ]);
 const OPERATIONS = new Set(["createSurface", "updateComponents", "updateDataModel"]);
 const FORBIDDEN_KEYS = new Set(["action", "functionCall", "call", "url", "src", "href", "inlineCatalogs"]);
@@ -59,6 +60,7 @@ export function parseVisualMessages(source: string): VisualMessage[] | null {
         if (!record(component) || typeof component.id !== "string" || component.id.length > 64 ||
             !COMPONENTS.has(String(component.component))) return null;
         if (component.component === "Icon" && record(component.name)) return null;
+        if (component.component === "Whiteboard" && !whiteboardSchema.safeParse({ title: component.title, shapes: component.shapes }).success) return null;
         if (component.component === "Text" && "value" in component) {
           if ("text" in component) return null;
           component.text = component.value;

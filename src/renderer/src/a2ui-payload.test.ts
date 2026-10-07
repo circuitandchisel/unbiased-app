@@ -86,3 +86,27 @@ test("normalizes model-generated Text.value without accepting conflicting fields
   text.text = "Different";
   assert.equal(parseVisualMessages(JSON.stringify(alias)), null);
 });
+
+test("accepts a bounded whiteboard but rejects malformed or unsafe shapes", () => {
+  const board = structuredClone(valid);
+  const components = board[1].updateComponents!.components as Record<string, unknown>[];
+  components[0].children = ["board"];
+  components.splice(1, 2, { id: "board", component: "Whiteboard", title: "Friend graph", shapes: [
+    { id: "maya", type: "circle", x: 60, y: 80, width: 70, fill: "#5da5e8", label: "Maya" },
+    { id: "link", type: "arrow", x: 130, y: 115, width: 130, height: 45, stroke: "#f49a56" },
+  ] });
+  assert.ok(parseVisualMessages(JSON.stringify(board)));
+
+  const shape = (components[1].shapes as Record<string, unknown>[])[0];
+  shape.fill = "url(https://example.com)";
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+  shape.fill = "#5da5e8";
+  shape.x = 790;
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+  shape.x = 60;
+  shape.type = "script";
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+  shape.type = "circle";
+  (components[1].shapes as Record<string, unknown>[]).push({ ...shape });
+  assert.equal(parseVisualMessages(JSON.stringify(board)), null);
+});

@@ -9,7 +9,7 @@ conversation. Incomplete, malformed, or unsupported fences remain code blocks.
 The first bundled plugin is in `src/renderer/src/visual-surface-plugins.tsx`.
 It uses `@a2ui/react` with the app-owned catalog
 `https://unbiased.ai/a2ui/visual-v1`. The catalog registers the 18 basic A2UI
-components plus the app's BarChart. The model is currently guided toward the
+components plus the app's BarChart and Konva-backed Whiteboard. The model is currently guided toward the
 safe text, layout, form, and chart components. Remote media and action-bearing
 controls are registered but cannot be used until the app has explicit media
 and action handling. Adding a renderer means adding a registry entry and a
@@ -25,6 +25,13 @@ For compatibility with model-generated replies, a Text component's `value`
 is normalized to the catalog's `text` property when `text` is absent.
 Slider changes update only the bound data path. Separate chart values are not
 automatically derived from that path.
+
+Whiteboard accepts up to 60 bounded shapes: circle, oval, square, rectangle,
+triangle, line, and arrow. Each shape has a unique ID, type, x/y, width,
+optional height, fill/stroke hex colors, and optional label. Coordinates use an
+800x450 board and scale to the chat width. Users can add, select, drag,
+recolor, delete, and export shapes as PNG. Edits are local to the mounted
+view; the saved transcript retains the agent's original shape data.
 
 Example:
 
