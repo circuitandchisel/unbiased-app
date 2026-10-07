@@ -35,6 +35,7 @@ import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
+import { visualSurfaceForFence } from "./visual-surface-plugins";
 
 type EngineStatus =
   | { state: "starting" }
@@ -11513,6 +11514,8 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
     () => (grammar ? Prism.highlight(text, grammar, prismLang) : null),
     [text, grammar, prismLang],
   );
+  const visual = useMemo(() => visualSurfaceForFence(lang, text), [lang, text]);
+  if (visual) return visual;
 
   return (
     <div

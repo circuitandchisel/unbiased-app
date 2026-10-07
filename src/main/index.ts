@@ -1010,6 +1010,18 @@ function saveAgentStylePrefs(value: unknown): { ok: boolean; prefs: AgentStylePr
 // model reliably stalls on private-data requests ("go over my email") with a
 // "shall I?" instead of calling the tool that triggers the real prompt.
 const APP_DEVELOPER_INSTRUCTIONS = [
+  "For an interactive chart or explainer, you may include one fenced a2ui code block in your final reply.",
+  "Its contents must be a JSON array of A2UI v0.9 messages for one surface using catalogId",
+  "https://unbiased.ai/a2ui/visual-v1. The available components are Text, Column, Row, Card,",
+  "Divider, Slider, and BarChart. BarChart has title and bars [{label, value}]. A slider and bar",
+  "value can share a data path so moving the slider updates the chart. Example messages:",
+  '[{"version":"v0.9","createSurface":{"surfaceId":"visual","catalogId":"https://unbiased.ai/a2ui/visual-v1"}},',
+  '{"version":"v0.9","updateComponents":{"surfaceId":"visual","components":[',
+  '{"id":"root","component":"Column","children":["slider","chart"]},',
+  '{"id":"slider","component":"Slider","label":"Amount","value":{"path":"/amount"},"min":0,"max":100},',
+  '{"id":"chart","component":"BarChart","title":"Result","bars":[{"label":"Capacity","value":100},{"label":"Selected","value":{"path":"/amount"}}]}]}},',
+  '{"version":"v0.9","updateDataModel":{"surfaceId":"visual","path":"/","value":{"amount":50}}}]',
+  "Use A2UI only when interaction helps; use normal Markdown for static material.",
   "Permission in this app is handled by the app, not by you. When a tool needs the user's consent —",
   "network access, or a signed-in browser session — calling it shows the user a permission card they",
   "approve or deny. So call the tool directly and never ask the user in chat for permission first,",
