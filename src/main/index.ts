@@ -24,6 +24,7 @@ import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-a
 import { agentBrowserCandidates, chromeCandidates } from "./browser-binaries";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
 import { epochMillis } from "../shared/conversation-time";
+import { agentInputFields, codexInputResponse, mcpInputFields, mcpInputResponse, validateUserInput, type UserInputRequest, type UserInputValue } from "../shared/user-input";
 import { startSecretProxy, type SecretConnector } from "./oauth-proxy";
 import {
   CATALOGUE_CACHE_VERSION,
@@ -213,6 +214,15 @@ function settleLocalApprovals(threadId: string | null | undefined): void {
   }
 }
 
+function settleLocalUserInputs(threadId: string | null | undefined): void {
+  if (!threadId) return;
+  for (const [requestId, pending] of pendingUserInputs) {
+    if (pending.kind !== "local" || pending.threadId !== threadId) continue;
+    pendingUserInputs.delete(requestId);
+    pending.settle(null);
+  }
+}
+
 /** Forget a scratch pane AND stop whatever it was doing. Dropping the record
  *  alone left the ephemeral fork generating in the engine with no stream, no
  *  stop control and no way to reach it — tokens burning invisibly. */
@@ -221,6 +231,7 @@ function dropSidePane(paneId: string): void {
   if (!pane) return;
   const threadId = pane.threadId;
   settleLocalApprovals(threadId);
+  settleLocalUserInputs(threadId);
   if (threadId) {
     const turnId = pane.turnId ?? runningTurns.get(threadId) ?? null;
     if (turnId) {
@@ -1050,6 +1061,8 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "applies to private data too (their email, messages, dashboards): the card covers it. The one case",
   "to stop and ask is when a tool result says the browser profile is new and not signed in yet — then",
   "tell the user to sign in in the window that opened, and never ask them for a password yourself.",
+  "When a real missing detail or preference blocks progress, use ask_user to show a question card",
+  "and continue with its answer. Do not use it for progress updates, passwords, or tool permissions.",
   // Engine errors leak the engine. codex's not-logged-in error for an MCP
   // server ends `Run \`codex mcp login <name>\``, and with nothing said here
   // the model relayed it verbatim — a CLI this product does not ship, pointed
@@ -1770,6 +1783,49 @@ const SCHEDULE_TOOLS = [
   },
 ];
 
+const ASK_USER_TOOL = {
+  type: "function",
+  name: "ask_user",
+  description:
+    "Ask the user for information or a preference needed to continue this turn. " +
+    "Use for a real decision, missing detail, or confirmation; do not use for ordinary progress updates. " +
+    "The app displays an interactive question card and waits for the answer. " +
+    "Ask 1-3 concise questions. Each may have 2-6 choices or no choices for free text. " +
+    "The user may cancel; never treat cancellation as approval.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      questions: {
+        type: "array",
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Unique snake_case answer key." },
+            header: { type: "string", description: "Short topic label." },
+            question: { type: "string", description: "The complete question shown to the user." },
+            options: {
+              type: "array",
+              minItems: 2,
+              maxItems: 6,
+              items: {
+                type: "object",
+                properties: { label: { type: "string" }, description: { type: "string" } },
+                required: ["label", "description"],
+              },
+              description: "Omit for a free-text answer.",
+            },
+            isOther: { type: "boolean", description: "Allow a custom answer alongside the choices." },
+          },
+          required: ["id", "question"],
+        },
+      },
+    },
+    required: ["questions"],
+  },
+};
+
 // Memory, offered as a dynamic tool the same way scheduling is. The saved
 // note only ever becomes prompt text in later threads, so unlike
 // schedule_create there is no approval card — visibility comes from the
@@ -1906,6 +1962,7 @@ function threadDynamicTools(): Record<string, unknown>[] | undefined {
   // will actually run, so a withheld verb cannot come back through the door.
   const screenshots = screenshotToolsOffered({ axAlive: ax?.alive === true });
   const tools = [
+    ASK_USER_TOOL,
     ...(ax?.alive ? AX_TOOLS.map((t) => withSpaceGuidance(t, ax!.crossSpace)) : []),
     ...COMPUTER_USE_TOOLS
       .filter((t) => coordinateToolAllowed(t.name, screenshots))
@@ -3672,6 +3729,11 @@ const pendingMessagePrompts = new Map<string, string>();
  *  thread ids, queued approvals, and RPC ids all die with it. Called on
  *  every engine (re)start so a stale roster can't outlive its engine. */
 function resetSubAgentState(): void {
+  for (const [requestId, pending] of pendingUserInputs) {
+    const owner = pending.threadId ? subAgents.get(pending.threadId)?.parent ?? pending.threadId : null;
+    const paneId = owner ? paneForThread(owner) : "main";
+    if (paneId) send("chat:user-input-canceled", { paneId, requestId });
+  }
   subAgents.clear();
   subAgentMail.clear();
   pendingSpawnPrompts.clear();
@@ -3683,6 +3745,10 @@ function resetSubAgentState(): void {
     if (pending.kind === "local") pending.settle("decline");
   }
   pendingApprovals.clear();
+  for (const pending of pendingUserInputs.values()) {
+    if (pending.kind === "local") pending.settle(null);
+  }
+  pendingUserInputs.clear();
   browserNetGrants.clear();
   axGrants.clear();
   browserConnectGrants.clear();
@@ -5764,6 +5830,12 @@ type PendingApproval = { threadId: string | null } & (
   | { kind: "local"; settle: (decision: ApprovalDecision) => void }
 );
 const pendingApprovals = new Map<string, PendingApproval>();
+type PendingUserInput = { threadId: string | null; request: UserInputRequest } & (
+  | { kind: "local"; settle: (values: Record<string, UserInputValue> | null) => void }
+  | { kind: "codex" | "mcp"; rpcId: number | string }
+);
+const pendingUserInputs = new Map<string, PendingUserInput>();
+let nextUserInput = 1;
 let nextLocalApproval = 1;
 // Approval handles are persisted in the transcript, so a card outlives the
 // process that created it. Counters restart at 1 every boot, which means a
@@ -5778,6 +5850,40 @@ const APPROVAL_BOOT = Math.random().toString(36).slice(2, 8);
 // could never come, and an Allow click landed on a different request than the
 // card described. The rpcId is data we answer with, not identity.
 let nextEngineApproval = 1;
+
+function deliverUserInput(request: UserInputRequest, pending: PendingUserInput): void {
+  pendingUserInputs.set(request.requestId, pending);
+  const sub = pending.threadId ? subAgents.get(pending.threadId) : undefined;
+  const target = sub ? sub.parent : pending.threadId;
+  const tagged = sub ? { ...request, agentName: sub.name } : request;
+  const paneId = target ? paneForThread(target) : null;
+  if (paneId) send("chat:user-input-request", { paneId, ...tagged });
+  else if (!target) send("chat:user-input-request", { paneId: "main", ...tagged });
+}
+
+async function handleAskUser(rawArgs: unknown, threadId: string | null): Promise<DynamicToolResponse> {
+  const args = rawArgs && typeof rawArgs === "object" ? rawArgs as Record<string, unknown> : {};
+  const fields = agentInputFields(args.questions);
+  if (!fields) return {
+    contentItems: [{ type: "inputText", text: "ask_user needs 1-3 valid questions with unique ids." }],
+    success: false,
+  };
+  const request: UserInputRequest = {
+    requestId: `input_${APPROVAL_BOOT}_${nextUserInput++}`,
+    title: "The agent has a question",
+    source: "agent",
+    fields,
+  };
+  const values = await new Promise<Record<string, UserInputValue> | null>((settle) => {
+    deliverUserInput(request, { kind: "local", threadId, request, settle });
+  });
+  return {
+    contentItems: [{ type: "inputText", text: values === null
+      ? "The user canceled this question. Do not assume an answer."
+      : JSON.stringify({ answers: values }) }],
+    success: values !== null,
+  };
+}
 
 /** Raise a Permissions card for work this process is about to do itself, and
  *  wait for the human. Routed exactly like an engine approval: a sub-agent's
@@ -6642,6 +6748,14 @@ function wireNotifications(): void {
               }
             }
           }
+          for (const [requestId, pending] of pendingUserInputs) {
+            if (pending.threadId !== threadId) continue;
+            pendingUserInputs.delete(requestId);
+            if (pending.kind === "local") pending.settle(null);
+            const owner = subAgents.get(threadId)?.parent ?? threadId;
+            const ownerPane = paneForThread(owner);
+            if (ownerPane) send("chat:user-input-canceled", { paneId: ownerPane, requestId });
+          }
           const sub = subAgents.get(threadId);
           if (sub) {
             sub.status =
@@ -6821,6 +6935,21 @@ function wireNotifications(): void {
         }
       }
       const approvalThread = typeof params.threadId === "string" ? params.threadId : null;
+      if (msg.method === "item/tool/requestUserInput") {
+        const fields = agentInputFields(params.questions);
+        if (!fields) {
+          engine.respond(msg.id, { answers: {} });
+          return;
+        }
+        const request: UserInputRequest = {
+          requestId: `input_${APPROVAL_BOOT}_${nextUserInput++}`,
+          title: "The agent has a question",
+          source: "codex",
+          fields,
+        };
+        deliverUserInput(request, { kind: "codex", rpcId: msg.id, threadId: approvalThread, request });
+        return;
+      }
       if (msg.method === "item/commandExecution/requestApproval") {
         const requestId = `apr_${APPROVAL_BOOT}_${nextEngineApproval++}`;
         pendingApprovals.set(requestId, { kind: "engine", rpcId: msg.id, threadId: approvalThread });
@@ -6870,7 +6999,9 @@ function wireNotifications(): void {
         // running at the same moment.
         const quietWrites: { id: number | null; role: string | null }[] = [];
         const call = inToolCall.run({ seq, thread: approvalThread, quiet: quietWrites }, () =>
-          tool.startsWith("schedule_")
+          tool === "ask_user"
+          ? handleAskUser(args, approvalThread)
+          : tool.startsWith("schedule_")
           ? handleScheduleToolCall(tool, args, approvalThread)
           : tool.startsWith("checkpoint_")
             ? handleCheckpointToolCall(tool, args, approvalThread)
@@ -6963,15 +7094,22 @@ function wireNotifications(): void {
       if (msg.method === "mcpServer/elicitation/request") {
         const meta = (params._meta ?? {}) as Record<string, unknown>;
         const server = typeof params.serverName === "string" ? params.serverName : "an MCP server";
-        // Two flavours arrive on this method. An approval ("may I run this
-        // tool?") is tagged by codex with _meta.codex_approval_kind and is
-        // answerable with accept/decline. A genuine form elicitation (a
-        // server asking the USER for data, per requestedSchema) needs a form
-        // this app does not have — decline it, but decline it in the shape
-        // codex can actually read.
+        // Tool approvals and MCP forms share a method but not a response shape.
         if (meta.codex_approval_kind === undefined) {
-          console.warn("[app] declining MCP form elicitation from", server, "— no form UI");
-          engine.respond(msg.id, { action: "decline" });
+          const fields = params.mode === "form" ? mcpInputFields(params.requestedSchema) : null;
+          if (!fields) {
+            console.warn("[app] declining unsupported MCP elicitation from", server);
+            engine.respond(msg.id, { action: "decline" });
+            return;
+          }
+          const request: UserInputRequest = {
+            requestId: `input_${APPROVAL_BOOT}_${nextUserInput++}`,
+            title: typeof params.message === "string" ? params.message.slice(0, 500) : `${server} asks for input`,
+            source: "mcp",
+            sourceName: server,
+            fields,
+          };
+          deliverUserInput(request, { kind: "mcp", rpcId: msg.id, threadId: approvalThread, request });
           return;
         }
         const requestId = `apr_${APPROVAL_BOOT}_${nextEngineApproval++}`;
@@ -10439,6 +10577,27 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("chat:live-approvals", () => ({ requestIds: [...pendingApprovals.keys()] }));
+  ipcMain.handle("chat:live-user-inputs", () => ({ requestIds: [...pendingUserInputs.keys()] }));
+
+  ipcMain.handle("chat:user-input-submit", (_e, payload: {
+    requestId: string;
+    action: "submit" | "cancel";
+    values?: Record<string, UserInputValue>;
+  }) => {
+    const pending = pendingUserInputs.get(payload.requestId);
+    if (!pending) return { ok: false, expired: true };
+    if (payload.action !== "submit" && payload.action !== "cancel") return { ok: false, error: "Invalid action." };
+    const checked = payload.action === "submit"
+      ? validateUserInput(pending.request.fields, payload.values)
+      : null;
+    if (checked && !checked.ok) return { ok: false, error: checked.error };
+    const values = checked?.ok ? checked.values : null;
+    pendingUserInputs.delete(payload.requestId);
+    if (pending.kind === "local") pending.settle(values);
+    else if (pending.kind === "codex") engine.respond(pending.rpcId, codexInputResponse(pending.request.fields, values));
+    else engine.respond(pending.rpcId, mcpInputResponse(values));
+    return { ok: true };
+  });
 
   ipcMain.handle("chat:approve", (_e, payload: {
     requestId: string;
@@ -10739,6 +10898,12 @@ app.whenReady().then(async () => {
     applyRolloutNicknames(id);
     const approvals = heldApprovals.get(id) ?? [];
     heldApprovals.delete(id);
+    const userInputs = [...pendingUserInputs.values()]
+      .filter((pending) => pending.threadId && rootThreadOf(pending.threadId) === id)
+      .map((pending) => {
+        const sub = pending.threadId ? subAgents.get(pending.threadId) : undefined;
+        return sub ? { ...pending.request, agentName: sub.name } : pending.request;
+      });
     const failure = heldErrors.get(id) ?? null;
     heldErrors.delete(id);
     // History replays raw engine content — same redaction as live events.
@@ -10764,6 +10929,7 @@ app.whenReady().then(async () => {
       running,
       streamText: bgStream.get(id) ?? "",
       approvals,
+      userInputs,
       failure,
     });
   });
@@ -11661,6 +11827,7 @@ app.whenReady().then(async () => {
       }
       runningTurns.delete(subId);
       settleLocalApprovals(subId);
+      settleLocalUserInputs(subId);
       subAgents.delete(subId);
       subAgentMail.delete(subId);
       heldApprovals.delete(subId);
@@ -11668,6 +11835,7 @@ app.whenReady().then(async () => {
     }
     runningTurns.delete(id);
     settleLocalApprovals(id);
+    settleLocalUserInputs(id);
     threadMcp.delete(id);
     mcpApplyPending.delete(id);
     saveThreadMcp();

@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld("unbiased", {
   decideApproval: (requestId: string, decision: "accept" | "acceptForSession" | "decline") =>
     ipcRenderer.invoke("chat:approve", { requestId, decision }),
   liveApprovals: () => ipcRenderer.invoke("chat:live-approvals"),
+  liveUserInputs: () => ipcRenderer.invoke("chat:live-user-inputs"),
+  submitUserInput: (requestId: string, action: "submit" | "cancel", values?: Record<string, string | number | boolean | string[]>) =>
+    ipcRenderer.invoke("chat:user-input-submit", { requestId, action, values }),
   mcpList: () => ipcRenderer.invoke("mcp:list"),
   mcpSave: (servers: unknown[]) => ipcRenderer.invoke("mcp:save", { servers }),
   mcpApply: () => ipcRenderer.invoke("mcp:apply"),
@@ -137,6 +140,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   },
   onApprovalRequest: (cb: (p: unknown) => void) => subscribe("chat:approval-request", cb),
   onApprovalCanceled: (cb: (p: unknown) => void) => subscribe("chat:approval-canceled", cb),
+  onUserInputRequest: (cb: (p: unknown) => void) => subscribe("chat:user-input-request", cb),
+  onUserInputCanceled: (cb: (p: unknown) => void) => subscribe("chat:user-input-canceled", cb),
   onCommand: (cb: (p: unknown) => void) => subscribe("chat:command", cb),
   onCommandOutput: (cb: (p: unknown) => void) => subscribe("chat:command-output", cb),
   onCompaction: (cb: (p: unknown) => void) => subscribe("chat:compaction", cb),
