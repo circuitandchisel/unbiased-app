@@ -52,3 +52,37 @@ test("does not replace unsupported or malformed fences", async () => {
   invalid[1].updateComponents!.components[2].bars = [];
   assert.equal(visualSurfaceForFence("a2ui", JSON.stringify(invalid)), null);
 });
+
+test("renders a Card with model-generated children and keeps its slider interactive", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { visualSurfaceForFence } = await import("./visual-surface-plugins");
+  const graph = structuredClone(messages);
+  graph[1].updateComponents!.components = [
+    { id: "root", component: "Column", children: ["card"] },
+    { id: "card", component: "Card", children: ["chart", "slider"] },
+    ...graph[1].updateComponents!.components.slice(1),
+  ];
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(StrictMode, null, visualSurfaceForFence("a2ui", JSON.stringify(graph)))));
+    const selected = container.querySelector('[role="meter"][aria-label="Selected"]');
+    const slider = container.querySelector('input[type="range"]') as HTMLInputElement | null;
+    assert.equal(selected?.getAttribute("aria-valuenow"), "50");
+    assert.ok(slider);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!.call(slider, "75");
+      slider.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+      slider.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    });
+    assert.equal(selected?.getAttribute("aria-valuenow"), "75");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});

@@ -49,11 +49,31 @@ export function parseVisualMessages(source: string): VisualMessage[] | null {
       if (!Array.isArray(body.components) || body.components.length === 0) return null;
       componentCount += body.components.length;
       if (componentCount > 40) return null;
+      const ids = new Set(body.components.filter(record).map((component) => component.id));
+      const cardContents: Record<string, unknown>[] = [];
       for (const component of body.components) {
         if (!record(component) || typeof component.id !== "string" || component.id.length > 64 ||
             !COMPONENTS.has(String(component.component))) return null;
         if (component.id === "root") hasRoot = true;
+        if (component.component === "Card" && "children" in component) {
+          if ("child" in component || !Array.isArray(component.children) || component.children.length === 0 ||
+              component.children.length > 40 ||
+              component.children.some((child) => typeof child !== "string" || child.length > 64)) return null;
+          const children = component.children as string[];
+          delete component.children;
+          if (children.length === 1) {
+            component.child = children[0];
+          } else {
+            if (++componentCount > 40) return null;
+            let id = `cardContent${componentCount}`;
+            while (ids.has(id)) id += "_";
+            ids.add(id);
+            component.child = id;
+            cardContents.push({ id, component: "Column", children });
+          }
+        }
       }
+      body.components.push(...cardContents);
       hasComponents = true;
     }
   }

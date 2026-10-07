@@ -38,3 +38,17 @@ test("rejects actions, unknown components and extra surfaces", () => {
   secondSurface[2].updateDataModel!.surfaceId = "other";
   assert.equal(parseVisualMessages(JSON.stringify(secondSurface)), null);
 });
+
+test("rejects invalid Card child aliases", () => {
+  const invalid = structuredClone(valid);
+  Object.assign(invalid[1].updateComponents!.components[0], {
+    component: "Card", child: "label", children: ["label", "slider"],
+  });
+  assert.equal(parseVisualMessages(JSON.stringify(invalid)), null);
+
+  const tooMany = structuredClone(valid);
+  Object.assign(tooMany[1].updateComponents!.components[0], {
+    component: "Card", children: Array(41).fill("label"),
+  });
+  assert.equal(parseVisualMessages(JSON.stringify(tooMany)), null);
+});

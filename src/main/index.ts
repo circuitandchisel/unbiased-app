@@ -1014,6 +1014,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "Its contents must be a JSON array of A2UI v0.9 messages for one surface using catalogId",
   "https://unbiased.ai/a2ui/visual-v1. The available components are Text, Column, Row, Card,",
   "Divider, Slider, and BarChart. BarChart has title and bars [{label, value}]. A slider and bar",
+  "Card takes one child ID, not children; wrap multiple items in a Column inside the Card.",
   "value can share a data path so moving the slider updates the chart. Example messages:",
   '[{"version":"v0.9","createSurface":{"surfaceId":"visual","catalogId":"https://unbiased.ai/a2ui/visual-v1"}},',
   '{"version":"v0.9","updateComponents":{"surfaceId":"visual","components":[',
