@@ -25,6 +25,8 @@ import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import "./side-tab-scrollbar.css";
+import "./user-message-markdown.css";
+import { UserMessageMarkdown } from "./user-message-markdown";
 import { Bot, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, MessageSquare, MoreHorizontal, RefreshCw } from "lucide-react";
 import { ConversationDrafts } from "./conversation-drafts";
 import { SettingsRoute } from "./settings-route";
@@ -7324,11 +7326,10 @@ function SubAgentPane({ threadId, status }: { threadId: string; status: string }
                     padding: "8px 12px",
                     borderRadius: 12,
                     background: colors.panel,
-                    whiteSpace: "pre-wrap",
                     fontSize: 13,
                   }}
                 >
-                  {e.text}
+                  <UserMessageMarkdown text={e.text} onOpenLink={(href) => void window.unbiased.openExternal(href)} />
                 </div>
               </div>
             );
@@ -9854,13 +9855,12 @@ function ChatPane({
                 borderRadius: 14,
                 background: "var(--chip)",
                 border: `1px solid ${colors.border}`,
-                whiteSpace: "pre-wrap",
                 lineHeight: 1.55,
                 fontSize: 14,
                 letterSpacing: "var(--track-body)",
               }}
             >
-              {e.text}
+              <UserMessageMarkdown text={e.text} onOpenLink={onOpenLink} />
             </div>
           )}
           {e.text && <CopyButton text={e.text} />}
