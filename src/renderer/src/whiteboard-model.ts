@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 
 const coordinate = z.number().finite().min(0).max(800);
 const size = z.number().finite().min(0).max(800);
