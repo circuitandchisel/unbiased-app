@@ -66,7 +66,7 @@ test("keeps incomplete A2UI source hidden while streaming and after failure", as
   assert.doesNotMatch(validMidStream, /Interactive visual/);
 
   const failed = renderToStaticMarkup(visualFenceContent("a2ui", incomplete, false)!);
-  assert.match(failed, /Could not display this visual/);
+  assert.match(failed, /This visual couldn&#x27;t be displayed/);
   assert.doesNotMatch(failed, /raw A2UI source/);
   assert.equal(visualFenceContent("json", incomplete, true), null);
   assert.ok(visualFenceContent("a2ui", JSON.stringify(messages), true));
@@ -95,6 +95,87 @@ test("loads an interactive HTML fragment only after streaming into a sandboxed f
     assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
     assert.equal(frame.getAttribute("src"), "unbiased-visual://view/test-id");
     assert.doesNotMatch(container.innerHTML, /secret-source/);
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("the HTML host reveals a ready frame, catches runtime errors, and can reload it", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  let registrations = 0;
+  Object.assign(dom.window, { unbiased: { registerVisual: async () => `unbiased-visual://view/${++registrations}` } });
+  const { createRoot } = await import("react-dom/client");
+  const { InteractiveHtmlVisual } = await import("./interactive-html-visual");
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(InteractiveHtmlVisual, { source: "<div>Lesson</div>" })));
+    const frame = container.querySelector("iframe")!;
+    assert.equal(frame.style.visibility, "hidden");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.MessageEvent("message", {
+        source: frame.contentWindow, origin: "null", data: { type: "unbiased-visual-ready" },
+      }));
+    });
+    assert.equal(frame.style.visibility, "visible");
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.MessageEvent("message", {
+        source: frame.contentWindow, origin: "null", data: {
+          type: "unbiased-visual-error", kind: "runtime-error", detail: "idx is not defined",
+        },
+      }));
+    });
+    assert.match(container.textContent ?? "", /This visual couldn't load/);
+    assert.equal(container.querySelector("iframe"), null);
+    await act(async () => (container.querySelector('button[aria-label="Reload visual"]') as HTMLButtonElement).click());
+    assert.equal(registrations, 2);
+    assert.ok(container.querySelector("iframe"));
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
+test("a frame that never signals readiness times out without exposing its content", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.assign(dom.window, { unbiased: { registerVisual: async () => "unbiased-visual://view/test-id" } });
+  let expire: (() => void) | undefined;
+  const setTimeout = dom.window.setTimeout.bind(dom.window);
+  dom.window.setTimeout = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay === 8000 && typeof handler === "function") {
+      expire = handler as () => void;
+      return 1;
+    }
+    return setTimeout(handler, delay, ...args);
+  }) as typeof dom.window.setTimeout;
+  const { createRoot } = await import("react-dom/client");
+  const { InteractiveHtmlVisual } = await import("./interactive-html-visual");
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(InteractiveHtmlVisual, { source: "<div>Lesson</div>" })));
+    const frame = container.querySelector("iframe")!;
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.MessageEvent("message", {
+        source: frame.contentWindow, origin: "https://untrusted.test", data: { type: "unbiased-visual-ready" },
+      }));
+    });
+    assert.equal(frame.style.visibility, "hidden");
+    assert.ok(expire);
+    await act(async () => expire!());
+    assert.match(container.textContent ?? "", /This visual couldn't load/);
+    assert.equal(container.querySelector("iframe"), null);
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

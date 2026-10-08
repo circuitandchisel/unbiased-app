@@ -1,9 +1,9 @@
-import { type CSSProperties, type ReactElement } from "react";
+import { Component, type CSSProperties, type ReactElement, type ReactNode } from "react";
 import { z } from "zod";
 import { Catalog, CommonSchemas, MessageProcessor } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, AudioPlayer, Button, Card, CheckBox, ChoicePicker, Column, createComponentImplementation, DateTimeInput, Divider, Icon, Image, List, Modal, Row, Slider, Tabs, Text, TextField, Video, type ReactComponentImplementation } from "@a2ui/react/v0_9";
 import { isInteractiveVisualSource } from "../../shared/interactive-visual";
-import { parseVisualMessages, VISUAL_CATALOG_ID, type VisualMessage } from "./a2ui-payload";
+import { inspectVisualMessages, VISUAL_CATALOG_ID, type VisualMessage } from "./a2ui-payload";
 import { InteractiveHtmlVisual } from "./interactive-html-visual";
 import { MermaidDiagram } from "./mermaid-diagram";
 import { mermaidDiagramSchema, MAX_MERMAID_LENGTH } from "./mermaid-model";
@@ -60,14 +60,31 @@ function createVisualSurfaceState(messages: VisualMessage[]) {
     const first = messages[0].createSurface as { surfaceId: string };
     const surface = processor.model.getSurface(first.surfaceId);
     if (surface) return { processor, surface };
-  } catch {
-    // Leave invalid model output for the visual-fence fallback.
+    console.warn("[visual] A2UI processing failed: surface-missing");
+  } catch (error) {
+    console.warn("[visual] A2UI processing failed:", error instanceof Error ? error.message : "unknown error");
   }
   processor.dispose();
   return null;
 }
 
 type VisualState = NonNullable<ReturnType<typeof createVisualSurfaceState>>;
+
+class VisualRenderBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.warn("[visual] A2UI rendering failed:", error.message);
+  }
+
+  render() {
+    return this.state.failed ? <VisualFenceStatus /> : this.props.children;
+  }
+}
 
 function A2uiVisualSurface({ state }: { state: VisualState }) {
   return (
@@ -127,10 +144,10 @@ const plugins: VisualPlugin[] = [
   {
     language: "a2ui",
     render(source) {
-      const messages = parseVisualMessages(source);
+      const messages = inspectVisualMessages(source).messages;
       if (!messages) return null;
       const state = createVisualSurfaceState(messages);
-      return state ? <A2uiVisualSurface state={state} /> : null;
+      return state ? <VisualRenderBoundary key={source}><A2uiVisualSurface state={state} /></VisualRenderBoundary> : null;
     },
   },
 ];
@@ -151,11 +168,18 @@ export function visualFenceContent(language: string, source: string, streaming: 
   if (!streaming) {
     const visual = visualSurfaceForFence(language, source);
     if (visual) return visual;
+    console.warn("[visual] visual source rejected:", language === "a2ui"
+      ? inspectVisualMessages(source).failure ?? "processor-error"
+      : "invalid-html");
   }
+  return <VisualFenceStatus pending={streaming} />;
+}
+
+function VisualFenceStatus({ pending = false }: { pending?: boolean }) {
   return (
     <div
       role="status"
-      aria-live={streaming ? "polite" : "off"}
+      aria-live={pending ? "polite" : "off"}
       style={{
         margin: "16px 0 20px", padding: "24px", minHeight: 96,
         boxSizing: "border-box", border: "1px solid var(--border)",
@@ -164,7 +188,7 @@ export function visualFenceContent(language: string, source: string, streaming: 
         color: "var(--dim)", fontFamily: "var(--font-ui)", fontSize: 14,
       }}
     >
-      {streaming ? "Preparing visual..." : "Could not display this visual."}
+      {pending ? "Preparing visual..." : "This visual couldn't be displayed. The rest of the answer is still available."}
     </div>
   );
 }

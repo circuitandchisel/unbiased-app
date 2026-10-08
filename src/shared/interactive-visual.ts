@@ -44,6 +44,12 @@ export function interactiveVisualDocument(source: string): string {
   body { margin: 0; min-width: 0; overflow-x: hidden; background: var(--visual-bg); color: var(--visual-fg); font: 14px/1.5 system-ui, sans-serif; }
 </style>
 <script>
+  (() => {
+  const reportFailure = (kind, detail) => {
+    parent.postMessage({ type: 'unbiased-visual-error', kind, detail: String(detail || '').slice(0, 300) }, '*');
+  };
+  addEventListener('error', event => reportFailure('runtime-error', event.message));
+  addEventListener('unhandledrejection', event => reportFailure('unhandled-rejection', event.reason));
   addEventListener('message', event => {
     if (event.source !== parent || event.data?.type !== 'unbiased-visual-theme') return;
     for (const [key, value] of Object.entries(event.data.colors ?? {})) {
@@ -53,8 +59,10 @@ export function interactiveVisualDocument(source: string): string {
   });
   addEventListener('DOMContentLoaded', () => {
     const report = () => parent.postMessage({ type: 'unbiased-visual-height', height: Math.ceil(document.documentElement.scrollHeight) }, '*');
-    new ResizeObserver(report).observe(document.documentElement);
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(report).observe(document.documentElement);
     report();
+    parent.postMessage({ type: 'unbiased-visual-ready' }, '*');
   });
+  })();
 </script></head><body>${source}</body></html>`;
 }
