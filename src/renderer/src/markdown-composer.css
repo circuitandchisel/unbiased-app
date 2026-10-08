@@ -3,7 +3,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  color: var(--fg-soft);
+  color: var(--dim);
   pointer-events: none;
 }
 .u-markdown-composer .ProseMirror {

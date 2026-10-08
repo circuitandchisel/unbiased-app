@@ -107,8 +107,8 @@ function prepareMacLauncher() {
       `  --env "ELECTRON_RENDERER_URL=$ELECTRON_RENDERER_URL" \\`,
       `  --env "NODE_ENV_ELECTRON_VITE=$NODE_ENV_ELECTRON_VITE" \\`,
       `  --env "UNBIASED_DEV_APP_NAME=$UNBIASED_DEV_APP_NAME" \\`,
-      // Not set by the launcher, but the engine path cannot be resolved from
-      // a git worktree without it — see resolveEngineDir.
+      // Optional override for an engine checkout outside the app repo's
+      // sibling projects. The ordinary worktree path resolves automatically.
       `  --env "UNBIASED_ENGINE_DIR=$UNBIASED_ENGINE_DIR" \\`,
       // Same for the accessibility bridge: resolveAxDir walks up from the app
       // path and finds the FIRST unbiased-ax/dist, which from a worktree is the

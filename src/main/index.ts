@@ -8,6 +8,7 @@ import {
   Menu,
   nativeImage,
   Notification,
+  protocol,
   screen,
   shell,
   systemPreferences,
@@ -19,11 +20,13 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { homedir, hostname } from "node:os";
 import { appendFileSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-actions";
+import { resolveEngineDir } from "./engine-path";
 import { agentBrowserCandidates, chromeCandidates } from "./browser-binaries";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
 import { epochMillis } from "../shared/conversation-time";
+import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_SCHEME, interactiveVisualDocument, interactiveVisualId, isInteractiveVisualSource } from "../shared/interactive-visual";
 import { agentInputFields, codexInputResponse, mcpInputFields, mcpInputResponse, validateUserInput, type UserInputRequest, type UserInputValue } from "../shared/user-input";
 import { startSecretProxy, type SecretConnector } from "./oauth-proxy";
 import {
@@ -1032,7 +1035,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "avoid unrelated disconnected subgraphs that produce sparse or overly tall layouts.",
   "Use Whiteboard for spatial diagrams and node-edge graphs rather than BarChart. Whiteboard takes",
   "shapes (up to 60) with unique id. Drawable types are circle|oval|square|rectangle|triangle|line|arrow,",
-  "with x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Coordinates fit 800x450.",
+  "with x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Keep the entire shape inside 800x450: x+width <= 800 and y+(height or width) <= 450.",
   "Lines and arrows may have width 0 or height 0 for vertical or horizontal strokes, but not both.",
   "Emit strict JSON: close the components array and updateComponents object before the message array.",
   "For a graph, use labeled nodes and connector shapes with from/to node IDs, never free lines for edges.",
@@ -1053,7 +1056,14 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   '{"id":"slider","component":"Slider","label":"Amount","value":{"path":"/amount"},"min":0,"max":100},',
   '{"id":"chart","component":"BarChart","title":"Result","bars":[{"label":"Capacity","value":100},{"label":"Selected","value":{"path":"/amount"}}]}]}},',
   '{"version":"v0.9","updateDataModel":{"surfaceId":"visual","path":"/","value":{"amount":50}}}]',
-  "Use Mermaid for standalone static diagrams, A2UI when interaction or mixed UI helps, and normal Markdown otherwise.",
+  "For a bespoke interactive illustration or guided narrative, use one fenced visual-html block instead.",
+  "Its contents are a self-contained HTML fragment with inline <style> and <script>, not a full document.",
+  "The frame has no network, external assets, app APIs, links, forms, or file access. Use no imports or fetch.",
+  "Build meaningful interaction in the fragment: for a journey, show selectable steps, a changing scene,",
+  "and concise details for the selected step. Use responsive layout, semantic buttons, and keyboard access.",
+  "Theme CSS variables are --visual-bg, --visual-fg, --visual-muted, and --visual-accent.",
+  "Keep the fragment under 128 KB and make it fit widths from 320px upward without horizontal scrolling.",
+  "Use Mermaid for standalone static diagrams, A2UI for standard controls, visual-html for bespoke interactions, and normal Markdown otherwise.",
   "Permission in this app is handled by the app, not by you. When a tool needs the user's consent —",
   "network access, or a signed-in browser session — calling it shows the user a permission card they",
   "approve or deny. So call the tool directly and never ask the user in chat for permission first,",
@@ -4854,16 +4864,6 @@ function threadToEntries(
   return { entries, runningTurnStart, runningTurnStartedAt };
 }
 
-/** The engine binary ships beside the app (extraResources) in production;
- *  in development it comes from the sibling unbiased-app-engine checkout's
- *  `make bundle` output. UNBIASED_ENGINE_DIR overrides both for testing. */
-function resolveEngineDir(): string {
-  const override = process.env.UNBIASED_ENGINE_DIR;
-  if (override) return override;
-  if (productionBuild()) return join(process.resourcesPath, "engine");
-  return join(app.getAppPath(), "..", "unbiased-app-engine", "dist", "bundle");
-}
-
 /** Small data-URL preview for attachment cards; full-size stays on disk. */
 function thumbDataUrl(image: NativeImage, max = 112): string {
   const { width, height } = image.getSize();
@@ -5741,6 +5741,11 @@ function createWindow(): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  win.webContents.on("will-frame-navigate", (event) => {
+    if (!event.isMainFrame && !registeredInteractiveVisualId(event.url)) {
+      event.preventDefault();
+    }
   });
   win.webContents.on("will-navigate", (e, url) => {
     if (/^https?:/.test(url) && !url.startsWith("http://localhost")) {
@@ -7892,7 +7897,12 @@ async function startEngine(): Promise<void> {
   // Fire-and-forget: the page refreshes on open anyway, and nothing about
   // starting the engine should wait on GitHub.
   void refreshCatalogueAtStartup();
-  const engineDir = resolveEngineDir();
+  const engineDir = resolveEngineDir({
+    override: process.env.UNBIASED_ENGINE_DIR,
+    isPackaged: productionBuild(),
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  });
   const bin = join(engineDir, "unbiased-app-engine");
   if (!existsSync(bin)) {
     pushStatus({
@@ -7951,7 +7961,35 @@ async function startEngine(): Promise<void> {
   void startAxBridge();
 }
 
+const interactiveVisuals = new Map<string, string>();
+function registeredInteractiveVisualId(rawUrl: string): string | null {
+  const id = interactiveVisualId(rawUrl);
+  return id && interactiveVisuals.has(id) ? id : null;
+}
+protocol.registerSchemesAsPrivileged([{ scheme: INTERACTIVE_VISUAL_SCHEME, privileges: { standard: true, secure: true } }]);
+
 app.whenReady().then(async () => {
+  protocol.handle(INTERACTIVE_VISUAL_SCHEME, (request) => {
+    const id = registeredInteractiveVisualId(request.url);
+    const source = request.method === "GET" && id ? interactiveVisuals.get(id) : null;
+    if (!source) return new Response("Not found", { status: 404 });
+    return new Response(interactiveVisualDocument(source), {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": INTERACTIVE_VISUAL_CSP,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+      },
+    });
+  });
+  ipcMain.handle("visual:register", (event, source: unknown) => {
+    if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
+        !isInteractiveVisualSource(source)) return null;
+    const id = randomUUID();
+    interactiveVisuals.set(id, source);
+    if (interactiveVisuals.size > 32) interactiveVisuals.delete(interactiveVisuals.keys().next().value!);
+    return `${INTERACTIVE_VISUAL_SCHEME}://view/${id}`;
+  });
   try {
     const migrated = migrateLegacyPlainMemory(memoryRoot(), defaultChatDir());
     if (migrated.copied || migrated.unassigned || migrated.conflicts) {

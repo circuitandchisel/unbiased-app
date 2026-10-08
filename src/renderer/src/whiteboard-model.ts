@@ -52,6 +52,35 @@ export const whiteboardSchema = z.object({
   }
 });
 
+const EDGE_TOLERANCE = 16;
+
+/** Nudge near-edge model geometry onto the board before strict validation. */
+export function fitMinorWhiteboardOverflow(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const board = value as Record<string, unknown>;
+  if (!Array.isArray(board.shapes)) return value;
+  return {
+    ...board,
+    shapes: board.shapes.map((item: unknown) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const shape = item as Record<string, unknown>;
+      if (shape.type === "connector" || typeof shape.x !== "number" || typeof shape.y !== "number" ||
+          typeof shape.width !== "number" || !Number.isFinite(shape.x) || !Number.isFinite(shape.y) ||
+          !Number.isFinite(shape.width)) return item;
+      const height = typeof shape.height === "number" ? shape.height
+        : shape.type === "line" || shape.type === "arrow" ? 0 : shape.width;
+      if (!Number.isFinite(height)) return item;
+      const overflowX = shape.x + shape.width - 800;
+      const overflowY = shape.y + height - 450;
+      return {
+        ...shape,
+        x: overflowX > 0 && overflowX <= EDGE_TOLERANCE ? shape.x - overflowX : shape.x,
+        y: overflowY > 0 && overflowY <= EDGE_TOLERANCE ? shape.y - overflowY : shape.y,
+      };
+    }),
+  };
+}
+
 export type WhiteboardShape = z.infer<typeof whiteboardShapeSchema>;
 export type DrawableShape = Exclude<WhiteboardShape, { type: "connector" }>;
 export type ConnectorShape = Extract<WhiteboardShape, { type: "connector" }>;

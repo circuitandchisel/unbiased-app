@@ -1,0 +1,289 @@
+.u-user-input {
+  margin: 16px 0 20px;
+  max-width: var(--measure);
+  min-width: 0;
+  font-family: var(--font-ui);
+}
+
+.u-user-input-dock {
+  box-sizing: border-box;
+  max-width: 804px;
+  max-height: min(50vh, 520px);
+  min-width: 0;
+  margin: 0 auto 8px;
+  padding: 16px 18px 14px;
+  overflow-y: auto;
+  border-radius: 28px;
+  background: var(--panel);
+}
+
+.u-user-input-dock .u-user-input {
+  max-width: none;
+  margin: 0;
+}
+
+.u-user-input-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.u-user-input-dock .u-user-input-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: -4px 0 0;
+  padding: 4px 0 8px;
+  background: var(--panel);
+}
+
+.u-user-input-count {
+  margin-left: 4px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.u-user-input-nav {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.u-user-input-nav button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.u-user-input-nav button:hover:not(:disabled) {
+  background: var(--chip-raised);
+}
+
+.u-user-input-nav button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.u-user-input-nav button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.u-user-input-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.u-user-input-eyebrow svg {
+  flex: none;
+}
+
+.u-user-input-title {
+  display: block;
+  margin: 8px 0 0;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.u-user-input-field {
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.u-user-input-field--primary {
+  margin-top: 0;
+}
+
+.u-user-input-field-label {
+  display: block;
+  color: var(--fg);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.u-user-input-description {
+  margin-top: 4px;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.u-user-input-options {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.u-user-input-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.u-user-input-dock .u-user-input-option,
+.u-user-input-dock .u-user-input-control {
+  background: var(--panel-2);
+}
+
+.u-user-input-dock .u-user-input-option:hover:not([data-selected="true"]) {
+  background: var(--chip-raised);
+}
+
+.u-user-input-option:hover {
+  background: var(--panel-2);
+}
+
+.u-user-input-option[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.u-user-input-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.u-user-input-option input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.u-user-input-option-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.u-user-input-option-label {
+  color: var(--fg);
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.u-user-input-option-description {
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.u-user-input-control {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.u-user-input-control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+textarea.u-user-input-control {
+  resize: vertical;
+}
+
+.u-user-input-error {
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+
+.u-user-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.u-user-input-action {
+  min-width: 96px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.u-user-input-action--secondary {
+  background: var(--chip);
+  color: var(--fg);
+}
+
+.u-user-input-action--primary {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.u-user-input-action:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.u-user-input-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.u-user-input-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.u-user-input-status {
+  margin-top: 10px;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+@media (max-width: 480px) {
+  .u-user-input-action {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .u-user-input-option {
+    transition: none;
+  }
+}

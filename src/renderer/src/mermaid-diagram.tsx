@@ -66,7 +66,12 @@ export function MermaidDiagram({ diagram, title, embedded = false }: { diagram: 
     const fontFamily = containerRef.current ? getComputedStyle(containerRef.current).fontFamily : "system-ui, sans-serif";
     void renderDiagram(diagram, fontFamily).then(
       (svg) => { if (active) setState({ diagram, svg }); },
-      () => { if (active) setState({ diagram, failed: true }); },
+      (error) => {
+        if (active) {
+          console.warn("[visual] Mermaid rendering failed:", error instanceof Error ? error.message : "unknown error");
+          setState({ diagram, failed: true });
+        }
+      },
     );
     return () => { active = false; };
   }, [diagram]);
