@@ -98,19 +98,18 @@
   "license": "Apache-2.0",
   "type": "commonjs",
   "dependencies": {
-    "@a2ui/react": "^0.12.0",
-    "@a2ui/web_core": "^0.12.0",
     "@lydell/node-pty": "^1.2.0-beta.15",
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "@openuidev/react-lang": "0.3.2",
     "@tiptap/extension-table": "^3.31.4",
     "@tiptap/extension-task-item": "^3.31.4",
     "@tiptap/extension-task-list": "^3.31.4",
     "@tiptap/markdown": "^3.31.4",
     "@tiptap/react": "^3.31.4",
     "@tiptap/starter-kit": "^3.31.4",
+    "@unbiased/iui": "file:vendor/unbiased-iui-0.1.0.tgz",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "jsonrepair": "^3.15.0",
     "konva": "^10.7.1",
     "lucide-react": "^1.48.0",
     "mermaid": "^11.17.2",
@@ -138,11 +137,6 @@
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
-  },
-  "overrides": {
-    "@a2ui/markdown-it": {
-      "dompurify": "3.4.16"
-    }
   },
   "allowScripts": {
     "electron@44.4.3": true,

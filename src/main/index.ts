@@ -25,6 +25,7 @@ import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-a
 import { resolveEngineDir } from "./engine-path";
 import { agentBrowserCandidates, chromeCandidates } from "./browser-binaries";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
+import { OPENUI_VISUAL_INSTRUCTIONS } from "./visual-instructions";
 import { epochMillis } from "../shared/conversation-time";
 import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_SCHEME, interactiveVisualDocument, interactiveVisualId, isInteractiveVisualSource } from "../shared/interactive-visual";
 import { agentInputFields, codexInputResponse, mcpInputFields, mcpInputResponse, validateUserInput, type UserInputRequest, type UserInputValue } from "../shared/user-input";
@@ -1024,46 +1025,7 @@ function saveAgentStylePrefs(value: unknown): { ok: boolean; prefs: AgentStylePr
 // model reliably stalls on private-data requests ("go over my email") with a
 // "shall I?" instead of calling the tool that triggers the real prompt.
 const APP_DEVELOPER_INSTRUCTIONS = [
-  "For an interactive chart or explainer, you may include one fenced a2ui code block in your final reply.",
-  "Its contents must be a JSON array of A2UI v0.9 messages for one surface using catalogId",
-  "https://unbiased.ai/a2ui/visual-v1. The available components are Text, Column, Row, Card,",
-  "Divider, Slider, BarChart, Icon, List, Tabs, Modal, TextField, CheckBox, ChoicePicker,",
-  "DateTimeInput, Whiteboard, and Mermaid. Text uses text, not value. BarChart has title and bars [{label, value}].",
-  "For a static diagram, use a fenced mermaid block; it renders natively in chat. Within an A2UI surface,",
-  'Mermaid takes {"diagram":"flowchart LR\\nA-->B"} and an optional title. Do not put Mermaid syntax in Text.',
-  "Keep Mermaid diagrams focused: prefer connected flows, short labels, and an explicit direction;",
-  "avoid unrelated disconnected subgraphs that produce sparse or overly tall layouts.",
-  "Use Whiteboard for spatial diagrams and node-edge graphs rather than BarChart. Whiteboard takes",
-  "shapes (up to 60) with unique id. Drawable types are circle|oval|square|rectangle|triangle|line|arrow,",
-  "with x,y,width, optional height, fill/stroke as #RRGGBB, and optional label. Keep the entire shape inside 800x450: x+width <= 800 and y+(height or width) <= 450.",
-  "Lines and arrows may have width 0 or height 0 for vertical or horizontal strokes, but not both.",
-  "Emit strict JSON: close the components array and updateComponents object before the message array.",
-  "For a graph, use labeled nodes and connector shapes with from/to node IDs, never free lines for edges.",
-  "Connectors may have a short label and directed true for arrows; they follow nodes when moved. Example shapes:",
-  '[{"id":"maya","type":"circle","x":100,"y":120,"width":80,"fill":"#5da5e8","label":"Maya"},',
-  '{"id":"sam","type":"circle","x":320,"y":120,"width":80,"fill":"#45c9a5","label":"Sam"},',
-  '{"id":"friendship","type":"connector","from":"maya","to":"sam","stroke":"#94a3b4"}].',
-  'Place the board in components as {"id":"root","component":"Column","children":["board"]},',
-  '{"id":"board","component":"Whiteboard","title":"Connections","shapes":[...]}',
-  "Card takes one child ID;",
-  "wrap multiple items in a Column inside the Card. A slider updates only its own data path;",
-  "bind a bar to that same path if it should move. Other paths are not recalculated.",
-  "Do not use remote media or",
-  "action buttons in visual replies. Example messages:",
-  '[{"version":"v0.9","createSurface":{"surfaceId":"visual","catalogId":"https://unbiased.ai/a2ui/visual-v1"}},',
-  '{"version":"v0.9","updateComponents":{"surfaceId":"visual","components":[',
-  '{"id":"root","component":"Column","children":["slider","chart"]},',
-  '{"id":"slider","component":"Slider","label":"Amount","value":{"path":"/amount"},"min":0,"max":100},',
-  '{"id":"chart","component":"BarChart","title":"Result","bars":[{"label":"Capacity","value":100},{"label":"Selected","value":{"path":"/amount"}}]}]}},',
-  '{"version":"v0.9","updateDataModel":{"surfaceId":"visual","path":"/","value":{"amount":50}}}]',
-  "For a bespoke interactive illustration or guided narrative, use one fenced visual-html block instead.",
-  "Its contents are a self-contained HTML fragment with inline <style> and <script>, not a full document.",
-  "The frame has no network, external assets, app APIs, links, forms, or file access. Use no imports or fetch.",
-  "Build meaningful interaction in the fragment: for a journey, show selectable steps, a changing scene,",
-  "and concise details for the selected step. Use responsive layout, semantic buttons, and keyboard access.",
-  "Theme CSS variables are --visual-bg, --visual-fg, --visual-muted, and --visual-accent.",
-  "Keep the fragment under 128 KB and make it fit widths from 320px upward without horizontal scrolling.",
-  "Use Mermaid for standalone static diagrams, A2UI for standard controls, visual-html for bespoke interactions, and normal Markdown otherwise.",
+  ...OPENUI_VISUAL_INSTRUCTIONS,
   "Permission in this app is handled by the app, not by you. When a tool needs the user's consent —",
   "network access, or a signed-in browser session — calling it shows the user a permission card they",
   "approve or deny. So call the tool directly and never ask the user in chat for permission first,",
@@ -1177,7 +1139,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   // declare. Sub-agents inherit Pareto either way.
   "Never set a `model` field on spawn_agent. This app does not offer model overrides, and",
   "sub-agents already inherit the current model.",
-].join(" ");
+].join("\n");
 
 /** The instructions a thread actually gets: the static block above plus its
  *  scoped memory index, when it has one. Computed per thread START — the

@@ -26,6 +26,9 @@ import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import "./side-tab-scrollbar.css";
 import "./mermaid-diagram.css";
+import "@unbiased/iui/styles.css";
+import "@unbiased/iui/openui-styles.css";
+import "./openui-visual.css";
 import "./markdown-table.css";
 import { tableToMarkdown } from "./markdown-table";
 import "./user-message-markdown.css";
@@ -44,7 +47,7 @@ import { finalAssistantIndices } from "./transcript-actions";
 import { isComposerTypingKey } from "./type-to-focus";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
-import { visualFenceContent } from "./visual-surface-plugins";
+import { visualFenceContent } from "./openui-visual";
 import { validateUserInput, withoutUserInputDefaults, type UserInputRequest, type UserInputValue } from "../../shared/user-input";
 import { firstInvalidQuestionIndex, validateQuestion } from "./user-input-navigation";
 
