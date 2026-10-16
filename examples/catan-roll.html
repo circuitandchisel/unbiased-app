@@ -1,0 +1,158 @@
+<style>
+  .catan-example {
+    --ink: #183b32;
+    --muted: #527066;
+    --line: #bbcbc0;
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0 auto;
+    padding: clamp(20px, 4vw, 42px);
+    background: #f5f8f3;
+    color: var(--ink);
+    font: 16px/1.45 system-ui, sans-serif;
+  }
+  .catan-example * { box-sizing: border-box; }
+  .catan-example h1, .catan-example h2, .catan-example p { margin: 0; }
+  .catan-example header { padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+  .catan-example h1 { font-size: clamp(28px, 3vw, 42px); line-height: 1.08; }
+  .catan-example header p { margin-top: 9px; color: var(--muted); }
+  .catan-example .workbench { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(260px, .75fr); gap: clamp(20px, 3vw, 42px); align-items: start; padding-top: 26px; }
+  .catan-example .board { min-width: 0; }
+  .catan-example .board svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .catan-example .board > p { margin-top: 4px; color: var(--muted); font-size: 14px; }
+  .catan-example .resource-tray { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 54px; margin-top: 8px; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .catan-example .resource-tray > span { margin-right: 3px; color: var(--muted); font-size: 14px; font-weight: 700; }
+  .catan-example .earned-card { min-width: 64px; padding: 8px 12px; border-radius: 6px; background: #387f5b; color: #fff; font-weight: 700; text-align: center; }
+  .catan-example #blocked-label { color: #9b4a2d; font-weight: 700; }
+  .catan-example .hex polygon { stroke: var(--ink); stroke-width: 2; transition: stroke-width 180ms, filter 180ms, opacity 180ms; }
+  .catan-example .hex:not([data-active="true"]) { opacity: .75; }
+  .catan-example .hex[data-active="true"] polygon { stroke-width: 7; filter: drop-shadow(0 5px 6px #183b3225); }
+  .catan-example .hex text { fill: var(--ink); text-anchor: middle; font-weight: 700; }
+  .catan-example .hex .terrain { font-size: 20px; }
+  .catan-example .hex .number { font-size: 27px; }
+  .catan-example .small-label { fill: var(--muted); font-size: 14px; }
+  .catan-example .earned-card.animate { animation: catan-earn 360ms cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes catan-earn { from { opacity: 0; } to { opacity: 1; } }
+  .catan-example .controls { min-width: 0; }
+  .catan-example h2 { font-size: 22px; line-height: 1.2; }
+  .catan-example .control-label { margin: 18px 0 8px; font-size: 14px; font-weight: 700; color: var(--muted); }
+  .catan-example .rolls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .catan-example button { min-height: 42px; border: 1px solid #8ea79a; border-radius: 6px; padding: 8px 14px; background: transparent; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
+  .catan-example button:hover { border-color: var(--ink); background: #e6eee6; }
+  .catan-example button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
+  .catan-example button:focus-visible { outline: 3px solid #db8b3f; outline-offset: 2px; }
+  .catan-example .toggles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .catan-example .outcome { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 18px; font-size: 20px; font-weight: 700; min-height: 100px; }
+  .catan-example .rule { margin-top: 13px; color: var(--muted); font-size: 14px; }
+  @media (max-width: 700px) {
+    .catan-example .workbench { grid-template-columns: minmax(0, 1fr); }
+    .catan-example .controls { border-top: 1px solid var(--line); padding-top: 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .catan-example .hex polygon { transition: none; }
+    .catan-example .earned-card.animate { animation: none; }
+  }
+</style>
+<main class="catan-example">
+  <header>
+    <h1>One roll, three places</h1>
+    <p>A close-up of one settlement touching forest, fields, and pasture.</p>
+  </header>
+  <div class="workbench">
+    <div class="board">
+      <div data-visual-scene>
+      <svg viewBox="60 20 460 410" role="img" aria-label="Three Catan hexes meeting at your settlement, with a road on one edge">
+        <g class="hex" data-roll="8" data-active="true">
+          <polygon points="200,55 287,105 287,205 200,255 113,205 113,105" fill="#78a28a"/>
+          <text class="terrain" x="200" y="142">Forest</text><text class="number" x="200" y="181">8</text>
+        </g>
+        <g class="hex" data-roll="5" data-active="false">
+          <polygon points="373,55 460,105 460,205 373,255 287,205 287,105" fill="#e7c975"/>
+          <text class="terrain" x="373" y="142">Fields</text><text class="number" x="373" y="181">5</text>
+        </g>
+        <g class="hex" data-roll="10" data-active="false">
+          <polygon points="287,205 373,255 373,355 287,405 200,355 200,255" fill="#a8c592"/>
+          <text class="terrain" x="287" y="324">Pasture</text><text class="number" x="287" y="363">10</text>
+        </g>
+        <path d="M200 255 287 205" stroke="#183b32" stroke-width="12" stroke-linecap="round"/>
+        <path d="M200 255 287 205" stroke="#f6f8f1" stroke-width="5" stroke-linecap="round"/>
+        <text class="small-label" x="78" y="303">your road</text>
+        <path d="M170 296 207 259" fill="none" stroke="#527066" stroke-width="2"/>
+        <g id="settlement" fill="#f6f8f1" stroke="#183b32" stroke-width="5" stroke-linejoin="round">
+          <path d="M265 205 287 184 309 205V228H265Z"/>
+        </g>
+        <g id="city" style="display:none" fill="#f6f8f1" stroke="#183b32" stroke-width="5" stroke-linejoin="round">
+          <path d="M256 228V202L272 187V176H291V193L317 209V228Z"/>
+        </g>
+        <g id="robber-8" style="display:none" fill="#183b32"><circle cx="160" cy="188" r="9"/><path d="M151 200 144 225H176L169 200Z"/></g>
+        <g id="robber-5" style="display:none" fill="#183b32"><circle cx="334" cy="188" r="9"/><path d="M325 200 318 225H350L343 200Z"/></g>
+        <g id="robber-10" style="display:none" fill="#183b32"><circle cx="244" cy="354" r="9"/><path d="M235 366 228 391H260L253 366Z"/></g>
+      </svg>
+      <div class="resource-tray"><span>You collect</span><div id="earned-one" class="earned-card">wood</div><div id="earned-two" class="earned-card" style="display:none">wood</div><strong id="blocked-label" style="display:none">Nothing</strong></div>
+      </div>
+      <p>Close-up only: houses sit on corners; roads follow edges.</p>
+    </div>
+    <div class="controls">
+      <h2>What do you collect?</h2>
+      <p class="control-label">Dice total</p>
+      <div class="rolls" role="group" aria-label="Choose a dice total">
+        <button type="button" data-roll-button="8" aria-pressed="true">Roll 8</button>
+        <button type="button" data-roll-button="5" aria-pressed="false">Roll 5</button>
+        <button type="button" data-roll-button="10" aria-pressed="false">Roll 10</button>
+      </div>
+      <div class="toggles">
+        <button type="button" id="city-button" aria-pressed="false">Upgrade to city</button>
+        <button type="button" id="robber-button" aria-pressed="false">Block this hex</button>
+      </div>
+      <p class="outcome" data-visual-outcome aria-live="polite">Roll 8: your settlement earns 1 wood from the forest.</p>
+      <p class="rule">Everyone checks their buildings on every roll, not just the player who rolled.</p>
+    </div>
+  </div>
+</main>
+<script>
+  (() => {
+    const root = document.querySelector('.catan-example');
+    const scene = root.querySelector('[data-visual-scene]');
+    const outcome = root.querySelector('[data-visual-outcome]');
+    const resources = {
+      8: { name: 'wood', terrain: 'forest', color: '#387f5b' },
+      5: { name: 'wheat', terrain: 'fields', color: '#a36526' },
+      10: { name: 'sheep', terrain: 'pasture', color: '#55734a' },
+    };
+    let roll = 8;
+    let city = false;
+    let blockedRoll = null;
+    const render = () => {
+      const blocked = blockedRoll === roll;
+      const amount = city ? 2 : 1;
+      const resource = resources[roll];
+      scene.querySelectorAll('.hex').forEach(hex => { hex.dataset.active = String(Number(hex.dataset.roll) === roll); });
+      scene.querySelectorAll('[id^="robber-"]').forEach(marker => { marker.style.display = marker.id === 'robber-' + blockedRoll ? '' : 'none'; });
+      scene.querySelector('#settlement').style.display = city ? 'none' : '';
+      scene.querySelector('#city').style.display = city ? '' : 'none';
+      for (const [index, id] of ['earned-one', 'earned-two'].entries()) {
+        const token = scene.querySelector('#' + id);
+        token.style.display = blocked || index >= amount ? 'none' : '';
+        token.style.backgroundColor = resource.color;
+        token.textContent = resource.name;
+        token.classList.remove('animate');
+        if (!blocked && index < amount) {
+          void token.getBoundingClientRect();
+          token.classList.add('animate');
+        }
+      }
+      scene.querySelector('#blocked-label').style.display = blocked ? '' : 'none';
+      root.querySelectorAll('[data-roll-button]').forEach(button => { button.setAttribute('aria-pressed', String(Number(button.dataset.rollButton) === roll)); });
+      root.querySelector('#city-button').setAttribute('aria-pressed', String(city));
+      root.querySelector('#robber-button').setAttribute('aria-pressed', String(blockedRoll !== null));
+      root.querySelector('#robber-button').textContent = blockedRoll === null ? 'Block this hex' : 'Move robber away';
+      outcome.textContent = blocked
+        ? 'Roll ' + roll + ': the robber blocks the ' + resource.terrain + '. You collect nothing.'
+        : 'Roll ' + roll + ': your ' + (city ? 'city' : 'settlement') + ' earns ' + amount + ' ' + resource.name + ' from the ' + resource.terrain + '.' +
+          (blockedRoll === null ? '' : ' The robber stays on the ' + resources[blockedRoll].terrain + '.');
+    };
+    root.querySelectorAll('[data-roll-button]').forEach(button => button.addEventListener('click', () => { roll = Number(button.dataset.rollButton); render(); }));
+    root.querySelector('#city-button').addEventListener('click', () => { city = !city; render(); });
+    root.querySelector('#robber-button').addEventListener('click', () => { blockedRoll = blockedRoll === null ? roll : null; render(); });
+  })();
+</script>

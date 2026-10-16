@@ -1,8 +1,9 @@
 import { join } from "node:path";
 
-export function agentBrowserCandidates(resourcesPath: string, packaged: boolean, home: string, pathEnv: string): string[] {
+export function agentBrowserCandidates(resourcesPath: string, packaged: boolean, home: string, pathEnv: string, appPath?: string): string[] {
   return [
     ...(packaged ? [join(resourcesPath, "browser", "agent-browser")] : []),
+    ...(!packaged && appPath ? [join(appPath, "build", "browser-bundle", "agent-browser")] : []),
     ...pathEnv.split(":").filter(Boolean).map((dir) => join(dir, "agent-browser")),
     "/opt/homebrew/bin/agent-browser",
     "/usr/local/bin/agent-browser",

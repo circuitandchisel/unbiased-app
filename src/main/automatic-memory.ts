@@ -1,4 +1,5 @@
 import { loadMemoryNotes, saveMemoryNote, validateMemory, type MemoryNote } from "./memory";
+import { stripVisualRouteHint } from "./visual-route";
 
 type HistoryItem = { type?: string; role?: string; phase?: string | null; text?: string; content?: unknown };
 type HistoryTurn = { items?: HistoryItem[] };
@@ -30,7 +31,7 @@ export function memoryEvidence(turns: HistoryTurn[]): string {
           ? "ASSISTANT"
           : null;
       if (!role) continue;
-      const text = textOf(item).trim().slice(0, MAX_MESSAGE_CHARS);
+      const text = stripVisualRouteHint(textOf(item)).trim().slice(0, MAX_MESSAGE_CHARS);
       if (text) lines.push(`${role}: ${text}`);
     }
   }

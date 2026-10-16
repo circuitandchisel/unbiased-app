@@ -8,9 +8,10 @@ test("packaged app prefers its bundled agent-browser over a global install", () 
   assert.ok(candidates.includes("/opt/homebrew/bin/agent-browser"));
 });
 
-test("development app uses installed agent-browser", () => {
-  const candidates = agentBrowserCandidates("/App/Contents/Resources", false, "/Users/test", "/usr/bin");
-  assert.equal(candidates[0], "/usr/bin/agent-browser");
+test("development app prefers its pinned browser bundle over a global install", () => {
+  const candidates = agentBrowserCandidates("/App/Contents/Resources", false, "/Users/test", "/usr/bin", "/Repo/unbiased-app");
+  assert.equal(candidates[0], "/Repo/unbiased-app/build/browser-bundle/agent-browser");
+  assert.ok(candidates.includes("/usr/bin/agent-browser"));
   assert.ok(!candidates.some((path) => path.includes("/App/Contents/Resources")));
 });
 

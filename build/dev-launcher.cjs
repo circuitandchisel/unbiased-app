@@ -21,6 +21,12 @@ function run(command, args) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+function prepareDevBrowser() {
+  if (process.platform !== "darwin" || process.arch !== "arm64") return;
+  if (existsSync(join(root, "build", "browser-bundle", "agent-browser"))) return;
+  run(process.execPath, [join(root, "build", "prepare-browser.cjs")]);
+}
+
 function prepareMacLauncher() {
   const currentVersion = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
   if (currentVersion === `${version}:${launcherRevision}` && existsSync(launcherExecutable) && existsSync(launcherScript)) return;
@@ -145,6 +151,7 @@ delete env.ELECTRON_MAJOR_VER;
 delete env.ELECTRON_CLI_ARGS;
 
 if (process.platform === "darwin") {
+  prepareDevBrowser();
   prepareMacLauncher();
   env.ELECTRON_EXEC_PATH = launcherScript;
   env.UNBIASED_DEV_APP_NAME = "Unbiased Dev";

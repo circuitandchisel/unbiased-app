@@ -25,7 +25,6 @@ import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
 import "prismjs/themes/prism-tomorrow.css";
 import "./side-tab-scrollbar.css";
-import "./mermaid-diagram.css";
 import "@unbiased/iui/styles.css";
 import "@unbiased/iui/openui-styles.css";
 import "./openui-visual.css";
@@ -33,6 +32,7 @@ import "./markdown-table.css";
 import { tableToMarkdown } from "./markdown-table";
 import "./user-message-markdown.css";
 import { UserMessageMarkdown } from "./user-message-markdown";
+import { visualApprovalTheme } from "./visual-approval-theme";
 import { MarkdownComposer, type MarkdownComposerHandle } from "./markdown-composer";
 import "./markdown-composer.css";
 import "./user-input-card.css";
@@ -42,14 +42,23 @@ import { SettingsRoute } from "./settings-route";
 import { parseAgentStylePrefs, type AgentStylePrefs } from "../../shared/agent-style";
 import { SideChatIdleTracker } from "./side-chat-idle";
 import { settleTurnOutput } from "./turn-completion";
+import { appendApprovedVisual, type ApprovedVisual } from "../../shared/visual-delivery";
 import { isTranscriptAtBottom } from "./transcript-scroll";
 import { finalAssistantIndices } from "./transcript-actions";
 import { isComposerTypingKey } from "./type-to-focus";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime, hydrateTranscriptTimes } from "../../shared/conversation-time";
-import { visualFenceContent } from "./openui-visual";
+import { ProgressiveVisualContext, VisualHostContext, visualFenceContent, type ProgressiveVisualEvent } from "./openui-visual";
+import { nextVisualDraft, type VisualDraft } from "./visual-draft";
+import { approvedVisualUrl, boundedVisualText } from "../../shared/visual-openui-policy";
+import { assistantVisualMarkdown } from "./assistant-visual-markdown";
+import { completedVisualOutput, finalAssistantForTurn, lastUserIndex, outputSignature, visualReadyElapsed } from "./visual-turn-trace";
+import { VisualReadyContext } from "./visual-ready-context";
 import { validateUserInput, withoutUserInputDefaults, type UserInputRequest, type UserInputValue } from "../../shared/user-input";
 import { firstInvalidQuestionIndex, validateQuestion } from "./user-input-navigation";
+import type { VisualRouteTrace } from "../../main/visual-route";
+
+const devVisualRouting = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV === true;
 
 type EngineStatus =
   | { state: "starting" }
@@ -78,6 +87,7 @@ type Entry =
       text: string;
       interrupted?: boolean;
       at?: number;
+      workedForSeconds?: number;
       /** Memory receipts for the turn this answer ended. They ride ON the
        *  answer so they render inside it — above the copy row, and outside
        *  the text that row copies. */
@@ -595,17 +605,20 @@ declare global {
         paneId: PaneId,
         text: string,
         attachments?: Attachment[],
-        options?: { computer?: boolean },
-      ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
+        options?: { computer?: boolean; routeHistory?: { role: "user" | "assistant"; text: string }[] },
+      ) => Promise<{ turnId: string | null; threadId: string; created: boolean; visualRoute?: VisualRouteTrace | null }>;
+      logVisualRouteTiming: (timing: { paneId: PaneId; threadId: string; turnId: string; firstTextMs: number | null; totalMs: number | null; outputType?: string; visualReadyMs?: number | null; phase?: "turn" | "visual-ready" | "progressive-first-paint" | "progressive-summary" | "draft-received" | "draft-mounted" | "draft-painted"; progressive?: boolean; firstVisualPaintMs?: number | null; firstVisualPaintBytes?: number | null; visualUpdates?: number; rejectedVisualChunks?: number; lastVisualPaintMs?: number | null; lastVisualRejectReason?: string | null; draftVersion?: number; draftBytes?: number; activeTurnMatched?: boolean; hasVisual?: boolean; visibilityState?: string; hasFocus?: boolean }) => Promise<boolean>;
       chooseAttachments: () => Promise<{ attachments: Attachment[]; errors?: string[] }>;
       attachPaths: (paths: string[]) => Promise<{ attachments: Attachment[]; errors?: string[] }>;
       clipboardImage: () => Promise<{ attachment: Attachment | null; error?: string }>;
       interrupt: (paneId: PaneId) => Promise<{ interrupted: boolean }>;
       compact: (paneId: PaneId) => Promise<{ ok: boolean; error?: string }>;
       onTurnStarted: (cb: (p: { paneId: PaneId; turnId: string | null }) => void) => () => void;
+      onVisualDraft: (cb: (p: { paneId: PaneId; threadId: string; turnId: string; source: string; version: number }) => void) => () => void;
       onDelta: (cb: (p: { paneId: PaneId; delta: string }) => void) => () => void;
+      onFastVisualReplace: (cb: (p: { paneId: PaneId; text: string; stage?: "checkpoint" | "final" }) => void) => () => void;
       onTurnCompleted: (
-        cb: (p: { paneId: PaneId; status: string; error?: string | null; narrated?: boolean }) => void,
+        cb: (p: { paneId: PaneId; status: string; error?: string | null; narrated?: boolean; approvedVisual?: ApprovedVisual | null; directVisualDurationMs?: number }) => void,
       ) => () => void;
       onThreadActivity: (cb: (p: { threadId: string; running: boolean }) => void) => () => void;
       setAccessMode: (mode: AccessMode) => Promise<{ mode: string }>;
@@ -771,6 +784,7 @@ declare global {
         id: string;
         entries: Entry[];
         running: boolean;
+        visualDraft?: { turnId: string; source: string; version: number } | null;
         streamText: string;
         approvals: HeldApproval[];
         userInputs: UserInputRequest[];
@@ -827,6 +841,9 @@ declare global {
       readFile: (path: string) => Promise<{ fullPath: string; relPath?: string; content?: string; error?: string }>;
       revealFile: (path: string) => Promise<{ ok: boolean; error?: string }>;
       saveFileCopy: (path: string) => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
+      visualReadClipboardText: () => Promise<{ ok: boolean; text?: string; error?: string }>;
+      visualPickTextFile: () => Promise<{ ok: boolean; name?: string; text?: string; canceled?: boolean; error?: string }>;
+      visualSaveText: (name: string, text: string) => Promise<{ ok: boolean; canceled?: boolean; error?: string }>;
       fileExists: (path: string) => Promise<{ exists: boolean }>;
       readImage: (path: string) => Promise<{ dataUrl?: string; fullPath?: string; error?: string }>;
       listDir: (dir?: string) => Promise<{ dir: string; entries: DirEntry[]; error?: string }>;
@@ -1036,6 +1053,7 @@ function themeVars(t: ThemeConfig): Record<string, string> {
   const m = (x: number) => mixHex(t.surface, t.ink, Math.min(x * k, 1));
   return {
     "--bg": t.surface,
+    "--visual-control-fg": bestInkOn(t.surface),
     "--fg": t.ink,
     "--accent": t.accent,
     "--accent-fg": bestInkOn(t.accent),
@@ -1766,6 +1784,7 @@ export function App() {
     entries: Entry[];
     nonce: number;
     resume?: { running: boolean; approvals: HeldApproval[]; userInputs: UserInputRequest[] } | null;
+    visualDraft?: { turnId: string; source: string; version: number } | null;
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
   }>({ entries: [], nonce: 0 });
@@ -2226,6 +2245,7 @@ export function App() {
       entries,
       nonce: r.nonce + 1,
       resume: res.running ? { running: true, approvals: res.approvals, userInputs: res.userInputs ?? [] } : null,
+      visualDraft: res.visualDraft,
     }));
     if (!restoreSideView(id)) resetSideView();
     // The engine may still be running spawns for this thread — pick up the
@@ -7405,7 +7425,7 @@ function SubAgentPane({ threadId, status }: { threadId: string; status: string }
           if (e.kind === "assistant") {
             return (
               <div key={i} style={{ margin: "12px 0", lineHeight: 1.65, fontSize: 14, color: "var(--fg-msg)" }}>
-                <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>{e.text}</Markdown>
+                <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>{assistantVisualMarkdown(e.text, status === "running")}</Markdown>
               </div>
             );
           }
@@ -7460,7 +7480,7 @@ function SubAgentPane({ threadId, status }: { threadId: string; status: string }
         {tail !== "" && (
           <div style={{ margin: "12px 0", lineHeight: 1.65, fontSize: 14, color: "var(--fg-msg)" }}>
             <StreamingVisualContext.Provider value={true}>
-              <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>{tail}</Markdown>
+              <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>{assistantVisualMarkdown(tail, true)}</Markdown>
             </StreamingVisualContext.Provider>
           </div>
         )}
@@ -8579,6 +8599,7 @@ function ChatPane({
     nonce: number;
     // Present when the conversation was reopened mid-turn.
     resume?: { running: boolean; approvals: HeldApproval[]; userInputs: UserInputRequest[] } | null;
+    visualDraft?: { turnId: string; source: string; version: number } | null;
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
   };
@@ -8817,11 +8838,172 @@ function ChatPane({
   }
   const [busy, setBusyState] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [fastVisualPhase, setFastVisualPhase] = useState<"waiting" | "assembling" | "checkpoint" | null>(null);
+  const [visualRouteInfo, setVisualRouteInfo] = useState<{
+    trace: VisualRouteTrace | null;
+    threadId?: string;
+    turnId?: string | null;
+    startedAt: number;
+    firstTextMs: number | null;
+    totalMs: number | null;
+    outputType: string | null;
+    outputSignature: string | null;
+    visualReadyMs: number | null;
+    progressive: boolean;
+    firstVisualPaintMs: number | null;
+    firstVisualPaintBytes: number | null;
+    visualUpdates: number;
+    rejectedVisualChunks: number;
+    lastVisualPaintMs: number | null;
+    lastVisualRejectReason: string | null;
+  } | null>(null);
+  const [progressiveVisuals, setProgressiveVisuals] = useState(devVisualRouting);
+  const [draftVisual, setDraftVisual] = useState<VisualDraft | null>(null);
+  const provisionalVisualRef = useRef<HTMLDivElement>(null);
+  const lastPaintedDraftRef = useRef<string | null>(null);
+  const activeVisualTurnRef = useRef<string | null>(null);
+  const loggedVisualRouteTurnRef = useRef<string | null>(null);
+  const loggedVisualReadyTurnRef = useRef<string | null>(null);
+  const loggedFirstVisualPaintTurnRef = useRef<string | null>(null);
+  const loggedProgressSummaryTurnRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!devVisualRouting || !visualRouteInfo || visualRouteInfo.totalMs === null ||
+        visualRouteInfo.outputType !== null || busy) return;
+    const output = completedVisualOutput(entries);
+    setVisualRouteInfo((info) => info && info.turnId === visualRouteInfo.turnId && info.outputType === null
+      ? { ...info, outputType: output.type, outputSignature: output.signature }
+      : info);
+  }, [busy, entries, visualRouteInfo]);
+  useEffect(() => {
+    if (!devVisualRouting || !visualRouteInfo?.trace || !visualRouteInfo.threadId ||
+        !visualRouteInfo.turnId || visualRouteInfo.totalMs === null || !visualRouteInfo.outputType ||
+        loggedVisualRouteTurnRef.current === visualRouteInfo.turnId) return;
+    loggedVisualRouteTurnRef.current = visualRouteInfo.turnId;
+    void window.unbiased.logVisualRouteTiming({
+      paneId, threadId: visualRouteInfo.threadId, turnId: visualRouteInfo.turnId,
+      firstTextMs: visualRouteInfo.firstTextMs, totalMs: visualRouteInfo.totalMs,
+      outputType: visualRouteInfo.outputType, phase: "turn",
+    });
+  }, [paneId, visualRouteInfo]);
+  useEffect(() => {
+    if (!devVisualRouting || !visualRouteInfo?.trace || !visualRouteInfo.threadId ||
+        !visualRouteInfo.turnId || visualRouteInfo.firstVisualPaintMs === null ||
+        loggedFirstVisualPaintTurnRef.current === visualRouteInfo.turnId) return;
+    loggedFirstVisualPaintTurnRef.current = visualRouteInfo.turnId;
+    void window.unbiased.logVisualRouteTiming({
+      paneId, threadId: visualRouteInfo.threadId, turnId: visualRouteInfo.turnId,
+      firstTextMs: visualRouteInfo.firstTextMs, totalMs: visualRouteInfo.totalMs,
+      phase: "progressive-first-paint", progressive: visualRouteInfo.progressive,
+      firstVisualPaintMs: visualRouteInfo.firstVisualPaintMs,
+      firstVisualPaintBytes: visualRouteInfo.firstVisualPaintBytes,
+    });
+  }, [paneId, visualRouteInfo]);
+  useEffect(() => {
+    if (!devVisualRouting || !visualRouteInfo?.trace || !visualRouteInfo.threadId ||
+        !visualRouteInfo.turnId || visualRouteInfo.totalMs === null || !visualRouteInfo.outputType ||
+        loggedProgressSummaryTurnRef.current === visualRouteInfo.turnId) return;
+    loggedProgressSummaryTurnRef.current = visualRouteInfo.turnId;
+    void window.unbiased.logVisualRouteTiming({
+      paneId, threadId: visualRouteInfo.threadId, turnId: visualRouteInfo.turnId,
+      firstTextMs: visualRouteInfo.firstTextMs, totalMs: visualRouteInfo.totalMs,
+      outputType: visualRouteInfo.outputType, phase: "progressive-summary",
+      progressive: visualRouteInfo.progressive,
+      firstVisualPaintMs: visualRouteInfo.firstVisualPaintMs,
+      firstVisualPaintBytes: visualRouteInfo.firstVisualPaintBytes,
+      visualUpdates: visualRouteInfo.visualUpdates,
+      rejectedVisualChunks: visualRouteInfo.rejectedVisualChunks,
+      lastVisualPaintMs: visualRouteInfo.lastVisualPaintMs,
+      lastVisualRejectReason: visualRouteInfo.lastVisualRejectReason,
+    });
+  }, [paneId, visualRouteInfo]);
+  const markProgressiveVisual = useCallback((event: ProgressiveVisualEvent) => {
+    const observedAt = Date.now();
+    setVisualRouteInfo((info) => {
+      if (!info?.progressive || info.totalMs !== null) return info;
+      const elapsed = observedAt - info.startedAt;
+      if (event.kind === "paint") return {
+        ...info,
+        firstVisualPaintMs: info.firstVisualPaintMs ?? elapsed,
+        firstVisualPaintBytes: info.firstVisualPaintBytes ?? event.sourceBytes,
+        visualUpdates: info.visualUpdates + 1,
+        lastVisualPaintMs: elapsed,
+      };
+      return {
+        ...info,
+        rejectedVisualChunks: info.rejectedVisualChunks + 1,
+        lastVisualRejectReason: event.reason ?? null,
+      };
+    });
+  }, []);
+  const reportDraftEvent = useCallback((phase: "draft-mounted" | "draft-painted", draft: VisualDraft, hasVisual: boolean) => {
+    if (!devVisualRouting || !threadId) return;
+    void window.unbiased.logVisualRouteTiming({
+      paneId, threadId, turnId: draft.turnId, phase,
+      firstTextMs: null, totalMs: null,
+      draftVersion: draft.version, draftBytes: draft.source.length,
+      hasVisual, visibilityState: document.visibilityState, hasFocus: document.hasFocus(),
+    });
+  }, [paneId, threadId]);
+  useLayoutEffect(() => {
+    if (!busy || !draftVisual) return;
+    reportDraftEvent("draft-mounted", draftVisual,
+      Boolean(provisionalVisualRef.current?.querySelector('[aria-label="Interactive visual"]')));
+  }, [busy, draftVisual, reportDraftEvent]);
+  const markDraftReady = useCallback(() => {
+    if (!draftVisual) return;
+    const key = `${draftVisual.turnId}:${draftVisual.version}`;
+    if (lastPaintedDraftRef.current === key) return;
+    lastPaintedDraftRef.current = key;
+    reportDraftEvent("draft-painted", draftVisual, true);
+    markProgressiveVisual({ kind: "paint", sourceBytes: draftVisual.source.length });
+  }, [draftVisual, markProgressiveVisual, reportDraftEvent]);
+  useEffect(() => {
+    if (!devVisualRouting || !visualRouteInfo?.trace || !visualRouteInfo.threadId ||
+        !visualRouteInfo.turnId || visualRouteInfo.visualReadyMs === null ||
+        loggedVisualReadyTurnRef.current === visualRouteInfo.turnId) return;
+    loggedVisualReadyTurnRef.current = visualRouteInfo.turnId;
+    void window.unbiased.logVisualRouteTiming({
+      paneId, threadId: visualRouteInfo.threadId, turnId: visualRouteInfo.turnId,
+      firstTextMs: visualRouteInfo.firstTextMs, totalMs: visualRouteInfo.totalMs,
+      outputType: visualRouteInfo.outputType ?? undefined,
+      visualReadyMs: visualRouteInfo.visualReadyMs, phase: "visual-ready",
+    });
+  }, [paneId, visualRouteInfo]);
+  const markVisualReady = useCallback((turnId: string, signature: string) => {
+    const observedAt = Date.now();
+    setVisualRouteInfo((info) => {
+      if (!info) return info;
+      const elapsed = visualReadyElapsed(info, turnId, signature, observedAt);
+      return elapsed === null ? info : { ...info, visualReadyMs: elapsed };
+    });
+  }, []);
   // Messages queued while a turn runs; flushed one per turn completion.
   const [queue, setQueue] = useState<QueuedMsg[]>([]);
   const queueRef = useRef(queue);
   queueRef.current = queue;
   const nextQueueIdRef = useRef(1);
+  const [visualApproval, setVisualApproval] = useState<{ title: string; details: string } | null>(null);
+  const visualApprovalResolver = useRef<((approved: boolean) => void) | null>(null);
+  const visualApprovalPreviousFocus = useRef<HTMLElement | null>(null);
+  const visualApprovalButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (visualApproval) visualApprovalButton.current?.focus();
+  }, [visualApproval]);
+  useEffect(() => () => { visualApprovalResolver.current?.(false); visualApprovalResolver.current = null; }, []);
+  function requestVisualApproval(title: string, details: string): Promise<boolean> {
+    if (visualApprovalResolver.current) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      visualApprovalPreviousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      visualApprovalResolver.current = resolve;
+      setVisualApproval({ title, details });
+    });
+  }
+  function resolveVisualApproval(approved: boolean) {
+    visualApprovalResolver.current?.(approved);
+    visualApprovalResolver.current = null;
+    setVisualApproval(null);
+    requestAnimationFrame(() => visualApprovalPreviousFocus.current?.focus());
+  }
   const [sendHover, setSendHover] = useState(false);
   // Live context occupancy (per turn, from the engine) + the usage popover.
   const [ctxUsage, setCtxUsage] = useState<ContextUsage | null>(null);
@@ -9071,6 +9253,10 @@ function ChatPane({
     const conversationChanged = previousResetNonceRef.current !== reset.nonce;
     previousResetNonceRef.current = reset.nonce;
     threadIdRef.current = threadId ?? null;
+    if (conversationChanged) {
+      activeVisualTurnRef.current = reset.visualDraft?.turnId ?? null;
+      setDraftVisual(reset.visualDraft ?? null);
+    }
     followTranscriptRef.current = true;
     setShowScrollToLatest(false);
     messageBoundaryRef.current = false;
@@ -9216,13 +9402,32 @@ function ChatPane({
     const offs = [
       window.unbiased.onTurnStarted((p) => {
         if (p.paneId !== paneId) return;
+        setFastVisualPhase(p.turnId?.startsWith("fast-visual-") ? "waiting" : null);
+        activeVisualTurnRef.current = p.turnId;
+        setDraftVisual(null);
         resetTurnPerf(false);
+      }),
+      window.unbiased.onVisualDraft((p) => {
+        if (p.paneId !== paneId) return;
+        const activeTurnMatched = p.turnId === activeVisualTurnRef.current;
+        if (devVisualRouting) void window.unbiased.logVisualRouteTiming({
+          paneId, threadId: p.threadId, turnId: p.turnId, phase: "draft-received",
+          firstTextMs: null, totalMs: null,
+          draftVersion: p.version, draftBytes: p.source.length, activeTurnMatched,
+          visibilityState: document.visibilityState, hasFocus: document.hasFocus(),
+        });
+        if (!activeTurnMatched) return;
+        setDraftVisual((current) => nextVisualDraft(current, p, activeVisualTurnRef.current));
       }),
       window.unbiased.onDelta((p) => {
         if (p.paneId !== paneId) return;
+        setFastVisualPhase((phase) => phase === "waiting" ? "assembling" : phase);
         producedRef.current = true;
         if (p.delta && turnPerfRef.current.firstTokenAt === null) {
           turnPerfRef.current = { ...turnPerfRef.current, firstTokenAt: Date.now() };
+          setVisualRouteInfo((info) => info && info.firstTextMs === null
+            ? { ...info, firstTextMs: Date.now() - info.startedAt }
+            : info);
         }
         const boundary = messageBoundaryRef.current;
         messageBoundaryRef.current = false;
@@ -9230,6 +9435,24 @@ function ChatPane({
           const last = es[es.length - 1];
           if (!last || last.kind !== "assistant" || boundary) return [...es, { kind: "assistant", text: p.delta }];
           return [...es.slice(0, -1), { ...last, text: last.text + p.delta }];
+        });
+      }),
+      window.unbiased.onFastVisualReplace((p) => {
+        if (p.paneId !== paneId) return;
+        if (p.stage === "checkpoint") {
+          setFastVisualPhase("checkpoint");
+          if (turnPerfRef.current.firstTokenAt === null) {
+            turnPerfRef.current = { ...turnPerfRef.current, firstTokenAt: Date.now() };
+            setVisualRouteInfo((info) => info && info.firstTextMs === null
+              ? { ...info, firstTextMs: Date.now() - info.startedAt }
+              : info);
+          }
+        }
+        setEntries((es) => {
+          const last = es.at(-1);
+          return last?.kind === "assistant"
+            ? [...es.slice(0, -1), { ...last, text: p.text }]
+            : [...es, { kind: "assistant", text: p.text }];
         });
       }),
       window.unbiased.onMessageBoundary((p) => {
@@ -9244,11 +9467,17 @@ function ChatPane({
         // for sign-ins, where the page is the only place to type.
         if (p.paneId === paneId) closeAgentMirrorRef.current?.();
         if (p.paneId !== paneId) return;
+        activeVisualTurnRef.current = null;
+        setDraftVisual(null);
         const output = settleTurnOutput(p.status, !!p.narrated, producedRef.current, emptyStreakRef.current);
         emptyStreakRef.current = output.emptyStreak;
         turnPerfRef.current = { ...turnPerfRef.current, completedAt: Date.now() };
+        setVisualRouteInfo((info) => info && info.totalMs === null
+          ? { ...info, totalMs: Date.now() - info.startedAt }
+          : info);
         publishTurnPerf();
         setBusy(false);
+        setFastVisualPhase(null);
         onTurnLanded?.();
         // Read-and-clear OUTSIDE the updater: React can invoke updaters
         // more than once (StrictMode), and a consumed ref on the second
@@ -9266,6 +9495,12 @@ function ChatPane({
             }
           }
           next = withoutTrailingPlaceholder(next);
+          if (p.status === "completed" && p.approvedVisual) {
+            const last = next[next.length - 1];
+            next = last?.kind === "assistant"
+              ? [...next.slice(0, -1), { ...last, text: appendApprovedVisual(last.text, p.approvedVisual) }]
+              : [...next, { kind: "assistant", text: appendApprovedVisual("", p.approvedVisual) }];
+          }
           const start = workStart;
           next = settleTurnSteps(next, start);
           // Fold a completed turn's intermediate output — narration, agent
@@ -9358,7 +9593,7 @@ function ChatPane({
                 text: "⚠ The agent stopped after its progress notes without writing a final answer. Ask it to continue and it will pick up where it left off.",
               },
             ];
-          } else if (output.empty) {
+          } else if (output.empty && !p.approvedVisual) {
             // "Completed" with zero output: the model returned an empty
             // completion. Indistinguishable from a hang unless we say so.
             next = [
@@ -9376,6 +9611,12 @@ function ChatPane({
           const settled = next[next.length - 1];
           if (settled?.kind === "assistant" && settled.at === undefined) {
             next = [...next.slice(0, -1), { ...settled, at: Date.now() }];
+          }
+          if (p.directVisualDurationMs !== undefined && Number.isFinite(p.directVisualDurationMs)) {
+            const last = next[next.length - 1];
+            if (last?.kind === "assistant") {
+              next = [...next.slice(0, -1), { ...last, workedForSeconds: Math.max(0, p.directVisualDurationMs / 1000) }];
+            }
           }
           return next;
         });
@@ -9614,7 +9855,7 @@ function ChatPane({
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && followTranscriptRef.current) el.scrollTo({ top: el.scrollHeight });
-  }, [entries]);
+  }, [entries, draftVisual?.version]);
 
   // Drawn anew every time this pane shows a (different) conversation.
   const chatPlaceholder = useMemo(
@@ -9624,6 +9865,8 @@ function ChatPane({
   );
 
   const lastEntry = entries[entries.length - 1];
+  const lastUserEntryIndex = lastUserIndex(entries);
+  const finalAssistantIndex = finalAssistantForTurn(entries)?.index ?? -1;
   const showThinking = busy && !(lastEntry?.kind === "assistant" && lastEntry.text !== "");
   const canSend = connected && (draft.trim() !== "" || annotations.length > 0 || attachments.length > 0);
   // Compaction is offerable only when there IS uncompacted content: a
@@ -9658,21 +9901,59 @@ function ChatPane({
     followTranscriptRef.current = true;
     setShowScrollToLatest(false);
     setBusy(true);
+    setFastVisualPhase(null);
+    setDraftVisual(null);
+    activeVisualTurnRef.current = null;
     producedRef.current = false;
     turnStartedAtRef.current = Date.now();
+    if (devVisualRouting) setVisualRouteInfo({
+      trace: null, startedAt: Date.now(), firstTextMs: null, totalMs: null,
+      outputType: null, outputSignature: null, visualReadyMs: null,
+      progressive: progressiveVisuals, firstVisualPaintMs: null, firstVisualPaintBytes: null,
+      visualUpdates: 0, rejectedVisualChunks: 0, lastVisualPaintMs: null,
+      lastVisualRejectReason: null,
+    });
     setEntries((es) => {
       const next: Entry[] = [...es, { kind: "user", text: q.text, at: Date.now(), annotations: q.annotations, attachments: q.attachments }];
       turnStartIndexRef.current = next.length;
       return next;
     });
     try {
-      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer });
+      const routeHistory = devVisualRouting ? entries.filter((entry): entry is Extract<Entry, { kind: "user" | "assistant" }> =>
+        entry.kind === "user" || entry.kind === "assistant")
+        .slice(-4).map((entry) => ({ role: entry.kind, text: entry.text })) : undefined;
+      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, routeHistory });
+      if (res.turnId) activeVisualTurnRef.current = res.turnId;
+      if (devVisualRouting) setVisualRouteInfo((info) => info
+        ? { ...info, trace: res.visualRoute ?? null, threadId: res.threadId, turnId: res.turnId }
+        : info);
       threadIdRef.current = res.threadId;
       onThreadCreated?.(res.threadId, res.created, q.text);
     } catch (err) {
+      activeVisualTurnRef.current = null;
+      setDraftVisual(null);
       setBusy(false);
       setEntries((es) => [...es, { kind: "assistant", text: `Something went wrong: ${String(err)}` }]);
     }
+  }
+
+  async function handleVisualAction(event: { type: string; params: Record<string, unknown>; humanFriendlyMessage: string; formState?: Record<string, unknown> }) {
+    if (event.type === "open_url") {
+      const url = approvedVisualUrl(event.params.url);
+      if (url && await requestVisualApproval("Open external link?", url)) void window.unbiased.openExternal(url);
+      return;
+    }
+    if (event.type !== "continue_conversation" || !connected) return;
+    const message = boundedVisualText(event.humanFriendlyMessage, 2000);
+    if (!message) return;
+    const form = event.formState && Object.keys(event.formState).length ? JSON.stringify(event.formState) : "";
+    const context = event.params.context !== undefined ? JSON.stringify(event.params.context) ?? "" : "";
+    if (form.length > 4000 || context.length > 4000) return;
+    const wire = [message, context && `Visual context: ${context}`, form && `Visual form values: ${form}`].filter(Boolean).join("\n\n");
+    if (!await requestVisualApproval("Send to assistant?", wire)) return;
+    const msg: QueuedMsg = { id: nextQueueIdRef.current++, text: wire, wire, attachments: [] };
+    if (busy || compacting) setQueue((list) => [...list, msg]);
+    else void sendNow(msg);
   }
 
   async function submit() {
@@ -10155,11 +10436,33 @@ function ChatPane({
             letterSpacing: "var(--track-body)",
           }}
         >
-          <StreamingVisualContext.Provider value={busy && block.key >= (turnStartIndexRef.current ?? entries.length)}>
-            <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
-              {e.text}
-            </Markdown>
-          </StreamingVisualContext.Provider>
+          {e.workedForSeconds !== undefined && (
+            <div style={{ color: colors.dim, fontSize: 15.5, marginBottom: 12 }}>
+              Worked for {formatDuration(e.workedForSeconds)}
+            </div>
+          )}
+          <VisualHostContext.Provider value={{
+            onAction: (event) => { void handleVisualAction(event); },
+            confirmWrite: (description) => requestVisualApproval("Allow visual action?", description),
+            confirmRead: (description) => requestVisualApproval("Allow visual to read data?", description),
+          }}>
+          <VisualReadyContext.Provider value={devVisualRouting && visualRouteInfo?.trace && visualRouteInfo.turnId &&
+            visualRouteInfo.outputType && visualRouteInfo.outputType !== "text" && visualRouteInfo.outputType !== "table" &&
+            block.key > lastUserEntryIndex && block.key === finalAssistantIndex
+              ? () => markVisualReady(visualRouteInfo.turnId!, outputSignature(e.text)) : null}>
+            <ProgressiveVisualContext.Provider value={{
+              enabled: devVisualRouting && Boolean(visualRouteInfo?.progressive) && busy &&
+                block.key >= (turnStartIndexRef.current ?? entries.length),
+              onEvent: markProgressiveVisual,
+            }}>
+              <StreamingVisualContext.Provider value={busy && block.key >= (turnStartIndexRef.current ?? entries.length)}>
+                <Markdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
+                  {assistantVisualMarkdown(e.text, busy && block.key >= (turnStartIndexRef.current ?? entries.length))}
+                </Markdown>
+              </StreamingVisualContext.Provider>
+            </ProgressiveVisualContext.Provider>
+          </VisualReadyContext.Provider>
+          </VisualHostContext.Provider>
           {e.interrupted && <div style={{ color: colors.dim, fontSize: 12, marginTop: 4 }}>— stopped</div>}
           {/* Receipts sit between the answer and its action row: below the
               thing they are about, above the copy button — and outside the
@@ -10357,6 +10660,7 @@ function ChatPane({
       <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
         <div
           ref={scrollRef}
+          data-transcript-scroll
           onMouseUp={handleMouseUp}
           onWheelCapture={(e) => {
             if (e.deltaY >= 0 || e.currentTarget.scrollHeight <= e.currentTarget.clientHeight + 2) return;
@@ -10416,6 +10720,12 @@ function ChatPane({
               </Fragment>
             );
           })}
+          {busy && draftVisual && <div ref={provisionalVisualRef} aria-label="Provisional visual" style={{ margin: "24px 0" }}>
+            <div style={{ color: colors.dim, fontSize: 12, marginBottom: 8 }}>Draft visual</div>
+            <VisualReadyContext.Provider value={markDraftReady}>
+              {visualFenceContent("openui", draftVisual.source, false)}
+            </VisualReadyContext.Provider>
+          </div>}
           {compacting && (
             <div style={{ display: "flex", justifyContent: "flex-start", margin: "10px 0" }}>
               <div
@@ -10451,7 +10761,9 @@ function ChatPane({
             // (streaming pauses, sub-agents working). The clock freezes
             // while the turn is blocked on a human approval.
             <div style={{ display: "flex", margin: "10px 0" }}>
-              {showThinking && !awaitingApproval && !awaitingInput ? (
+              {fastVisualPhase ? (
+                <ShimmerText text={`${fastVisualPhase === "waiting" ? "Waiting for first visual response" : fastVisualPhase === "checkpoint" ? "Adding detail to the first scene" : "Assembling the visual"}… ${formatDuration(elapsed)}`} fontSize={14} />
+              ) : showThinking && !awaitingApproval && !awaitingInput ? (
                 <ShimmerText text={`thinking… ${formatDuration(elapsed)}`} fontSize={14} />
               ) : (
                 <ShimmerText text={`waiting… ${formatDuration(elapsed)}`} fontSize={14} />
@@ -10495,6 +10807,34 @@ function ChatPane({
 
       <div style={{ padding: "8px 16px 16px" }}>
         {composerHeader}
+        {devVisualRouting && visualRouteInfo && <div
+          data-testid="visual-route-trace"
+          style={{ maxWidth: 768, margin: "0 auto 8px", display: "flex", flexWrap: "wrap", gap: "4px 14px", padding: "0 6px", color: colors.dim, fontSize: 11, fontVariantNumeric: "tabular-nums" }}
+        >
+          <strong style={{ color: colors.fg }}>Visual route</strong>
+          <button type="button" disabled={busy} onClick={() => setProgressiveVisuals((value) => !value)}
+            title="Parse safe OpenUI while it arrives. Scripted HTML waits for a complete document; direct visuals can show an early complete scene."
+            style={{ background: "transparent", border: 0, padding: 0, color: colors.fg, cursor: busy ? "default" : "pointer", font: "inherit" }}>
+            Progressive parsing {progressiveVisuals ? "on" : "off"}
+          </button>
+          <span>{visualRouteInfo.trace
+            ? `${visualRouteInfo.trace.status}${visualRouteInfo.trace.choice ? ` · ${visualRouteInfo.trace.choice}` : ""}${visualRouteInfo.trace.confidence !== null ? ` · ${Math.round(visualRouteInfo.trace.confidence * 100)}%` : ""}`
+            : "waiting"}</span>
+          {visualRouteInfo.trace && <span>API {visualRouteInfo.trace.requestMs}ms{visualRouteInfo.trace.serviceMs !== null ? ` (model ${Math.round(visualRouteInfo.trace.serviceMs)}ms)` : ""}</span>}
+          {visualRouteInfo.trace?.inputTokens != null && <span>{visualRouteInfo.trace.inputTokens} input tokens</span>}
+          {visualRouteInfo.trace?.detail && <span>{visualRouteInfo.trace.detail}</span>}
+          <span>First text {visualRouteInfo.firstTextMs === null ? "waiting" : `${visualRouteInfo.firstTextMs}ms`}</span>
+          <span>Total {visualRouteInfo.totalMs === null ? "running" : `${visualRouteInfo.totalMs}ms`}</span>
+          {visualRouteInfo.outputType && <span>Output {visualRouteInfo.outputType}</span>}
+          {visualRouteInfo.outputType && visualRouteInfo.outputType !== "text" && visualRouteInfo.outputType !== "table" &&
+            <span>Visual ready {visualRouteInfo.visualReadyMs === null ? "waiting" : `${visualRouteInfo.visualReadyMs}ms`}</span>}
+          {visualRouteInfo.progressive && <>
+            <span>First visual {visualRouteInfo.firstVisualPaintMs === null ? "waiting" : `${visualRouteInfo.firstVisualPaintMs}ms`}</span>
+            <span>Updates {visualRouteInfo.visualUpdates}</span>
+            <span>Held chunks {visualRouteInfo.rejectedVisualChunks}</span>
+            {visualRouteInfo.lastVisualRejectReason && <span>Last hold {visualRouteInfo.lastVisualRejectReason === "settled-only" ? "scripted visual needs completion" : visualRouteInfo.lastVisualRejectReason}</span>}
+          </>}
+        </div>}
         {queue.length > 0 && (
           <div style={{ maxWidth: 768, margin: "0 auto 8px", display: "flex", flexDirection: "column", gap: 6 }}>
             {queue.map((q) => (
@@ -11423,6 +11763,37 @@ function ChatPane({
           </div>
         </div>
       </div>
+      {visualApproval && createPortal(
+        <div
+          role="presentation"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") resolveVisualApproval(false);
+            if (event.key === "Tab") {
+              const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button")];
+              const next = event.shiftKey ? buttons.at(-1) : buttons[0];
+              if (document.activeElement === (event.shiftKey ? buttons[0] : buttons.at(-1))) {
+                event.preventDefault();
+                next?.focus();
+              }
+            }
+          }}
+          style={{ ...visualApprovalTheme(paneRef.current), position: "fixed", inset: 0, zIndex: 2147483646, display: "grid", placeItems: "center", padding: 16, background: "rgb(0 0 0 / 70%)" }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="visual-action-title"
+            style={{ width: "min(100%, 480px)", maxHeight: "min(80dvh, 620px)", display: "flex", flexDirection: "column", gap: 16, padding: 20, border: "1px solid var(--border)", borderRadius: 8, background: "var(--panel)", color: "var(--fg-msg)", boxShadow: "0 24px 64px rgb(0 0 0 / 45%)" }}
+          >
+            <div id="visual-action-title" style={{ fontSize: 16, fontWeight: 650 }}>{visualApproval.title}</div>
+            <div style={{ overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere", color: "var(--dim)", fontSize: 13, lineHeight: 1.55 }}>{visualApproval.details}</div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button ref={visualApprovalButton} type="button" onClick={() => resolveVisualApproval(false)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--panel-2)", color: "var(--fg-msg)", cursor: "pointer" }}>Cancel</button>
+              <button type="button" onClick={() => resolveVisualApproval(true)} style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid var(--accent)", background: "var(--accent)", color: "#fff", cursor: "pointer" }}>Continue</button>
+            </div>
+          </div>
+        </div>, document.body,
+      )}
     </div>
   );
 }
@@ -11663,6 +12034,7 @@ function fenceClassOf(children?: React.ReactNode): string {
 const CodeBlock = memo(function CodeBlock({ children }: { children?: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
   const streamingVisual = useContext(StreamingVisualContext);
+  const progressiveVisual = useContext(ProgressiveVisualContext);
   const className: string = fenceClassOf(children);
   const lang = /language-([\w-]+)/.exec(className)?.[1]?.toLowerCase() ?? "";
   const label = LANGUAGE_NAMES[lang] ?? (lang ? lang.toUpperCase() : "Plain text");
@@ -11676,7 +12048,7 @@ const CodeBlock = memo(function CodeBlock({ children }: { children?: React.React
     () => (grammar ? Prism.highlight(text, grammar, prismLang) : null),
     [text, grammar, prismLang],
   );
-  const visual = useMemo(() => visualFenceContent(lang, text, streamingVisual), [lang, text, streamingVisual]);
+  const visual = useMemo(() => visualFenceContent(lang, text, streamingVisual, progressiveVisual.enabled), [lang, text, streamingVisual, progressiveVisual.enabled]);
   if (visual) return visual;
 
   return (

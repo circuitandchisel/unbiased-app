@@ -10,6 +10,7 @@ import {
   Notification,
   protocol,
   screen,
+  session,
   shell,
   systemPreferences,
   WebContentsView,
@@ -26,6 +27,16 @@ import { resolveEngineDir } from "./engine-path";
 import { agentBrowserCandidates, chromeCandidates } from "./browser-binaries";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
 import { OPENUI_VISUAL_INSTRUCTIONS } from "./visual-instructions";
+import { createVisualValidationBudget, openUIVisualHtmlSources, validateOpenUIForAgent, validateVisualizeDraft } from "../shared/visual-validation";
+import { nextVisualCheckpoint } from "./visual-checkpoint";
+import { MAX_VISUAL_FILE_BYTES, visualExportName } from "../shared/visual-openui-policy";
+import { appendApprovedVisual, type ApprovedVisual } from "../shared/visual-delivery";
+import { previewVisual } from "./visual-preview";
+import { VisualPreviewCandidates } from "./visual-preview-candidates";
+import { parseVisualReviewBrief, visualInteractionRequestIssue, visualProcedureResearchIssue, visualReviewChecklist, visualReviewIssues, visualRevisionIssue } from "./visual-review";
+import { visualValidationStepLabel } from "./visual-step-label";
+import { classifyVisualRoute, stripVisualRouteHint, visualRouteHint, type VisualRouteHistoryEntry } from "./visual-route";
+import { fastVisualEligible, streamFastVisual } from "./fast-visual";
 import { epochMillis } from "../shared/conversation-time";
 import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_SCHEME, interactiveVisualDocument, interactiveVisualId, isInteractiveVisualSource } from "../shared/interactive-visual";
 import { agentInputFields, codexInputResponse, mcpInputFields, mcpInputResponse, validateUserInput, type UserInputRequest, type UserInputValue } from "../shared/user-input";
@@ -99,6 +110,7 @@ import {
   DRAW_GATE_POINTS,
   surfaceCommands,
   appendSkill,
+  skillBody,
   traceStep,
   MAX_CLICKS,
   MAX_BATCH_STEPS,
@@ -123,6 +135,7 @@ import {
   type ToolRecord,
   type TurnRecord,
 } from "./run-metrics";
+import { VisualTurnTiming, type VisualTimingRecord } from "./visual-turn-timing";
 import {
   CHECKPOINT_TOOLS, checkpointPath, validateCheckpointNotes, renderCheckpoint, pushFact, checkpointDue,
   checkpointGateText, checkpointPreamble, isGatedTool, pathsInCommand, remeasureNudge, type LedgerEntry,
@@ -961,7 +974,7 @@ let agentBrowserBinCache: string | null | undefined;
 function agentBrowserBin(): string | null {
   if (agentBrowserBinCache !== undefined) return agentBrowserBinCache;
   const home = app.getPath("home");
-  const candidates = agentBrowserCandidates(process.resourcesPath, app.isPackaged, home, process.env.PATH ?? "");
+  const candidates = agentBrowserCandidates(process.resourcesPath, productionBuild(), home, process.env.PATH ?? "", app.getAppPath());
   agentBrowserBinCache = candidates.find((p) => existsSync(p)) ?? null;
   if (!agentBrowserBinCache) {
     // Said once, loudly. Until now this returned null and agentBrowserTools()
@@ -1759,6 +1772,66 @@ const SCHEDULE_TOOLS = [
   },
 ];
 
+const VISUALIZE_TOOL = {
+  type: "function",
+  name: "visualize",
+  description: "Show a useful, source-checked provisional visual early in the active chat while you continue working. The visualize-openui workflow skill is attached to the first successful result; do not open it separately. Send a complete, small OpenUI Stack with static display components only, not a loading shell. At most one prompt follow-up draft is usually useful; then build and validate the final visual. No scripts, state, controls, data tools, or host actions. This is not final approval: still call visual_validate and visual_commit for the finished visual. Do not include Markdown fences.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      source: { type: "string", description: "Complete static OpenUI program under 32 KB.", maxLength: 32000 },
+    },
+    required: ["source"],
+  },
+};
+
+const VISUAL_VALIDATE_TOOL = {
+  type: "function",
+  name: "visual_validate",
+  description: "Validate a complete OpenUI program against a task-specific review brief. Each PaletteScene supports at most 50 shapes; procedure states need 3-20 ordered entries of 12-240 characters each. Structural errors can be corrected up to four times; only actual desktop/mobile renders use the four-preview budget. Use the final preview only for a specific repair with revisionReason. Inspect initial and interaction screenshots for the evidence named in the brief. Do not include Markdown fences in source.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      format: { type: "string", enum: ["openui"], description: "The final fenced visual language. Defaults to openui for older calls." },
+      source: { type: "string", description: "The complete OpenUI program. Each PaletteScene must have at most 50 shapes.", maxLength: 256000 },
+      review: {
+        type: "object",
+        description: "Task-specific learning objective and observable evidence. For a hands-on or ordered procedure, first consult a reliable source and include a complete ordered procedure plan before drawing; do not assume a stepper or other fixed layout.",
+        properties: {
+          kind: { type: "string", enum: ["procedure", "other"], description: "Use procedure for hands-on instructions or ordered physical transformations; use other for concepts, comparisons, maps, charts, and data explorations." },
+          goal: { type: "string", description: "What the user should understand or be able to do after seeing this visual." },
+          mustShow: { type: "array", items: { type: "string" }, description: "One to six essential things a viewer must be able to see, compare, or infer from the rendered visual." },
+          interaction: { type: "string", description: "For an interactive visual, describe the learner's action and the meaningful change in both the illustration and explanation. Use this when exploring a process, system, game, decision, or cause and effect teaches more than a fixed drawing." },
+          staticReason: { type: "string", description: "For a static visual only, explain specifically why choosing, changing an input, inspecting, or stepping through would not improve this learning goal. Do not use a generic claim that controls are unnecessary." },
+          procedure: {
+            type: "object",
+            description: "Required for instructional procedures or ordered physical transformations; omit for unrelated concepts, charts, and comparisons. Complete this from a consulted source or the user's supplied instructions before authoring the visual.",
+            properties: {
+              reference: { type: "string", description: "The specific consulted source and URL, or the user's supplied instructions. Do not invent a source." },
+              states: { type: "array", minItems: 3, maxItems: 20, items: { type: "string", minLength: 12, maxLength: 240 }, description: "Every indispensable step in order, naming the action and the resulting visible state in 12-240 characters. Include orientation, reversals, and repeated transformations." },
+            },
+            required: ["reference", "states"],
+          },
+        },
+        required: ["kind", "goal", "mustShow"],
+      },
+      revisionReason: { type: "string", description: "Required only for the final repair preview: name what failed in the previous preview and what this source changes." },
+    },
+    required: ["source", "review"],
+  },
+};
+
+const VISUAL_COMMIT_TOOL = {
+  type: "function",
+  name: "visual_commit",
+  description: "Approve the exact visual_validate preview for delivery in the final answer. The app will attach this visual even if the final prose omits its fence. Only commit after inspecting the screenshots for accuracy and legibility.",
+  inputSchema: {
+    type: "object",
+    properties: { previewId: { type: "string", description: "The preview ID returned by visual_validate." } },
+    required: ["previewId"],
+  },
+};
+
 const ASK_USER_TOOL = {
   type: "function",
   name: "ask_user",
@@ -1885,9 +1958,12 @@ function dynamicToolSource(tool: string | undefined): StepSource {
  *  body as arguments, and a JSON dump of it reads as debug output. Name the
  *  action and the note instead — the content is one click away on the
  *  "Saved Memory" row. */
-function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown): string {
+function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown, success?: boolean): string {
   const args = rawArgs && typeof rawArgs === "object" ? (rawArgs as Record<string, unknown>) : {};
   const t = tool ?? "tool";
+  if (t === "visualize") return "show draft visual";
+  if (t === "visual_validate") return visualValidationStepLabel(success);
+  if (t === "visual_commit") return "approve visual";
   if (t === "memory_save" || t === "memory_forget") {
     const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "memory";
     return `${t === "memory_save" ? "save memory" : "forget memory"} · ${name}`;
@@ -1939,6 +2015,9 @@ function threadDynamicTools(): Record<string, unknown>[] | undefined {
   const screenshots = screenshotToolsOffered({ axAlive: ax?.alive === true });
   const tools = [
     ASK_USER_TOOL,
+    VISUALIZE_TOOL,
+    VISUAL_VALIDATE_TOOL,
+    VISUAL_COMMIT_TOOL,
     ...(ax?.alive ? AX_TOOLS.map((t) => withSpaceGuidance(t, ax!.crossSpace)) : []),
     ...COMPUTER_USE_TOOLS
       .filter((t) => coordinateToolAllowed(t.name, screenshots))
@@ -2224,6 +2303,242 @@ type DynamicToolResponse = {
   contentItems: ({ type: "inputText"; text: string } | { type: "inputImage"; imageUrl: string })[];
   success: boolean;
 };
+
+const visualRenderBudget = createVisualValidationBudget(4);
+const visualStructureBudget = createVisualValidationBudget(4);
+const visualDraftBudget = createVisualValidationBudget(4);
+const visualDrafts = new Map<string, { turnId: string; source: string; version: number }>();
+const visualPreviewCandidates = new VisualPreviewCandidates();
+const visualSourceOpened = new Set<string>();
+const visualSourceRead = new Set<string>();
+const visualInteractiveRequests = new Set<string>();
+
+function visualResearchKey(threadId: string | null): string | null {
+  if (!threadId) return null;
+  const turnId = runningTurns.get(threadId);
+  return turnId ? `${threadId}:${turnId}` : null;
+}
+
+function logVisualLifecycle(kind: string, threadId: string | null, details: Record<string, unknown>): void {
+  if (productionBuild()) return;
+  try {
+    appendFileSync(join(app.getPath("userData"), "visual-route-dev.jsonl"), JSON.stringify({
+      at: new Date().toISOString(), kind, threadId,
+      turnId: threadId ? runningTurns.get(threadId) ?? null : null,
+      ...details,
+    }) + "\n", { mode: 0o600 });
+  } catch {
+    // Preview diagnostics must never block an answer.
+  }
+}
+
+function logVisualTiming(record: VisualTimingRecord): void {
+  if (productionBuild()) return;
+  try {
+    appendFileSync(join(app.getPath("userData"), "visual-timing-dev.jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+    if (record.kind === "summary") {
+      console.info("[visual-timing]", JSON.stringify(record));
+    }
+  } catch {
+    // Timing must never block a turn.
+  }
+}
+
+const visualTurnTiming = new VisualTurnTiming(logVisualTiming);
+if (!productionBuild()) setInterval(() => visualTurnTiming.heartbeat(), 10_000).unref();
+
+function visualDeliveriesFile(threadId: string): string {
+  const dir = join(app.getPath("userData"), "visual-deliveries");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${threadId.replace(/[^\w.-]/g, "_")}.json`);
+}
+
+function savedVisualDeliveries(threadId: string): Record<string, ApprovedVisual> {
+  try {
+    const value = JSON.parse(readFileSync(visualDeliveriesFile(threadId), "utf8")) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).slice(-32).filter(([, visual]) => {
+      const item = visual as Partial<ApprovedVisual> | null;
+      return item && (item.format === "openui" || item.format === "visual-html") &&
+        typeof item.source === "string" && item.source.length <= 256_000;
+    }));
+  } catch {
+    return {};
+  }
+}
+
+function saveVisualDelivery(threadId: string, turnId: string, visual: ApprovedVisual): void {
+  const entries = Object.entries(savedVisualDeliveries(threadId));
+  const next = Object.fromEntries([...entries.filter(([id]) => id !== turnId), [turnId, visual]].slice(-32));
+  writeFileSync(visualDeliveriesFile(threadId), JSON.stringify(next), { mode: 0o600 });
+}
+
+function stageVisualCheckpoint(threadId: string, turnId: string, source: string, origin: "draft" | "preview"): void {
+  if (runningTurns.get(threadId) !== turnId) return;
+  const checkpoint = nextVisualCheckpoint(visualDrafts.get(threadId), turnId, source);
+  if (!checkpoint) return;
+  visualDrafts.set(threadId, checkpoint);
+  const paneId = paneForThread(threadId);
+  if (paneId) send("chat:visual-draft", { paneId, threadId, ...checkpoint });
+  visualTurnTiming.milestone(threadId, "draft_staged");
+  logVisualLifecycle("visual-draft", threadId, { version: checkpoint.version, bytes: source.length, origin, paneId });
+}
+
+function handleVisualize(rawArgs: unknown, threadId: string | null): DynamicToolResponse {
+  const turnId = threadId ? runningTurns.get(threadId) ?? null : null;
+  const paneId = threadId ? paneForThread(threadId) : null;
+  if (!threadId || !turnId) {
+    return { contentItems: [{ type: "inputText", text: "No active chat turn can receive this visual." }], success: false };
+  }
+  const source = (rawArgs as { source?: unknown } | null)?.source;
+  if (typeof source !== "string") {
+    return { contentItems: [{ type: "inputText", text: "Provide a complete static OpenUI source string." }], success: false };
+  }
+  const checked = validateVisualizeDraft(source);
+  if (!checked.valid) {
+    return { contentItems: [{ type: "inputText", text: `Draft not shown: ${checked.errors.join("; ")}` }], success: false };
+  }
+  const remaining = visualDraftBudget.remaining(threadId, turnId);
+  if (!remaining || !visualDraftBudget.tryUse(threadId, turnId)) {
+    return { contentItems: [{ type: "inputText", text: "Four draft updates are already shown. Finish with visual_validate and visual_commit." }], success: false };
+  }
+  stageVisualCheckpoint(threadId, turnId, source, "draft");
+  const version = visualDrafts.get(threadId)?.version ?? 1;
+  return { contentItems: [{ type: "inputText", text: `Provisional visual ${version} is staged${paneId ? " in the chat" : " for this conversation"}. ${version === 1 ? "A second complete checkpoint is useful only if another verified scene is ready promptly. " : ""}Move to the complete final visual now; stop browsing unless a specific factual gap remains. Validate it once and commit the first accurate, legible preview. Revise only a concrete defect.` }], success: true };
+}
+
+async function handleVisualValidation(rawArgs: unknown, threadId: string | null): Promise<DynamicToolResponse> {
+  const startedAt = Date.now();
+  const turnId = threadId ? runningTurns.get(threadId) ?? null : null;
+  const acceptedPreview = () => {
+    const candidate = threadId ? visualPreviewCandidates.get(threadId, turnId) : undefined;
+    return candidate
+      ? `The last technically accepted preview (${candidate.previewId}) is still available for visual_commit if you have inspected it and it accurately teaches the requested subject.`
+      : "";
+  };
+  if (visualStructureBudget.remaining(threadId, turnId) === 0) {
+    logVisualLifecycle("structure-budget-exhausted", threadId, {});
+    return {
+      contentItems: [{ type: "inputText", text: "The four structural corrections for this turn are used. Do not call visual_validate again or send an unpreviewed visual. Give the user a useful text answer instead." }],
+      success: false,
+    };
+  }
+  const args = rawArgs as { source?: unknown; format?: unknown; review?: unknown; revisionReason?: unknown } | null;
+  const source = typeof args?.source === "string" ? args.source : "";
+  const format = args?.format ?? "openui";
+  const review = parseVisualReviewBrief(args?.review);
+  const result = format === "openui" ? validateOpenUIForAgent(source)
+    : { valid: false, errors: ["New visuals must use format openui."] };
+  if (!result.valid || review.errors.length) {
+    visualStructureBudget.tryUse(threadId, turnId);
+    const remaining = visualStructureBudget.remaining(threadId, turnId);
+    logVisualLifecycle("preview-rejected", threadId, { format, reason: "structure", errorCount: result.errors.length + review.errors.length });
+    return {
+      contentItems: [{ type: "inputText", text: `Invalid ${format} visual: ${[...result.errors, ...review.errors].join("; ")} ${remaining ? `This did not use a rendered preview. Fix the errors and call visual_validate again (${remaining} structural corrections remain).` : "No structural corrections remain; give a useful text answer instead."}` }],
+      success: false,
+    };
+  }
+  const interactionIssue = visualInteractionRequestIssue(
+    review.brief!, Boolean(threadId && turnId && visualInteractiveRequests.has(`${threadId}:${turnId}`)),
+  );
+  if (interactionIssue) {
+    return { contentItems: [{ type: "inputText", text: `${interactionIssue} This did not use a rendered preview.` }], success: false };
+  }
+  const researchIssue = visualProcedureResearchIssue(
+    review.brief!, visualSourceRead.has(visualResearchKey(threadId) ?? ""),
+  );
+  if (researchIssue) {
+    return { contentItems: [{ type: "inputText", text: researchIssue }], success: false };
+  }
+  const previewsRemaining = visualRenderBudget.remaining(threadId, turnId);
+  const revisionIssue = visualRevisionIssue(previewsRemaining, args?.revisionReason);
+  if (revisionIssue) {
+    return { contentItems: [{ type: "inputText", text: revisionIssue }], success: false };
+  }
+  if (!visualRenderBudget.tryUse(threadId, turnId)) {
+    logVisualLifecycle("preview-budget-exhausted", threadId, {});
+    return {
+      contentItems: [{ type: "inputText", text: `The four rendered previews for this turn are used. Do not call visual_validate again or send an unpreviewed visual. ${acceptedPreview() || "Give the user a useful text answer instead."}` }],
+      success: false,
+    };
+  }
+  try {
+    const scriptedVisuals = openUIVisualHtmlSources(source);
+    const scriptedVisualUrls = Object.fromEntries(scriptedVisuals.map((html) => [html, registerInteractiveVisual(html)]));
+    const previews = await previewVisual(source, {
+      rendererUrl: process.env.ELECTRON_RENDERER_URL,
+      rendererFile: join(__dirname, "../renderer/index.html"),
+      scriptedVisualUrls,
+    });
+    const interactionsTested = previews.reduce((total, preview) => total + preview.interactionsTested, 0);
+    const issues = [
+      ...previews.flatMap(({ width, issues }) => issues.map((issue) => `${width}px: ${issue}`)),
+      ...visualReviewIssues(review.brief!, interactionsTested),
+    ];
+    const previewId = randomUUID();
+    if (threadId && turnId && issues.length === 0 && runningTurns.get(threadId) === turnId) {
+      visualPreviewCandidates.accept(threadId, {
+        turnId,
+        previewId,
+        visual: { format: "openui", source },
+        review: review.brief!,
+        committed: false,
+      });
+      stageVisualCheckpoint(threadId, turnId, source, "preview");
+    }
+    const elapsedMs = Date.now() - startedAt;
+    if (threadId) visualTurnTiming.milestone(threadId, "preview_ready");
+    const desktop = previews[0];
+    const stateAudit = desktop?.interactionStates?.length
+      ? `Tested visual states: ${desktop.interactionStates.map(({ label, outcome }) => `${label}: ${outcome}`).join(" | ")}. `
+      : "";
+    const navigationAdvice = desktop?.navigationOnly
+      ? "Controls navigate between scenes; check that each essential state is present and visibly different. "
+      : "";
+    const qualityReview = visualReviewChecklist(review.brief!, interactionsTested);
+    const narrowLayoutAdvice = review.brief!.kind === "procedure" && issues.some((issue) => /390px:.*(?:overflow|outside frame|outside viewport)/i.test(issue))
+      ? "For a narrow procedural view, replace a long row of stage tabs with one current-stage label or counter and compact Back/Next controls; keep controls inside a wrapping or min-width:0 container. "
+      : "";
+    logVisualLifecycle("preview", threadId, { format, previewId, bytes: source.length, elapsedMs, widths: previews.map(({ width }) => width), interactionsTested, issues });
+    console.info("[visual-preview]", JSON.stringify({ threadId, format, previewId, bytes: source.length, elapsedMs, interactionsTested, issues }));
+    return {
+      contentItems: [
+        { type: "inputText", text: issues.length
+          ? `Preview found layout, runtime, or interaction issues: ${issues.join("; ")}. ${narrowLayoutAdvice}${stateAudit}${navigationAdvice}${qualityReview} Repair before approving. ${acceptedPreview()}`
+          : `Preview ID ${previewId} (${elapsedMs} ms; ${interactionsTested} control checks). ${stateAudit}${navigationAdvice}${qualityReview} If every item is supported, call visual_commit with this ID. The app will deliver the approved bytes even if your final prose omits the visual fence.` },
+        ...previews.flatMap(({ width, imageUrl, interactionImageUrl, stateImageUrls }) => [
+          { type: "inputText" as const, text: `${width}px preview:` },
+          { type: "inputImage" as const, imageUrl },
+          ...(stateImageUrls ?? []).flatMap(({ label, imageUrl: stateImageUrl }) => [
+            { type: "inputText" as const, text: `${width}px after ${label}:` },
+            { type: "inputImage" as const, imageUrl: stateImageUrl },
+          ]),
+          ...(interactionImageUrl ? [
+            { type: "inputText" as const, text: `${width}px after interaction:` },
+            { type: "inputImage" as const, imageUrl: interactionImageUrl },
+          ] : []),
+        ]),
+      ],
+      success: issues.length === 0,
+    };
+  } catch (error) {
+    logVisualLifecycle("preview-failed", threadId, { format, bytes: source.length, elapsedMs: Date.now() - startedAt, error: String(error).slice(0, 300) });
+    console.warn("[visual-preview] failed:", error);
+    return { contentItems: [{ type: "inputText", text: `Preview could not render: ${String(error)}. Do not send this visual.` }], success: false };
+  }
+}
+
+function handleVisualCommit(rawArgs: unknown, threadId: string | null): DynamicToolResponse {
+  const previewId = (rawArgs as { previewId?: unknown } | null)?.previewId;
+  const candidate = threadId ? visualPreviewCandidates.get(threadId, runningTurns.get(threadId) ?? null) : undefined;
+  if (!candidate || candidate.previewId !== previewId || candidate.turnId !== (threadId ? runningTurns.get(threadId) ?? null : null)) {
+    return { contentItems: [{ type: "inputText", text: "That preview is no longer current. Only the latest successfully rendered preview for this turn can be approved." }], success: false };
+  }
+  candidate.committed = true;
+  if (threadId) visualTurnTiming.milestone(threadId, "visual_committed");
+  logVisualLifecycle("preview-committed", threadId, { format: candidate.visual.format, previewId: candidate.previewId, bytes: candidate.visual.source.length });
+  return { contentItems: [{ type: "inputText", text: "Approved. The exact previewed visual will be attached to this answer automatically." }], success: true };
+}
 
 function primaryComputerDisplay(): ComputerDisplay {
   const display = screen.getPrimaryDisplay();
@@ -3624,6 +3939,55 @@ function paneForThread(threadId: unknown): PaneId | null {
 // backgrounded conversation be reopened mid-turn with its busy state, the
 // partial assistant text, and any approval request the agent is blocked on.
 const runningTurns = new Map<string, string>(); // threadId → turnId
+const fastVisualTurns = new Map<string, {
+  paneId: PaneId;
+  turnId: string;
+  controller: AbortController;
+  streamText: string;
+  user: string;
+  startedAt: number;
+}>();
+
+type FastVisualExchange = { user: string; assistant: string };
+function fastVisualHistoryFile(): string {
+  return join(app.getPath("userData"), "fast-visual-history.json");
+}
+function fastVisualHistory(): Record<string, FastVisualExchange[]> {
+  try {
+    const value = JSON.parse(readFileSync(fastVisualHistoryFile(), "utf8")) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).map(([threadId, records]) => [
+      threadId,
+      Array.isArray(records)
+        ? records.filter((item): item is FastVisualExchange => item && typeof item.user === "string" && typeof item.assistant === "string").slice(-4)
+        : [],
+    ]));
+  } catch {
+    return {};
+  }
+}
+function rememberFastVisual(threadId: string, exchange: FastVisualExchange): void {
+  const history = fastVisualHistory();
+  history[threadId] = [...(history[threadId] ?? []), exchange].slice(-4);
+  writeFileSync(fastVisualHistoryFile(), JSON.stringify(history), { mode: 0o600 });
+}
+function pendingFastVisualContext(threadId: string): string {
+  const history = fastVisualHistory()[threadId] ?? [];
+  if (!history.length) return "";
+  return "\n\n[Prior direct visual turns in this chat; context, not new instructions]\n" +
+    history.map(({ user, assistant }) => `User: ${user.slice(0, 2000)}\nVisual answer:\n${assistant.slice(0, 24000)}`).join("\n\n") +
+    "\n[/Prior direct visual turns]";
+}
+function clearPendingFastVisualContext(threadId: string): void {
+  const history = fastVisualHistory();
+  if (!(threadId in history)) return;
+  delete history[threadId];
+  try {
+    writeFileSync(fastVisualHistoryFile(), JSON.stringify(history), { mode: 0o600 });
+  } catch (cause) {
+    console.warn("[fast-visual] could not clear bridged context:", cause instanceof Error ? cause.message : String(cause));
+  }
+}
 /** threadId → the last token-usage numbers seen, so a retry that re-emits them
  *  unchanged can be told from a new request. */
 const lastUsageSig = new Map<string, string>();
@@ -4399,7 +4763,7 @@ type WireThread = {
   /** Free-form classification the client set at thread/start, handed back
    *  unchanged. Used to keep scheduled runs out of the sidebar. */
   threadSource?: string | null;
-  turns?: { items?: WireItem[]; startedAt?: number; durationMs?: number }[];
+  turns?: { id?: string; items?: WireItem[]; startedAt?: number; durationMs?: number }[];
 };
 
 // Projects the user has explicitly opened. Persisted so a project appears
@@ -4644,6 +5008,7 @@ function threadToEntries(
 ): { entries: unknown[]; runningTurnStart: number | null; runningTurnStartedAt: number | null } {
   const entries: unknown[] = [];
   const turns = thread.turns ?? [];
+  const visualDeliveries = savedVisualDeliveries(thread.id);
   // Where the in-flight turn's foldable output begins, and when the turn
   // started. Without these, opening a conversation mid-turn stranded the
   // replayed half of that turn outside the fold forever: the live fold at
@@ -4654,6 +5019,7 @@ function threadToEntries(
   let runningTurnStartedAt: number | null = null;
   for (let t = 0; t < turns.length; t++) {
     const turn = turns[t];
+    const approvedVisual = turn.id ? visualDeliveries[turn.id] : undefined;
     const startedAt = epochMillis(turn.startedAt) ?? (t === 0 ? epochMillis(thread.createdAt) : null);
     const answeredAt = startedAt !== null && typeof turn.durationMs === "number" && Number.isFinite(turn.durationMs) && turn.durationMs >= 0
       ? startedAt + turn.durationMs
@@ -4710,7 +5076,7 @@ function threadToEntries(
           flush(false);
           entries.push({
             kind: "user",
-            text: stripFileAttachmentContext(item.text ?? contentToText(item.content)),
+            text: stripVisualRouteHint(stripFileAttachmentContext(item.text ?? contentToText(item.content))),
             attachments: Array.isArray(item.content)
               ? item.content.flatMap((part: unknown) => {
                   if (!part || typeof part !== "object") return [];
@@ -4738,7 +5104,7 @@ function threadToEntries(
           const text = m.text ?? contentToText(m.content);
           if (!text) break;
           if (m.role === "user") {
-            entries.push({ kind: "user", text: stripFileAttachmentContext(text), ...(startedAt !== null ? { at: startedAt } : {}) });
+            entries.push({ kind: "user", text: stripVisualRouteHint(stripFileAttachmentContext(text)), ...(startedAt !== null ? { at: startedAt } : {}) });
             if (!foldThisTurn) runningTurnStart = entries.length;
           } else {
             bucket.push({ kind: "assistant", text, phase: m.phase ?? null, ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
@@ -4774,7 +5140,7 @@ function threadToEntries(
           bucket.push({
             kind: "command",
             itemId: d.id ?? "unknown",
-            command: dynamicToolCommandText(d.tool, d.arguments),
+            command: dynamicToolCommandText(d.tool, d.arguments, d.success),
             status: d.success === false ? "failed" : (d.status ?? "completed"),
             source: dynamicToolSource(d.tool),
             ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
@@ -4821,7 +5187,14 @@ function threadToEntries(
         }
       }
     }
-    if (foldThisTurn) flush(true);
+    if (foldThisTurn) {
+      flush(true);
+      if (approvedVisual) {
+        const last = entries[entries.length - 1] as { kind?: string; text?: string } | undefined;
+        if (last?.kind === "assistant") last.text = appendApprovedVisual(last.text ?? "", approvedVisual);
+        else entries.push({ kind: "assistant", text: appendApprovedVisual("", approvedVisual) });
+      }
+    }
     else {
       entries.push(...bucket);
       bucket.length = 0;
@@ -4888,6 +5261,18 @@ function computerUseSkillText(): string | null {
 
 /** Conversations that have already been handed the skill. */
 const axSkillSent = new Set<string>();
+const visualizeSkillSent = new Set<string>();
+let visualizeSkillCache: string | null | undefined;
+function visualizeSkillText(): string | null {
+  if (visualizeSkillCache !== undefined) return visualizeSkillCache;
+  try {
+    visualizeSkillCache = readFileSync(join(bundledSkillsDir(), "visualize-openui", "SKILL.md"), "utf8");
+  } catch (err) {
+    console.warn("[skills] visualize-openui skill unreadable:", String(err));
+    visualizeSkillCache = null;
+  }
+  return visualizeSkillCache;
+}
 
 // ── Working-memory checkpoint (see checkpoint.ts) ─────────────────────────
 // Context occupancy per thread and per root, from thread/tokenUsage/updated.
@@ -6136,6 +6521,7 @@ function wireNotifications(): void {
     // pane-targeted sends require a pane to currently own the thread.
     const paneId = paneForThread(params.threadId);
     const threadId = typeof params.threadId === "string" ? params.threadId : null;
+    if (threadId) visualTurnTiming.engineEvent(threadId, msg.method);
     switch (msg.method) {
       case "rawResponseItem/completed": {
         const raw = params.item as {
@@ -6281,6 +6667,7 @@ function wireNotifications(): void {
           // gateway's per-org concurrency.
           learning?.setIdle(false);
           runningTurns.set(threadId, turn.id);
+          visualTurnTiming.start(threadId, turn.id);
           metrics.record({ ...metricNow(threadId), kind: "run", turn: turn.id, phase: "started", status: null } satisfies RunRecord);
           bgStream.delete(threadId);
           send("chat:thread-activity", { threadId, running: true });
@@ -6298,6 +6685,10 @@ function wireNotifications(): void {
       }
       case "item/agentMessage/delta": {
         const delta = (params.delta as string) ?? "";
+        if (threadId && delta) {
+          visualTurnTiming.outputChunk(threadId, delta.length);
+          visualTurnTiming.outputStarted(threadId);
+        }
         // Always accumulate — this is what seeds the transcript when a
         // backgrounded conversation is reopened mid-stream.
         if (threadId) bgStream.set(threadId, (bgStream.get(threadId) ?? "") + delta);
@@ -6331,6 +6722,14 @@ function wireNotifications(): void {
           | { type?: string; id?: string; status?: string; changes?: { path?: string }[] }
           | undefined;
         const phase = msg.method === "item/started" ? "started" : "completed";
+        if (threadId) {
+          if ((item?.type === "commandExecution" || item?.type === "mcpToolCall") && item.id) {
+            if (phase === "started") visualTurnTiming.toolStarted(threadId, item.id, item.type === "commandExecution" ? "shell" : "mcp");
+            else visualTurnTiming.toolCompleted(threadId, item.id, item.status !== "failed");
+          } else if (phase === "completed" && (item?.type === "agentMessage" || item?.type === "message")) {
+            visualTurnTiming.messageCompleted(threadId);
+          }
+        }
         // A finished assistant message lands in the engine's history — the
         // partial-stream buffer for it is no longer needed.
         // Same shape as the replay case above: a message delivered whole, in
@@ -6453,7 +6852,7 @@ function wireNotifications(): void {
             phase,
             item: {
               id: d.id,
-              command: dynamicToolCommandText(d.tool, d.arguments),
+              command: dynamicToolCommandText(d.tool, d.arguments, d.success),
               source: dynamicToolSource(d.tool),
               ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
               // A started call is in progress — defaulting to "completed"
@@ -6658,7 +7057,33 @@ function wireNotifications(): void {
         const turn = params.turn as
           | { status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
           | undefined;
+        const previewed = threadId ? visualPreviewCandidates.get(threadId, runningTurns.get(threadId) ?? null) : undefined;
+        const approvedVisual = turn?.status === "completed" && previewed?.committed &&
+          previewed.turnId === (threadId ? runningTurns.get(threadId) ?? null : null)
+          ? previewed.visual : null;
         if (threadId) {
+          const completedTurnId = runningTurns.get(threadId);
+          if (completedTurnId) visualizeSkillSent.delete(`${threadId}:${completedTurnId}`);
+          if (completedTurnId) visualInteractiveRequests.delete(`${threadId}:${completedTurnId}`);
+          visualPreviewCandidates.clear(threadId);
+          visualRenderBudget.clear(threadId);
+          visualStructureBudget.clear(threadId);
+          visualDraftBudget.clear(threadId);
+          visualDrafts.delete(threadId);
+          const visualKey = visualResearchKey(threadId);
+          if (visualKey) {
+            visualSourceOpened.delete(visualKey);
+            visualSourceRead.delete(visualKey);
+          }
+          if (approvedVisual && previewed?.turnId) {
+            try {
+              saveVisualDelivery(threadId, previewed.turnId, approvedVisual);
+              logVisualLifecycle("visual-delivered", threadId, { format: approvedVisual.format, bytes: approvedVisual.source.length });
+              console.info("[visual-delivery]", JSON.stringify({ threadId, turnId: previewed.turnId, format: approvedVisual.format, bytes: approvedVisual.source.length }));
+            } catch (error) {
+              console.warn("[visual-delivery] could not persist approved visual:", error);
+            }
+          }
           if (turn?.status === "completed" && !subAgents.has(threadId)) {
             const count = (completedTurnsSinceMemory.get(threadId) ?? 0) + 1;
             completedTurnsSinceMemory.set(threadId, count);
@@ -6685,6 +7110,7 @@ function wireNotifications(): void {
             phase: "completed",
             status: turn?.status ?? "completed",
           } satisfies RunRecord);
+          visualTurnTiming.complete(threadId, turn?.status ?? "completed");
           learning?.flush();
           // Idle again: nothing of the user's is competing for the gateway.
           if (runningTurns.size <= 1) learning?.setIdle(true);
@@ -6782,7 +7208,8 @@ function wireNotifications(): void {
           threadId !== null &&
           turn?.status === "completed" &&
           turnSawCommentary.has(threadId) &&
-          !turnSawFinalAnswer.has(threadId);
+          !turnSawFinalAnswer.has(threadId) &&
+          !approvedVisual;
         if (threadId) {
           turnSawCommentary.delete(threadId);
           turnSawFinalAnswer.delete(threadId);
@@ -6791,6 +7218,7 @@ function wireNotifications(): void {
         panes[paneId].turnId = null;
         send("chat:turn-completed", {
           paneId,
+          approvedVisual,
           narrated,
           status: turn?.status ?? "completed",
           usage: turn?.usage ?? null,
@@ -6962,6 +7390,13 @@ function wireNotifications(): void {
         // Three families now, dispatched by prefix rather than by assuming
         // the browser owns every dynamic tool.
         const seq = ++toolSeq;
+        const timingCallId = `dynamic:${String(msg.id)}`;
+        if (approvalThread) {
+          if (tool === "visualize" || tool === "visual_validate" || tool === "visual_commit") {
+            visualTurnTiming.milestone(approvalThread, "visual_requested");
+          }
+          visualTurnTiming.toolStarted(approvalThread, timingCallId, tool);
+        }
         const startedAt = Date.now();
         const shape = payloadOf(tool, args);
         // The whole dispatch runs inside the scope, so every bridge call it
@@ -6970,7 +7405,13 @@ function wireNotifications(): void {
         // running at the same moment.
         const quietWrites: { id: number | null; role: string | null }[] = [];
         const call = inToolCall.run({ seq, thread: approvalThread, quiet: quietWrites }, () =>
-          tool === "ask_user"
+          tool === "visualize"
+          ? Promise.resolve(handleVisualize(args, approvalThread))
+          : tool === "visual_validate"
+          ? handleVisualValidation(args, approvalThread)
+          : tool === "visual_commit"
+          ? Promise.resolve(handleVisualCommit(args, approvalThread))
+          : tool === "ask_user"
           ? handleAskUser(args, approvalThread)
           : tool.startsWith("schedule_")
           ? handleScheduleToolCall(tool, args, approvalThread)
@@ -6999,6 +7440,11 @@ function wireNotifications(): void {
             success: false,
           }))
           .then((response) => {
+            const visualKey = visualResearchKey(approvalThread);
+            if (visualKey && response.success) {
+              if (tool === "browser_open") visualSourceOpened.add(visualKey);
+              if (tool === "browser_read" && visualSourceOpened.has(visualKey)) visualSourceRead.add(visualKey);
+            }
             // The first tool result after a compaction carries the checkpoint
             // back: the summary kept the plan and dropped the numbers.
             const root = rootThreadOf(approvalThread);
@@ -7022,6 +7468,17 @@ function wireNotifications(): void {
             axSkillSent.add(skillRoot);
             axLog(`sent the computer-use skill with the first desktop call (${tool})`);
             return appendSkill(response, preamble);
+          })
+          .then((response) => {
+            if (tool !== "visualize" || !response.success || !approvalThread) return response;
+            const turnId = runningTurns.get(approvalThread);
+            if (!turnId) return response;
+            const key = `${approvalThread}:${turnId}`;
+            if (visualizeSkillSent.has(key)) return response;
+            const body = skillBody(visualizeSkillText() ?? "");
+            if (!body) return response;
+            visualizeSkillSent.add(key);
+            return appendSkill(response, `=== Visualize workflow skill ===\n${body}\n=== end ===`);
           })
           .then((response) => {
             // Recorded after the skill and checkpoint passes so ms is the
@@ -7053,9 +7510,13 @@ function wireNotifications(): void {
               seq,
             };
             metrics.record(rec);
+            if (approvalThread) visualTurnTiming.toolCompleted(approvalThread, timingCallId, ok);
             return response;
           })
-          .then((response) => engine.respond(msg.id, response));
+          .then((response) => {
+            engine.respond(msg.id, response);
+            if (approvalThread) visualTurnTiming.toolResultSent(approvalThread, tool);
+          });
         return;
       }
       // MCP tool calls. codex gates each one behind an elicitation request,
@@ -7928,6 +8389,12 @@ async function startEngine(): Promise<void> {
 }
 
 const interactiveVisuals = new Map<string, string>();
+function registerInteractiveVisual(source: string): string {
+  const id = randomUUID();
+  interactiveVisuals.set(id, source);
+  if (interactiveVisuals.size > 32) interactiveVisuals.delete(interactiveVisuals.keys().next().value!);
+  return `${INTERACTIVE_VISUAL_SCHEME}://view/${id}`;
+}
 function registeredInteractiveVisualId(rawUrl: string): string | null {
   const id = interactiveVisualId(rawUrl);
   return id && interactiveVisuals.has(id) ? id : null;
@@ -7935,7 +8402,7 @@ function registeredInteractiveVisualId(rawUrl: string): string | null {
 protocol.registerSchemesAsPrivileged([{ scheme: INTERACTIVE_VISUAL_SCHEME, privileges: { standard: true, secure: true } }]);
 
 app.whenReady().then(async () => {
-  protocol.handle(INTERACTIVE_VISUAL_SCHEME, (request) => {
+  const handleInteractiveVisual = (request: Request) => {
     const id = registeredInteractiveVisualId(request.url);
     const source = request.method === "GET" && id ? interactiveVisuals.get(id) : null;
     if (!source) return new Response("Not found", { status: 404 });
@@ -7947,14 +8414,111 @@ app.whenReady().then(async () => {
         "Cache-Control": "no-store",
       },
     });
-  });
+  };
+  protocol.handle(INTERACTIVE_VISUAL_SCHEME, handleInteractiveVisual);
+  session.fromPartition("visual-preview").protocol.handle(INTERACTIVE_VISUAL_SCHEME, handleInteractiveVisual);
   ipcMain.handle("visual:register", (event, source: unknown) => {
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
         !isInteractiveVisualSource(source)) return null;
-    const id = randomUUID();
-    interactiveVisuals.set(id, source);
-    if (interactiveVisuals.size > 32) interactiveVisuals.delete(interactiveVisuals.keys().next().value!);
-    return `${INTERACTIVE_VISUAL_SCHEME}://view/${id}`;
+    return registerInteractiveVisual(source);
+  });
+  const trustedVisualCaller = (event: Electron.IpcMainInvokeEvent): boolean =>
+    Boolean(win && event.sender === win.webContents && event.senderFrame === win.webContents.mainFrame);
+  ipcMain.handle("visual:read-clipboard-text", async (event) => {
+    if (!trustedVisualCaller(event)) return { ok: false, error: "Unavailable" };
+    try {
+      const text = await clipboard.readText();
+      if (Buffer.byteLength(text, "utf8") > MAX_VISUAL_FILE_BYTES) return { ok: false, error: "Clipboard text is too large" };
+      return { ok: true, text };
+    } catch {
+      return { ok: false, error: "Could not read clipboard text" };
+    }
+  });
+  ipcMain.handle("visual:pick-text-file", async (event) => {
+    if (!trustedVisualCaller(event) || !win) return { ok: false, error: "Unavailable" };
+    const choice = await dialog.showOpenDialog(win, {
+      title: "Choose text for this visual",
+      buttonLabel: "Use file",
+      properties: ["openFile"],
+      filters: [{ name: "Text, CSV, or JSON", extensions: ["txt", "csv", "json"] }],
+    });
+    if (choice.canceled || !choice.filePaths[0]) return { ok: false, canceled: true };
+    const path = choice.filePaths[0];
+    try {
+      if (!/\.(?:txt|csv|json)$/i.test(path) || !statSync(path).isFile() || statSync(path).size > MAX_VISUAL_FILE_BYTES) {
+        return { ok: false, error: "Choose a text, CSV, or JSON file under 64 KB" };
+      }
+      const bytes = readFileSync(path);
+      if (bytes.byteLength > MAX_VISUAL_FILE_BYTES || bytes.includes(0)) return { ok: false, error: "File is too large or is not text" };
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return { ok: true, name: basename(path), text };
+    } catch {
+      return { ok: false, error: "Could not read the selected text file" };
+    }
+  });
+  ipcMain.handle("visual:save-text", async (event, payload: unknown) => {
+    if (!trustedVisualCaller(event) || !win || !payload || typeof payload !== "object") return { ok: false, error: "Unavailable" };
+    const { name, text } = payload as Record<string, unknown>;
+    const filename = visualExportName(name);
+    if (!filename || typeof text !== "string" || Buffer.byteLength(text, "utf8") > MAX_VISUAL_FILE_BYTES || text.includes("\0")) {
+      return { ok: false, error: "Invalid export name or text" };
+    }
+    const choice = await dialog.showSaveDialog(win, {
+      title: "Save visual output",
+      buttonLabel: "Save",
+      defaultPath: join(app.getPath("downloads"), filename),
+      filters: [{ name: "Text, CSV, or JSON", extensions: ["txt", "csv", "json"] }],
+    });
+    if (choice.canceled || !choice.filePath) return { ok: false, canceled: true };
+    try {
+      writeFileSync(choice.filePath, text, "utf8");
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Could not save the selected file" };
+    }
+  });
+  ipcMain.handle("visual-route:timing", (event, payload: {
+    paneId?: string; threadId?: string; turnId?: string | null;
+    firstTextMs?: number | null; totalMs?: number | null;
+    outputType?: string; visualReadyMs?: number | null;
+    phase?: "turn" | "visual-ready" | "progressive-first-paint" | "progressive-summary" |
+      "draft-received" | "draft-mounted" | "draft-painted";
+    progressive?: boolean; firstVisualPaintMs?: number | null; firstVisualPaintBytes?: number | null;
+    visualUpdates?: number; rejectedVisualChunks?: number; lastVisualPaintMs?: number | null;
+    lastVisualRejectReason?: string | null;
+    draftVersion?: number; draftBytes?: number; activeTurnMatched?: boolean;
+    hasVisual?: boolean; visibilityState?: string; hasFocus?: boolean;
+  }) => {
+    if (productionBuild() || !win || event.sender !== win.webContents ||
+        event.senderFrame !== win.webContents.mainFrame || !payload ||
+        typeof payload.threadId !== "string" || typeof payload.turnId !== "string") return false;
+    try {
+      appendFileSync(join(app.getPath("userData"), "visual-route-dev.jsonl"), JSON.stringify({
+        at: new Date().toISOString(), kind: payload.phase === "draft-received" ? "draft-received" :
+          payload.phase === "draft-mounted" ? "draft-mounted" :
+          payload.phase === "draft-painted" ? "draft-painted" :
+          payload.phase === "visual-ready" ? "visual-ready" :
+          payload.phase === "progressive-first-paint" ? "progressive-first-paint" :
+          payload.phase === "progressive-summary" ? "progressive-summary" : "turn-timing", paneId: payload.paneId,
+        threadId: payload.threadId, turnId: payload.turnId,
+        firstTextMs: payload.firstTextMs, totalMs: payload.totalMs,
+        outputType: payload.outputType, visualReadyMs: payload.visualReadyMs,
+        progressive: payload.progressive, firstVisualPaintMs: payload.firstVisualPaintMs,
+        firstVisualPaintBytes: payload.firstVisualPaintBytes, visualUpdates: payload.visualUpdates,
+        rejectedVisualChunks: payload.rejectedVisualChunks, lastVisualPaintMs: payload.lastVisualPaintMs,
+        lastVisualRejectReason: payload.lastVisualRejectReason,
+        draftVersion: Number.isInteger(payload.draftVersion) ? payload.draftVersion : undefined,
+        draftBytes: Number.isInteger(payload.draftBytes) ? payload.draftBytes : undefined,
+        activeTurnMatched: payload.activeTurnMatched,
+        hasVisual: payload.hasVisual,
+        visibilityState: payload.visibilityState === "visible" || payload.visibilityState === "hidden"
+          ? payload.visibilityState : undefined,
+        hasFocus: payload.hasFocus,
+      }) + "\n", { mode: 0o600 });
+      return true;
+    } catch {
+      return false;
+    }
   });
   try {
     const migrated = migrateLegacyPlainMemory(memoryRoot(), defaultChatDir());
@@ -8129,8 +8693,12 @@ app.whenReady().then(async () => {
     text: string;
     attachments?: { name: string; path: string; kind?: "image" }[];
     computer?: boolean;
+    routeHistory?: VisualRouteHistoryEntry[];
   }) => {
-    const { paneId, text, attachments, computer } = payload;
+    const { paneId, text, attachments, computer, routeHistory } = payload;
+    const routePromise = productionBuild()
+      ? Promise.resolve(null)
+      : classifyVisualRoute(text, readStoredKey()?.key ?? null, fetch, Array.isArray(routeHistory) ? routeHistory : []);
     for (const attachment of attachments ?? []) {
       if (!isAbsolute(attachment.path)) throw new Error(`Invalid attachment path: ${attachment.name}`);
       const info = statSync(attachment.path);
@@ -8239,7 +8807,134 @@ app.whenReady().then(async () => {
     // Mentions preserve attachment metadata in thread history, but local
     // paths in mentions do not reach the model. Supply readable files (or an
     // explicit path to inspect) as text; images remain actual image input.
-    const input: Record<string, unknown>[] = [{ type: "text", text }];
+    const visualRoute = await routePromise;
+    if (visualRoute) console.info("[visual-route]", JSON.stringify({ paneId, ...visualRoute }));
+    const apiKey = readStoredKey()?.key;
+    if (!productionBuild() && apiKey && fastVisualEligible({
+      text, route: visualRoute, attachments: attachments?.length ?? 0,
+      computer: !!computer, planMode, paneId,
+    }) && pane.threadId) {
+      const threadId = pane.threadId;
+      const turnId = `fast-visual-${randomUUID()}`;
+      const controller = new AbortController();
+      const directTurn = { paneId, turnId, controller, streamText: "", user: text, startedAt: Date.now() };
+      fastVisualTurns.set(threadId, directTurn);
+      pane.turnId = turnId;
+      send("chat:turn-started", { paneId, turnId });
+      send("chat:thread-activity", { threadId, running: true });
+      if (created) {
+        void engine.request("thread/name/set", { threadId, name: text.trim().slice(0, 48) }).catch(() => undefined);
+      }
+      let checkpointVisible = false;
+      let finalSettled = false;
+      let firstModelDelta = true;
+      const emit = (delta: string) => {
+        const visibleDelta = firstModelDelta ? `\`\`\`openui\n${delta}` : delta;
+        if (firstModelDelta) logVisualLifecycle("fast-visual-first-content", threadId, { turnId, elapsedMs: Date.now() - directTurn.startedAt });
+        firstModelDelta = false;
+        directTurn.streamText += delta;
+        if (!checkpointVisible && paneForThread(threadId) === paneId) send("chat:delta", { paneId, delta: visibleDelta });
+      };
+      void (async () => {
+        const startedAt = Date.now();
+        let status = "completed";
+        let error: string | null = null;
+        let answer = "";
+        const checkpointController = new AbortController();
+        logVisualLifecycle("fast-visual-main", threadId, { turnId, outcome: "started" });
+        logVisualLifecycle("fast-visual-checkpoint", threadId, { turnId, outcome: "started" });
+        directTurn.streamText = "```openui\n";
+        const finalVisual = streamFastVisual({
+          key: apiKey, text, history: Array.isArray(routeHistory) ? routeHistory : [],
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(210_000)]),
+          model: process.env.UNBIASED_FAST_VISUAL_MODEL,
+        }, emit);
+        let checkpointFirstContentMs: number | null = null;
+        const checkpoint = streamFastVisual({
+          key: apiKey, text, history: [], checkpoint: true,
+          signal: AbortSignal.any([controller.signal, checkpointController.signal, AbortSignal.timeout(90_000)]),
+          model: process.env.UNBIASED_FAST_VISUAL_MODEL,
+        }, () => {
+          if (checkpointFirstContentMs !== null) return;
+          checkpointFirstContentMs = Date.now() - startedAt;
+          logVisualLifecycle("fast-visual-checkpoint", threadId, { turnId, outcome: "first-content", elapsedMs: checkpointFirstContentMs });
+        }).then((result) => {
+          const outcome = finalSettled ? "superseded" : controller.signal.aborted ? "interrupted" :
+            fastVisualTurns.get(threadId) !== directTurn ? "stale-turn" :
+            !/\bPaletteScene\s*\(/.test(result.source) ? "no-scene" : "shown";
+          logVisualLifecycle("fast-visual-checkpoint", threadId, {
+            turnId, outcome, elapsedMs: Date.now() - startedAt,
+            firstContentMs: result.firstChunkMs, responseMs: result.totalMs, bytes: result.source.length,
+          });
+          if (outcome !== "shown") return;
+          checkpointVisible = true;
+          if (paneForThread(threadId) === paneId) {
+            send("chat:fast-visual-replace", { paneId, stage: "checkpoint", text: `\`\`\`openui\n${result.source}\n\`\`\`` });
+          }
+          console.info("[fast-visual-checkpoint]", JSON.stringify({ threadId, turnId, totalMs: result.totalMs, bytes: result.source.length }));
+        }).catch((cause) => {
+          logVisualLifecycle("fast-visual-checkpoint", threadId, {
+            turnId, outcome: checkpointController.signal.aborted ? "superseded" :
+              controller.signal.aborted ? "interrupted" :
+              cause instanceof Error && cause.name === "TimeoutError" ? "timeout" : "failed",
+            elapsedMs: Date.now() - startedAt,
+            firstContentMs: checkpointFirstContentMs,
+            error: cause instanceof Error ? cause.message : String(cause),
+          });
+          if (!checkpointController.signal.aborted && !controller.signal.aborted) {
+            console.warn("[fast-visual-checkpoint]", JSON.stringify({ threadId, turnId, error: cause instanceof Error ? cause.message : String(cause) }));
+          }
+        });
+        try {
+          const result = await finalVisual;
+          finalSettled = true;
+          directTurn.streamText += "\n```";
+          answer = directTurn.streamText;
+          if (paneForThread(threadId) === paneId) {
+            if (checkpointVisible) send("chat:fast-visual-replace", { paneId, stage: "final", text: answer });
+            else send("chat:delta", { paneId, delta: "\n```" });
+          }
+          try {
+            rememberFastVisual(threadId, { user: text, assistant: answer });
+          } catch (cause) {
+            console.warn("[fast-visual] context persistence failed:", cause instanceof Error ? cause.message : String(cause));
+          }
+          console.info("[fast-visual]", JSON.stringify({
+            threadId, turnId, status, firstChunkMs: result.firstChunkMs,
+            totalMs: result.totalMs, chunks: result.chunks, bytes: result.source.length,
+          }));
+          logVisualLifecycle("fast-visual-main", threadId, {
+            turnId, outcome: "completed", firstContentMs: result.firstChunkMs,
+            responseMs: result.totalMs, chunks: result.chunks, bytes: result.source.length,
+          });
+        } catch (cause) {
+          finalSettled = true;
+          status = controller.signal.aborted ? "interrupted" : "failed";
+          error = controller.signal.aborted ? null : cause instanceof Error ? cause.message : String(cause);
+          answer = status === "interrupted"
+            ? "Visual generation stopped."
+            : `The visual could not be rendered safely: ${error}`;
+          directTurn.streamText = answer;
+          if (paneForThread(threadId) === paneId) send("chat:fast-visual-replace", { paneId, stage: "final", text: answer });
+          console.warn("[fast-visual]", JSON.stringify({ threadId, turnId, status, totalMs: Date.now() - startedAt, error }));
+          logVisualLifecycle("fast-visual-main", threadId, { turnId, outcome: status, responseMs: Date.now() - startedAt, error });
+        } finally {
+          checkpointController.abort();
+          await checkpoint;
+          const durationMs = Date.now() - startedAt;
+          await persistFastVisualTranscript(threadId, text, answer, startedAt, durationMs);
+          fastVisualTurns.delete(threadId);
+          if (pane.threadId === threadId && pane.turnId === turnId) pane.turnId = null;
+          send("chat:thread-activity", { threadId, running: false });
+          if (paneForThread(threadId) === paneId) {
+            send("chat:turn-completed", { paneId, status: status === "failed" ? "completed" : status, error: null, directVisualDurationMs: durationMs });
+          }
+        }
+      })();
+      return { turnId, threadId, created, visualRoute };
+    }
+    const fastVisualContext = pane.threadId ? pendingFastVisualContext(pane.threadId) : "";
+    const input: Record<string, unknown>[] = [{ type: "text", text: text + (visualRoute ? visualRouteHint(visualRoute) ?? "" : "") + fastVisualContext }];
     const attachmentContext = fileAttachmentContext(attachments ?? []);
     if (attachmentContext) input.push({ type: "text", text: attachmentContext });
     for (const a of attachments ?? []) {
@@ -8264,7 +8959,22 @@ app.whenReady().then(async () => {
       sandboxPolicy: planMode ? { type: "readOnly" } : turnSandbox(turnCwd),
     })) as { turn?: { id?: string } };
     if (result.turn?.id) pane.turnId = result.turn.id;
-    return { turnId: pane.turnId, threadId: pane.threadId, created };
+    if (fastVisualContext && pane.threadId) clearPendingFastVisualContext(pane.threadId);
+    if (visualRoute?.status === "classified" && visualRoute.choice === "interactive" &&
+        visualRoute.detail === "explicit visual request" && pane.threadId && pane.turnId) {
+      visualInteractiveRequests.add(`${pane.threadId}:${pane.turnId}`);
+    }
+    if (visualRoute) {
+      try {
+        appendFileSync(join(app.getPath("userData"), "visual-route-dev.jsonl"), JSON.stringify({
+          at: new Date().toISOString(), kind: "decision", paneId,
+          threadId: pane.threadId, turnId: pane.turnId, ...visualRoute,
+        }) + "\n", { mode: 0o600 });
+      } catch {
+        // Diagnostics must never prevent a chat turn.
+      }
+    }
+    return { turnId: pane.turnId, threadId: pane.threadId, created, visualRoute };
   });
 
   // Client-side transcript cache: the engine's history omits things only
@@ -8278,6 +8988,33 @@ app.whenReady().then(async () => {
   };
   const transcriptFile = (threadId: string) =>
     join(transcriptsDir(), `${threadId.replace(/[^\w.-]/g, "_")}.json`);
+
+  async function persistFastVisualTranscript(threadId: string, user: string, assistant: string, at: number, durationMs: number): Promise<void> {
+    try {
+      const file = transcriptFile(threadId);
+      const saved = existsSync(file)
+        ? JSON.parse(readFileSync(file, "utf8")) as { cacheVersion?: number; entries?: unknown }
+        : null;
+      let entries: Record<string, unknown>[];
+      if (saved?.cacheVersion === TRANSCRIPT_CACHE_VERSION && Array.isArray(saved.entries)) {
+        entries = [...saved.entries] as Record<string, unknown>[];
+      } else {
+        const result = await engine.request("thread/read", { threadId, includeTurns: true }) as { thread: WireThread };
+        entries = threadToEntries(result.thread).entries as Record<string, unknown>[];
+      }
+      const last = entries.at(-1);
+      if (last?.kind === "assistant" && entries.at(-2)?.kind === "user" && entries.at(-2)?.text === user) {
+        entries[entries.length - 1] = { ...last, text: assistant, at: Date.now(), workedForSeconds: durationMs / 1000 };
+      } else if (last?.kind === "user" && last.text === user) {
+        entries.push({ kind: "assistant", text: assistant, at: Date.now(), workedForSeconds: durationMs / 1000 });
+      } else {
+        entries.push({ kind: "user", text: user, at }, { kind: "assistant", text: assistant, at: Date.now(), workedForSeconds: durationMs / 1000 });
+      }
+      writeFileSync(file, JSON.stringify({ cacheVersion: TRANSCRIPT_CACHE_VERSION, entries }), { mode: 0o600 });
+    } catch (cause) {
+      console.warn("[fast-visual] transcript persistence failed:", cause instanceof Error ? cause.message : String(cause));
+    }
+  }
 
   ipcMain.handle("transcript:save", (_e, p: { threadId: string; entries: unknown }) => {
     try {
@@ -8828,6 +9565,11 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("chat:interrupt", async (_e, paneId: PaneId) => {
     const pane = ensurePane(paneId);
+    const direct = pane.threadId ? fastVisualTurns.get(pane.threadId) : null;
+    if (direct && direct.paneId === paneId) {
+      direct.controller.abort();
+      return { interrupted: true };
+    }
     // The per-thread record covers a conversation reopened mid-turn,
     // where the pane's own turnId may not have been set by turn/started.
     const turnId = pane.turnId ?? (pane.threadId ? runningTurns.get(pane.threadId) : null);
@@ -10707,7 +11449,7 @@ app.whenReady().then(async () => {
       })),
       recents,
       // Threads with a live turn — seeds the sidebar activity indicators.
-      running: [...runningTurns.keys()],
+      running: [...new Set([...runningTurns.keys(), ...fastVisualTurns.keys()])],
     };
   });
 
@@ -10868,7 +11610,8 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("threads:open", async (_e, id: string) => {
-    const running = runningTurns.has(id);
+    const direct = fastVisualTurns.get(id);
+    const running = runningTurns.has(id) || !!direct;
     // A thread with a live turn is already loaded in the engine —
     // thread/read returns its history without disturbing the turn;
     // re-resuming it is what thread/resume is NOT for.
@@ -10887,7 +11630,7 @@ app.whenReady().then(async () => {
     // otherwise block its tool call — and therefore its turn — forever.
     settleLocalApprovals(panes.main.threadId);
     panes.main.threadId = id;
-    panes.main.turnId = runningTurns.get(id) ?? null;
+    panes.main.turnId = runningTurns.get(id) ?? direct?.turnId ?? null;
     // The side chat (if any) was forked from the previous conversation;
     // it resets alongside every main-context switch.
     resetSidePanes();
@@ -10914,7 +11657,14 @@ app.whenReady().then(async () => {
     return redactSecrets({
       id,
       ...(() => {
-        const replay = threadToEntries(result.thread, { runningLastTurn: running });
+        const replay = threadToEntries(result.thread, { runningLastTurn: running && !direct });
+        if (direct) {
+          return {
+            entries: [...replay.entries, { kind: "user", text: direct.user, at: direct.startedAt }],
+            runningTurnStart: replay.entries.length + 1,
+            runningTurnStartedAt: direct.startedAt,
+          };
+        }
         return {
           entries: replay.entries,
           runningTurnStart: replay.runningTurnStart,
@@ -10931,7 +11681,9 @@ app.whenReady().then(async () => {
       // names ("explore_main_process") instead of the engine's own ("Zeno").
       subAgentNames: Object.fromEntries(rolloutNicknames(id)),
       running,
-      streamText: bgStream.get(id) ?? "",
+      visualDraft: running && panes.main.turnId ? visualDrafts.get(id)?.turnId === panes.main.turnId
+        ? visualDrafts.get(id) : null : null,
+      streamText: direct?.streamText ?? bgStream.get(id) ?? "",
       approvals,
       userInputs,
       failure,
