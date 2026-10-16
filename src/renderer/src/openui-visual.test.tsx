@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import spec from "@unbiased/iui/spec";
 import { appOpenUILibrary, inspectOpenUI, inspectProgressiveOpenUI, ProgressiveVisualContext, VisualHostContext, visualFenceContent } from "./openui-visual";
+import { openUIThemeStyle } from "./openui-theme";
 import { VisualReadyContext } from "./visual-ready-context";
 import { validateOpenUIForAgent } from "../../shared/visual-validation";
 import { visualExportName } from "../../shared/visual-openui-policy";
@@ -22,6 +23,32 @@ test("registers every published component in the app's single renderer", () => {
   for (const name of Object.keys(spec.components)) assert.ok(appOpenUILibrary.components[name], name);
   for (const name of ["Whiteboard", "VisualHtml"]) assert.ok(appOpenUILibrary.components[name]);
   for (const name of ["FlowDiagram", "Mermaid"]) assert.equal(appOpenUILibrary.components[name], undefined);
+});
+
+test("standard OpenUI chrome uses the host theme tokens", () => {
+  const markup = renderToStaticMarkup(visualFenceContent("openui", 'root = Stack([TextContent("Theme")])', false)!);
+  for (const token of [
+    "--openui-background", "--openui-foreground", "--openui-popover-background", "--openui-sunk",
+    "--openui-elevated", "--openui-elevated-strong", "--openui-text-neutral-primary",
+    "--openui-text-neutral-secondary", "--openui-text-neutral-tertiary", "--openui-text-neutral-link",
+    "--openui-text-brand", "--openui-border-default", "--openui-border-interactive",
+    "--openui-border-interactive-emphasis", "--openui-interactive-accent-default", "--openui-font-body",
+  ]) assert.match(markup, new RegExp(`${token}:var\\(--`), token);
+  assert.match(markup, /--openui-interactive-accent-hover:color-mix\(in srgb, var\(--accent\)/);
+});
+
+test("OpenUI interaction and semantic states do not fall back to the OS palette", () => {
+  const tokens = openUIThemeStyle as Record<string, string>;
+  for (const key of [
+    "--openui-highlight", "--openui-text-accent-primary", "--openui-interactive-accent-disabled",
+    "--openui-border-accent", "--openui-success-background", "--openui-text-success-primary",
+    "--openui-danger-background", "--openui-text-danger-primary", "--openui-border-danger",
+    "--openui-info-background", "--openui-alert-background", "--openui-font-code",
+  ]) {
+    assert.ok(tokens[key], key);
+    assert.doesNotMatch(tokens[key], /oklch|\bInter\b/, key);
+  }
+  assert.equal(tokens["--openui-text-accent-primary"], "var(--accent-fg)");
 });
 
 test("validates complete programs and rejects unsupported or unsafe content", () => {

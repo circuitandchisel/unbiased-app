@@ -70,6 +70,43 @@ test("matches the generated surface without adding a second card", async () => {
   }
 });
 
+test("sends the inherited light and dark host themes to the visual frame", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
+  Object.assign(globalThis, {
+    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    MutationObserver: dom.window.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true,
+  });
+  Object.assign(dom.window, { unbiased: { registerVisual: async () => "unbiased-visual://view/test-id" } });
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  const setTheme = (bg: string, fg: string) => {
+    container.style.setProperty("--bg", bg);
+    container.style.setProperty("--fg-msg", fg);
+    container.style.setProperty("--dim", fg);
+    container.style.setProperty("--accent", "#ff563f");
+  };
+  try {
+    setTheme("#ffffff", "#111111");
+    await act(async () => root.render(<InteractiveHtmlVisual source="<main>Guide</main>" />));
+    const frame = container.querySelector("iframe")!;
+    const frameWindow = frame.contentWindow!;
+    const messages: Array<{ type?: string; colors?: Record<string, string>; scheme?: string }> = [];
+    frameWindow.postMessage = ((data: (typeof messages)[number]) => { messages.push(data); }) as typeof frameWindow.postMessage;
+    await act(async () => frame.dispatchEvent(new dom.window.Event("load")));
+    assert.deepEqual(messages.find((message) => message.type === "unbiased-visual-theme"), {
+      type: "unbiased-visual-theme",
+      colors: { bg: "#ffffff", fg: "#111111", muted: "#111111", accent: "#ff563f" },
+      scheme: "light",
+    });
+    await act(async () => { setTheme("#111111", "#eeeeee"); await Promise.resolve(); });
+    assert.equal(messages.filter((message) => message.type === "unbiased-visual-theme").at(-1)?.colors?.bg, "#111111");
+    assert.equal(messages.filter((message) => message.type === "unbiased-visual-theme").at(-1)?.scheme, "dark");
+  } finally {
+    await act(async () => root.unmount());
+    dom.window.close();
+  }
+});
+
 test("expanding the visual changes iframe scale without replacing the frame", async () => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://localhost" });
   Object.assign(globalThis, {

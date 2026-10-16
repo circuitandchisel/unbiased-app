@@ -23,6 +23,13 @@ function surfaceInk(color: string): string | null {
   return red * 0.2126 + green * 0.7152 + blue * 0.0722 > 0.179 ? "#000000" : "#ffffff";
 }
 
+function visualThemeSource(frame: HTMLElement): HTMLElement {
+  for (let element = frame.parentElement; element; element = element.parentElement) {
+    if (element.style.getPropertyValue("--bg")) return element;
+  }
+  return document.documentElement;
+}
+
 export function InteractiveHtmlVisual({ source }: { source: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -102,15 +109,20 @@ export function InteractiveHtmlVisual({ source }: { source: string }) {
   }, []);
 
   const sendTheme = () => {
-    const style = getComputedStyle(document.documentElement);
+    if (!frameRef.current) return;
+    const source = visualThemeSource(frameRef.current);
+    const style = window.getComputedStyle(source);
+    const color = (name: string) => style.getPropertyValue(name).trim() || source.style.getPropertyValue(name).trim();
+    const bg = color("--bg") || color("--panel");
     frameRef.current?.contentWindow?.postMessage({
       type: "unbiased-visual-theme",
       colors: {
-        bg: style.getPropertyValue("--bg").trim() || style.getPropertyValue("--panel").trim(),
-        fg: style.getPropertyValue("--fg-msg").trim(),
-        muted: style.getPropertyValue("--dim").trim(),
-        accent: style.getPropertyValue("--accent").trim(),
+        bg,
+        fg: color("--fg-msg"),
+        muted: color("--dim"),
+        accent: color("--accent"),
       },
+      scheme: surfaceInk(bg) === "#000000" ? "light" : "dark",
     }, "*");
   };
 
@@ -126,8 +138,9 @@ export function InteractiveHtmlVisual({ source }: { source: string }) {
 
   useEffect(() => {
     if (!url) return;
+    const themeSource = frameRef.current ? visualThemeSource(frameRef.current) : document.documentElement;
     const observer = new MutationObserver(sendTheme);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    observer.observe(themeSource, { attributes: true, attributeFilter: ["style"] });
     return () => observer.disconnect();
   }, [url]);
 

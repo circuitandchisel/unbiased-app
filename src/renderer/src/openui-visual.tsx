@@ -1,4 +1,4 @@
-import { Component, createContext, useContext, useEffect, useRef, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { Component, createContext, useContext, useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { createLibrary, createParser, defineComponent, Renderer, type ActionEvent } from "@openuidev/react-lang";
 import { iuiOpenUILibrary } from "@unbiased/iui/openui";
 import { choiceGroupIssue, choiceGroupSchema, choiceOptionSchema, gridSchema, guidedExplainerSchema, hotspotSchema, hotspotVisualIssue, hotspotVisualSchema, imageAssetSchema, milestoneSchema, paletteSceneSchema, sceneSchema, sequenceSlideSchema, sliderSchema, stateCaseSchema, stateSceneSchema, stateScopeSchema, timelineSchema } from "@unbiased/iui";
@@ -6,6 +6,7 @@ import { isInteractiveVisualSource, visualHtmlSchema } from "../../shared/intera
 import { InteractiveHtmlVisual } from "./interactive-html-visual";
 import { FocusedSequenceComponent } from "./focused-sequence";
 import { GeneratedVisualViewport } from "./generated-visual-viewport";
+import { openUIThemeStyle } from "./openui-theme";
 import { Whiteboard } from "./whiteboard";
 import { whiteboardSchema } from "./whiteboard-model";
 import { VisualReadyContext } from "./visual-ready-context";
@@ -224,14 +225,7 @@ function OpenUIVisualSurface({ source, selfFramed, streaming = false }: { source
       ref={surfaceRef}
       className={`iui-openui app-openui-visual${selfFramed ? " app-openui-visual--bare" : ""}`}
       aria-label="Interactive visual"
-      style={{
-        "--openui-background": "var(--panel)",
-        "--openui-foreground": "var(--panel-2)",
-        "--openui-text-neutral-primary": "var(--fg-msg)",
-        "--openui-text-neutral-secondary": "var(--dim)",
-        "--openui-border-default": "var(--border)",
-        "--openui-interactive-accent-default": "var(--accent)",
-      } as CSSProperties}
+      style={openUIThemeStyle}
     >
       <Renderer response={source} library={appOpenUILibrary} isStreaming={streaming} toolProvider={toolProvider}
         onAction={(event) => host?.onAction(event)} publishObservability={false} />
