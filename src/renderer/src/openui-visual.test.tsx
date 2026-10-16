@@ -6,10 +6,27 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import spec from "@unbiased/iui/spec";
 import { appOpenUILibrary, inspectOpenUI, visualFenceContent } from "./openui-visual";
+import { openUIThemeStyle } from "./openui-theme";
 
 test("registers every published component in the app's single renderer", () => {
   for (const name of Object.keys(spec.components)) assert.ok(appOpenUILibrary.components[name], name);
   for (const name of ["Whiteboard", "Mermaid", "VisualHtml"]) assert.ok(appOpenUILibrary.components[name]);
+});
+
+test("OpenUI interaction and semantic states use host theme tokens", () => {
+  const tokens = openUIThemeStyle as Record<string, string>;
+  for (const key of [
+    "--openui-background", "--openui-text-neutral-primary", "--openui-highlight",
+    "--openui-text-accent-primary", "--openui-interactive-accent-disabled",
+    "--openui-border-accent", "--openui-success-background", "--openui-danger-background",
+    "--openui-info-background", "--openui-alert-background", "--openui-font-code",
+  ]) {
+    assert.ok(tokens[key], key);
+    assert.doesNotMatch(tokens[key], /oklch|\bInter\b/, key);
+  }
+  assert.equal(tokens["--openui-text-accent-primary"], "var(--accent-fg)");
+  const markup = renderToStaticMarkup(visualFenceContent("openui", 'root = Stack([TextContent("Themed")])', false)!);
+  assert.match(markup, /--openui-interactive-accent-hover:color-mix\(in srgb, var\(--accent\)/);
 });
 
 test("validates complete programs and rejects unsupported or unsafe content", () => {
@@ -75,6 +92,11 @@ test("routes standalone HTML through OpenUI into a sandboxed frame", async () =>
   assert.match(pending, /Preparing visual/);
   assert.doesNotMatch(pending, /secret-source/);
   const root = createRoot(dom.window.document.getElementById("root")!);
+  const host = dom.window.document.getElementById("root")!;
+  for (const [name, value] of Object.entries({
+    "--bg": "#ffffff", "--panel": "#f5f5f5", "--fg-msg": "#222222",
+    "--dim": "#666666", "--accent": "#e0584a",
+  })) host.style.setProperty(name, value);
   try {
     await act(async () => root.render(visualFenceContent("visual-html", source, false)));
     const frame = dom.window.document.querySelector("iframe");
@@ -82,6 +104,24 @@ test("routes standalone HTML through OpenUI into a sandboxed frame", async () =>
     assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
     assert.equal(frame.getAttribute("src"), "unbiased-visual://view/test-id");
     assert.doesNotMatch(dom.window.document.body.innerHTML, /secret-source/);
+    const sent: unknown[] = [];
+    frame.contentWindow!.postMessage = (data: unknown) => { sent.push(data); };
+    await act(async () => frame.dispatchEvent(new dom.window.Event("load")));
+    assert.deepEqual(sent.at(-1), {
+      type: "unbiased-visual-theme",
+      colors: { bg: "#f5f5f5", fg: "#222222", muted: "#666666", accent: "#e0584a" },
+      scheme: "light",
+    });
+    await act(async () => {
+      host.style.setProperty("--bg", "#111111");
+      host.style.setProperty("--panel", "#1f1f1f");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.deepEqual(sent.at(-1), {
+      type: "unbiased-visual-theme",
+      colors: { bg: "#1f1f1f", fg: "#222222", muted: "#666666", accent: "#e0584a" },
+      scheme: "dark",
+    });
   } finally {
     await act(async () => root.unmount());
     dom.window.close();

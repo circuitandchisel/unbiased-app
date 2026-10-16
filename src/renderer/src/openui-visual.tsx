@@ -1,10 +1,11 @@
-import { Component, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import { Component, type ReactElement, type ReactNode } from "react";
 import { createLibrary, createParser, defineComponent, Renderer } from "@openuidev/react-lang";
 import { iuiOpenUILibrary } from "@unbiased/iui/openui";
 import { guidedExplainerSchema } from "@unbiased/iui";
 import { z } from "zod/v4";
 import { isInteractiveVisualSource, MAX_INTERACTIVE_VISUAL_LENGTH } from "../../shared/interactive-visual";
 import { InteractiveHtmlVisual } from "./interactive-html-visual";
+import { openUIThemeStyle } from "./openui-theme";
 import { MermaidDiagram } from "./mermaid-diagram";
 import { mermaidDiagramSchema, MAX_MERMAID_LENGTH } from "./mermaid-model";
 import { Whiteboard } from "./whiteboard";
@@ -116,14 +117,7 @@ function OpenUIVisualSurface({ source, selfFramed }: { source: string; selfFrame
       <div
         className={`iui-openui app-openui-visual${selfFramed ? " app-openui-visual--bare" : ""}`}
         aria-label="Interactive visual"
-        style={{
-          "--openui-background": "var(--panel)",
-          "--openui-foreground": "var(--panel-2)",
-          "--openui-text-neutral-primary": "var(--fg-msg)",
-          "--openui-text-neutral-secondary": "var(--dim)",
-          "--openui-border-default": "var(--border)",
-          "--openui-interactive-accent-default": "var(--accent)",
-        } as CSSProperties}
+        style={openUIThemeStyle}
       >
         <Renderer response={source} library={appOpenUILibrary} isStreaming={false} toolProvider={null} publishObservability={false} />
       </div>

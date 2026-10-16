@@ -5,6 +5,23 @@ const INITIAL_HEIGHT = 440;
 const MIN_HEIGHT = 120;
 const MAX_HEIGHT = 1600;
 
+function visualThemeSource(frame: HTMLElement): HTMLElement {
+  for (let element = frame.parentElement; element; element = element.parentElement) {
+    if (element.style.getPropertyValue("--bg")) return element;
+  }
+  return document.documentElement;
+}
+
+function colorScheme(background: string): "light" | "dark" {
+  const channels = /^#([0-9a-f]{6})$/i.exec(background)?.[1];
+  if (!channels) return "dark";
+  const values = [0, 2, 4].map((offset) => {
+    const value = parseInt(channels.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722 > 0.179 ? "light" : "dark";
+}
+
 export function InteractiveHtmlVisual({ source }: { source: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -59,22 +76,28 @@ export function InteractiveHtmlVisual({ source }: { source: string }) {
   }, []);
 
   const sendTheme = () => {
-    const style = getComputedStyle(document.documentElement);
+    if (!frameRef.current) return;
+    const source = visualThemeSource(frameRef.current);
+    const style = window.getComputedStyle(source);
+    const color = (name: string) => style.getPropertyValue(name).trim() || source.style.getPropertyValue(name).trim();
+    const bg = color("--panel") || color("--bg");
     frameRef.current?.contentWindow?.postMessage({
       type: "unbiased-visual-theme",
       colors: {
-        bg: style.getPropertyValue("--panel").trim(),
-        fg: style.getPropertyValue("--fg-msg").trim(),
-        muted: style.getPropertyValue("--dim").trim(),
-        accent: style.getPropertyValue("--accent").trim(),
+        bg,
+        fg: color("--fg-msg"),
+        muted: color("--dim"),
+        accent: color("--accent"),
       },
+      scheme: colorScheme(bg),
     }, "*");
   };
 
   useEffect(() => {
     if (!url) return;
+    const source = frameRef.current ? visualThemeSource(frameRef.current) : document.documentElement;
     const observer = new MutationObserver(sendTheme);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    observer.observe(source, { attributes: true, attributeFilter: ["style"] });
     return () => observer.disconnect();
   }, [url]);
 

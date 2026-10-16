@@ -5,6 +5,7 @@ const componentGuide = Object.values(spec.components).map(
 );
 
 export const OPENUI_VISUAL_INSTRUCTIONS = [
+  "Match the Unbiased host theme for interface chrome. Standard OpenUI components inherit the app's surface, text, border, accent, and font tokens. In VisualHtml, use var(--visual-bg), var(--visual-fg), var(--visual-muted), and var(--visual-accent) for the fragment root, prose, and controls; the host updates them when its theme changes. Keep distinct subject-matter colors where they teach something, but give every custom surface and selected state readable foreground/background contrast in both light and dark themes. Do not assume a white canvas or force an unrelated global palette.",
   "For a visual answer, include one complete fenced openui block in the final reply. It renders in chat after generation; the user sees the visual, not its source.",
   "The block is OpenUI Lang, not JSON or JSX. Use positional component calls and assign exactly one root Stack. Example: root = Stack([TextContent(\"A graph connects people\"), Mermaid(\"flowchart LR\\nA-->B\")]).",
   "Use only the component signatures below. Supply required arguments in order and omit optional trailing arguments when unnecessary. No Query, Mutation, external media, URLs, app APIs, or action calls.",

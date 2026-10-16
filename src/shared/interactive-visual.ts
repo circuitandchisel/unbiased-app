@@ -56,6 +56,8 @@ export function interactiveVisualDocument(source: string): string {
       if (['bg', 'fg', 'muted', 'accent'].includes(key) && /^#[0-9a-f]{6}$/i.test(value))
         document.documentElement.style.setProperty('--visual-' + key, value);
     }
+    if (event.data.scheme === 'light' || event.data.scheme === 'dark')
+      document.documentElement.style.colorScheme = event.data.scheme;
   });
   addEventListener('DOMContentLoaded', () => {
     const report = () => parent.postMessage({ type: 'unbiased-visual-height', height: Math.ceil(document.documentElement.scrollHeight) }, '*');
