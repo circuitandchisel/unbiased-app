@@ -1,4 +1,6 @@
 import { AgentMirrorPane } from "./AgentMirrorPane";
+import { useSlashCommands } from "./slash-command-menu";
+import { commandToken, type SlashCommand } from "../../shared/slash-commands";
 import { PersonalizationSettings, type AgentInstructionsAPI } from "./PersonalizationSettings";
 import type { AgentInstructions, AgentInstructionsSaveResult, SaveAgentInstructions } from "../../shared/agent-instructions";
 import type { SkillOwnership } from "../../main/skill-ownership";
@@ -176,6 +178,8 @@ type QueuedMsg = {
   wire: string; // what actually goes to the engine
   computer?: boolean; // explicitly prefer desktop tools for this turn
   visualize?: boolean; // explicitly request a visual for this turn
+  skillPath?: string;
+  commandText?: string;
   attachments: Attachment[];
   annotations?: SentAnnotation[];
 };
@@ -631,8 +635,9 @@ declare global {
         paneId: PaneId,
         text: string,
         attachments?: Attachment[],
-        options?: { computer?: boolean; visualize?: boolean },
+        options?: { computer?: boolean; visualize?: boolean; skillPath?: string; commandText?: string },
       ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
+      slashCommands: (paneId: PaneId) => Promise<{ commands: SlashCommand[]; error: string | null }>;
       chooseAttachments: () => Promise<{ attachments: Attachment[]; errors?: string[] }>;
       attachPaths: (paths: string[]) => Promise<{ attachments: Attachment[]; errors?: string[] }>;
       clipboardImage: () => Promise<{ attachment: Attachment | null; error?: string }>;
@@ -9679,6 +9684,7 @@ function ChatPane({
     drafts.setText(text);
     setDraft(text);
   };
+  const slash = useSlashCommands({ paneId, contextKey: `${threadId ?? "new"}:${reset.nonce}`, connected, draft, changeDraft, togglePlan: onTogglePlanMode, focus: () => requestAnimationFrame(() => composerRef.current?.focus("end")) });
   const canTypeToFocusRef = useRef(canTypeToFocus);
   canTypeToFocusRef.current = canTypeToFocus;
   useEffect(() => {
@@ -10821,7 +10827,7 @@ function ChatPane({
       return next;
     });
     try {
-      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize });
+      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, skillPath: q.skillPath, commandText: q.commandText });
       threadIdRef.current = res.threadId;
       onThreadCreated?.(res.threadId, res.created, q.text);
     } catch (err) {
@@ -10832,6 +10838,7 @@ function ChatPane({
 
   async function submit() {
     const text = draft.trim();
+    if (/^\/plan$/i.test(text) && !slash.skillPath) { onTogglePlanMode(); changeDraft(""); return; }
     // Annotations alone are a sendable message — the excerpts plus their
     // comments carry the intent even without accompanying prose.
     if ((!text && stagedAnnotations.length === 0 && attachments.length === 0) || !connected) return;
@@ -10862,6 +10869,8 @@ function ChatPane({
       wire,
       computer: computerSelected,
       visualize: visualizeSelected,
+      skillPath: slash.skillPath,
+      commandText: commandToken(text) ? text : undefined,
       attachments: sentAttachments,
       annotations:
         anns.length > 0
@@ -11950,59 +11959,7 @@ function ChatPane({
               />
             </div>
           )}
-          {(() => {
-            const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : null;
-            const showPlan = q !== null && "plan".startsWith(q);
-            if (!showPlan) return null;
-            return (
-              <div
-                style={{
-                  position: "absolute",
-                  bottom: "calc(100% + 8px)",
-                  left: 0,
-                  right: 0,
-                  background: colors.panel,
-                  border: `1px solid ${colors.border}`,
-                  borderRadius: 14,
-                  padding: 6,
-                  zIndex: 20,
-                  boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
-                }}
-              >
-                <button
-                  onClick={() => {
-                    onTogglePlanMode();
-                    changeDraft("");
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    width: "100%",
-                    background: "var(--chip)",
-                    border: "none",
-                    borderRadius: 10,
-                    padding: "10px 12px",
-                    fontSize: 13.5,
-                    color: colors.fg,
-                    cursor: "pointer",
-                    textAlign: "left",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  <span style={{ color: colors.dim, display: "flex" }}>
-                    <LightbulbIcon />
-                  </span>
-                  <span style={{ fontWeight: 500 }}>Plan</span>
-                  <span style={{ color: colors.dim }}>mode</span>
-                  <span style={{ flex: 1 }} />
-                  <span style={{ color: colors.dim, fontSize: 12.5 }}>
-                    {planMode ? "Turn plan mode off" : "Turn plan mode on"}
-                  </span>
-                </button>
-              </div>
-            );
-          })()}
+          {slash.menu}
           {modeOpen && (
             <div
               ref={modeMenuRef}
@@ -12203,17 +12160,11 @@ function ChatPane({
             value={draft}
             onChange={changeDraft}
             onKeyDown={(e) => {
+              if (slash.keyDown(e)) return;
               // Enter sends immediately when idle and queues while a turn runs.
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 e.stopPropagation();
-                // A matching slash command takes Enter before sending.
-                const q = draft.startsWith("/") ? draft.slice(1).toLowerCase() : null;
-                if (q !== null && "plan".startsWith(q)) {
-                  onTogglePlanMode();
-                  changeDraft("");
-                  return;
-                }
                 void submit();
               } else if (e.key === "Escape" && busy) {
                 e.preventDefault();
@@ -12238,6 +12189,7 @@ function ChatPane({
             placeholder={!connected ? "Engine starting…" : entries.length > 0 ? chatPlaceholder : "Do anything"}
             title={busy || compacting ? "Enter queues a message while Pareto is working" : "Enter sends a message"}
             disabled={!connected}
+            suggestions={slash.suggestions}
             ref={composerRef}
           />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 6 }}>

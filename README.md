@@ -93,6 +93,20 @@ For what sits *below* this diagram — what the engine wrapper does, what the
 codex app-server owns, how a turn reaches the model, and where conversations
 live on disk — see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
+## Skill commands
+
+Type `/` in a chat composer to see matching enabled skills and built-in commands.
+Use Up/Down to choose, Enter or Tab to select, and Escape to dismiss. Selecting a
+skill inserts its command; add details and send when ready. `/CodeReview` uses
+the bundled Code Review skill, for example `/CodeReview origin/main` followed by
+a PR link or spec path. `/Plan` toggles plan mode. Commands are case-insensitive.
+
+Code Review reports **Standards** and **Spec** separately. It asks for a missing
+comparison base or spec, and reviews without editing files or posting GitHub
+comments. Its upstream source and license are recorded alongside the bundled
+skill. The picker uses each chat's skill scope; disabled or unavailable skills
+cannot be explicitly invoked through their commands.
+
 ## Custom agent instructions
 
 Settings → Personalization → Custom agent instructions edits

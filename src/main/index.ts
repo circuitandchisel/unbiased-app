@@ -1,4 +1,5 @@
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
+import { listSlashCommands, resolveSlashSkill } from "./skill-commands";
 import { agentInstructionsGuidance, connectAgentInstructions, registerAgentInstructionsIpc } from "./agent-instructions";
 import { SkillOwnershipStore, installOwnedSkill } from "./skill-ownership";
 import { ScopedIdentity } from "./scoped-identity";
@@ -7692,12 +7693,20 @@ app.whenReady().then(async () => {
     return { ok: true, envKeyRemains: envKey };
   });
 
+  ipcMain.handle("chat:commands", async (_e, paneId: PaneId) => {
+    const threadId = panes[paneId]?.threadId;
+    const cwd = (threadId ? threadCwds.get(threadId) : null) ?? (paneId === "main" ? pendingCwd ?? defaultChatDir() : mainCwd ?? pendingCwd ?? defaultChatDir());
+    try { return { commands: await listSlashCommands((method, params) => engine.request(method, params), cwd, bundledSkillsDir()), error: null }; }
+    catch (error) { return { commands: [], error: error instanceof Error ? error.message : String(error) }; }
+  });
   ipcMain.handle("chat:send", async (_e, payload: {
     paneId: PaneId;
     text: string;
     attachments?: { name: string; path: string; kind?: "image" }[];
     computer?: boolean;
     visualize?: boolean;
+    skillPath?: string;
+    commandText?: string;
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
     for (const attachment of attachments ?? []) {
@@ -7854,9 +7863,13 @@ app.whenReady().then(async () => {
     // paths in mentions do not reach the model. Supply readable files (or an
     // explicit path to inspect) as text; images remain actual image input.
     const turnCwd = (pane.threadId ? threadCwds.get(pane.threadId) : null) ?? mainCwd;
+    if (payload.commandText !== undefined && typeof payload.commandText !== "string") throw new Error("Invalid skill command.");
+    if (payload.skillPath !== undefined && typeof payload.skillPath !== "string") throw new Error("Invalid skill selection.");
+    const selectedSkill = await resolveSlashSkill((method, params) => engine.request(method, params), turnCwd, bundledSkillsDir(), payload.commandText ?? text, payload.skillPath);
     const projectContext = configuredProjectContext(turnCwd, pane.threadId);
     const needsProjectContext = !!projectContext && !!pane.threadId && projectContextSeen.get(pane.threadId) !== projectContext;
     const input: Record<string, unknown>[] = [{ type: "text", text }];
+    if (selectedSkill) input.push(selectedSkill);
     if (needsProjectContext) input.unshift({ type: "text", text: `App project context:\n${projectContext}` });
     const attachmentContext = fileAttachmentContext(attachments ?? []);
     if (attachmentContext) input.push({ type: "text", text: attachmentContext });

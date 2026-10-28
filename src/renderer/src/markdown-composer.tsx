@@ -7,7 +7,7 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 
 export type MarkdownComposerHandle = {
-  focus: () => void;
+  focus: (position?: "end") => void;
   appendText: (text: string) => void;
   replaceSelection: (text: string) => void;
 };
@@ -26,7 +26,8 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
   placeholder: string;
   title: string;
   disabled: boolean;
-}>(function MarkdownComposer({ paneId, value, onChange, onKeyDown, onPaste, placeholder, title, disabled }, ref) {
+  suggestions?: { id: string; activeId?: string };
+}>(function MarkdownComposer({ paneId, value, onChange, onKeyDown, onPaste, placeholder, title, disabled, suggestions }, ref) {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const readyRef = useRef(false);
@@ -66,9 +67,16 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
     readyRef.current = true;
   }, [editor, value]);
   useEffect(() => { editor?.setEditable(!disabled); }, [editor, disabled]);
+  useEffect(() => {
+    if (!editor) return;
+    editor.setOptions({ editorProps: { attributes: {
+      "data-pane-id": paneId, "aria-label": "Message", role: "textbox", "aria-multiline": "true",
+      ...(suggestions ? { "aria-controls": suggestions.id, "aria-activedescendant": suggestions.activeId ?? "", "aria-autocomplete": "list", "aria-expanded": "true" } : {}),
+    } } });
+  }, [editor, paneId, suggestions?.id, suggestions?.activeId]);
 
   useImperativeHandle(ref, () => ({
-    focus: () => { editor?.commands.focus(); },
+    focus: (position) => { editor?.commands.focus(position); },
     appendText: (text) => { editor?.chain().focus("end").insertContent({ type: "text", text }).run(); },
     replaceSelection: (text) => { editor?.chain().focus().insertContent({ type: "text", text }).run(); },
   }), [editor]);
