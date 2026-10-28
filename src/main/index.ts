@@ -1,4 +1,5 @@
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
+import { agentInstructionsGuidance, connectAgentInstructions, registerAgentInstructionsIpc } from "./agent-instructions";
 import { SkillOwnershipStore, installOwnedSkill } from "./skill-ownership";
 import { ScopedIdentity } from "./scoped-identity";
 import { ConversationLineage } from "./conversation-lineage";
@@ -603,7 +604,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
  *  index a running conversation sees is a snapshot, same as Claude Code's
  *  per-session index, refreshed on the next thread/start or resume. */
 function baseDeveloperInstructions(): string {
-  return `${APP_DEVELOPER_INSTRUCTIONS}\n\n${agentStyleInstructions(agentStylePrefs())}`;
+  return `${APP_DEVELOPER_INSTRUCTIONS}\n\n${agentStyleInstructions(agentStylePrefs())}\n\n${agentInstructionsGuidance(homedir())}`;
 }
 
 function developerInstructionsFor(cwd: string | null, threadId: string | null = null, projectId?: string | null): string {
@@ -7299,6 +7300,12 @@ async function startEngine(): Promise<void> {
   });
 
   const result = await engine.handshake(app.getVersion());
+  try {
+    connectAgentInstructions(homedir(), result.codexHome);
+  } catch (error) {
+    engine.stop();
+    throw error;
+  }
   // extraRoots is session state, so it has to be re-sent after every engine
   // start. It cannot live in the Go supervisor: that process execs itself away
   // before any JSON-RPC happens.
@@ -7542,6 +7549,7 @@ app.whenReady().then(async () => {
   }));
   ipcMain.handle("agent-style:get", () => agentStylePrefs());
   ipcMain.handle("agent-style:set", (_e, value: unknown) => saveAgentStylePrefs(value));
+  registerAgentInstructionsIpc(ipcMain, homedir());
   ipcMain.handle("update:set-prefs", (_e, p: { autoDownload: boolean }) => {
     setUpdatePrefs({ autoDownload: !!p.autoDownload });
     // Turning it on mid-session should act now, not in six hours.

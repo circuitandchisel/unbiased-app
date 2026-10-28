@@ -55,6 +55,11 @@ jobs:
           node node_modules/electron/install.js
           npm run smoke:transcript-actions
 
+      - name: Smoke test custom agent instructions settings
+        run: |
+          npx electron-vite build
+          npm run smoke:personalization
+
   browser-bundle:
     name: Browser bundle
     runs-on: macos-15

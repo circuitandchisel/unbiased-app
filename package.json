@@ -18,7 +18,9 @@
     "test": "node --import tsx --test src/main/*.test.ts src/renderer/src/*.test.ts",
     "smoke:browser-runtime": "node build/smoke-browser-runtime.cjs",
     "smoke:browser-mirror": "electron build/smoke-browser-mirror.cjs",
-    "smoke:transcript-actions": "electron build/smoke-transcript-actions.cjs"
+    "smoke:transcript-actions": "electron build/smoke-transcript-actions.cjs",
+    "smoke:personalization": "electron build/smoke-personalization.cjs",
+    "smoke:agent-instructions": "node build/smoke-agent-instructions.cjs"
   },
   "build": {
     "appId": "ai.unbiased.desktop",
