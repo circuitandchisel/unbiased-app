@@ -146,7 +146,7 @@
     "react-virtuoso": "^4.18.19",
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
-    "zod": "^3.25.76"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@types/jsdom": "^27.0.0",
