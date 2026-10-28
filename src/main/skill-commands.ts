@@ -2,7 +2,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { commandKey, commandToken, PLAN_COMMAND, type SlashCommand } from "../shared/slash-commands";
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-type AvailableCommand = SlashCommand & { enabled: boolean; skill: { name: string; path: string } };
+type AvailableCommand = SlashCommand & { enabled: boolean; projectLocal: boolean; skill: { name: string; path: string } };
 type SkillInput = { type: "skill"; name: string; path: string };
 
 async function skillCommands(request: Request, cwd: string | null, bundledRoot: string): Promise<AvailableCommand[]> {
@@ -21,7 +21,7 @@ async function skillCommands(request: Request, cwd: string | null, bundledRoot: 
     const rel = relative(bundledRoot, skill.path);
     const bundled = rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel);
     const description = [skill.shortDescription, ui.shortDescription, skill.description].find(value => typeof value === "string" && value.trim()) as string | undefined;
-    commands.set(skill.path, { id: `skill:${skill.path}`, command, label, description: description ?? "Use this skill", source: bundled ? "Unbiased" : skill.scope === "repo" ? "This project" : "Shared", enabled: skill.enabled, skill: { name: skill.name, path: skill.path } });
+    commands.set(skill.path, { id: `skill:${skill.path}`, command, label, description: description ?? "Use this skill", source: bundled ? "Unbiased" : skill.scope === "repo" ? "This project" : "Shared", enabled: skill.enabled, projectLocal: skill.scope === "repo", skill: { name: skill.name, path: skill.path } });
   }
   return [...commands.values()].sort((a, b) => a.label.localeCompare(b.label) || a.skill.path.localeCompare(b.skill.path));
 }
@@ -45,7 +45,7 @@ export async function resolveSlashSkill(request: Request, cwd: string | null, bu
   // and still require the destination skill to be live and enabled.
   const rel = selectedPath && worktreeSource ? relative(worktreeSource, selectedPath) : null;
   const relocated = cwd && rel && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel) ? resolve(cwd, rel) : null;
-  const selected = selectedPath ? enabled.find(command => command.skill.path === selectedPath || (command.source === "This project" && command.skill.path === relocated)) : enabled.length === 1 ? enabled[0] : undefined;
+  const selected = selectedPath ? enabled.find(command => command.skill.path === selectedPath || (command.projectLocal && command.skill.path === relocated)) : enabled.length === 1 ? enabled[0] : undefined;
   if (selected) return { type: "skill", ...selected.skill };
   if (enabled.length > 1) throw new Error("More than one skill has this command. Choose its source in the command menu.");
   if (selectedPath || matches.length || commandKey(token.name) === "codereview") throw new Error("This skill is disabled or unavailable in this chat. Choose an available command.");
