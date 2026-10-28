@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { commandKey, commandToken, PLAN_COMMAND, type SlashCommand } from "../shared/slash-commands";
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -31,7 +31,7 @@ export async function listSlashCommands(request: Request, cwd: string | null, bu
 }
 
 /** Resolve against the current pane's live skill list, never an arbitrary renderer path. */
-export async function resolveSlashSkill(request: Request, cwd: string | null, bundledRoot: string, text: string, selectedPath?: string): Promise<SkillInput | null> {
+export async function resolveSlashSkill(request: Request, cwd: string | null, bundledRoot: string, text: string, selectedPath?: string, worktreeSource?: string): Promise<SkillInput | null> {
   const token = commandToken(text);
   if (!token) {
     if (selectedPath) throw new Error("The selected skill no longer matches this message.");
@@ -40,7 +40,12 @@ export async function resolveSlashSkill(request: Request, cwd: string | null, bu
   const commands = await skillCommands(request, cwd, bundledRoot);
   const matches = commands.filter(command => commandKey(command.command) === commandKey(token.name));
   const enabled = matches.filter(command => command.enabled);
-  const selected = selectedPath ? enabled.find(command => command.skill.path === selectedPath) : enabled.length === 1 ? enabled[0] : undefined;
+  // The first send can create/switch checkouts after the picker opens. Only
+  // relocate project-local choices within a host-verified worktree relationship,
+  // and still require the destination skill to be live and enabled.
+  const rel = selectedPath && worktreeSource ? relative(worktreeSource, selectedPath) : null;
+  const relocated = cwd && rel && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel) ? resolve(cwd, rel) : null;
+  const selected = selectedPath ? enabled.find(command => command.skill.path === selectedPath || (command.source === "This project" && command.skill.path === relocated)) : enabled.length === 1 ? enabled[0] : undefined;
   if (selected) return { type: "skill", ...selected.skill };
   if (enabled.length > 1) throw new Error("More than one skill has this command. Choose its source in the command menu.");
   if (selectedPath || matches.length || commandKey(token.name) === "codereview") throw new Error("This skill is disabled or unavailable in this chat. Choose an available command.");

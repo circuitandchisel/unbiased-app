@@ -46,3 +46,16 @@ test("a skill called plan cannot take over the built-in Plan command", async () 
   assert.equal(await resolveSlashSkill(get, null, "/app/skills", "/Plan"), null);
   assert.equal((await resolveSlashSkill(get, null, "/app/skills", "/SkillPlan"))?.path, planSkill.path);
 });
+
+for (const checkout of ["new-worktree", "existing-worktree"]) test(`first send preserves a project skill selection in a ${checkout}`, async () => {
+  const cwd = `/worktrees/${checkout}`;
+  const destination = { ...project, path: `${cwd}/.codex/skills/project-check/SKILL.md` };
+  const get = async () => ({ data: [{ skills: [destination] }] });
+  const selection = (await listSlashCommands(request, "/project", "/app/skills")).find(command => command.command === "ProjectCheck")!.skill!.path;
+  assert.deepEqual(await resolveSlashSkill(get, cwd, "/app/skills", "/ProjectCheck", selection, "/project"), { type: "skill", name: project.name, path: destination.path });
+  await assert.rejects(resolveSlashSkill(get, cwd, "/app/skills", "/ProjectCheck", selection), /unavailable/);
+  await assert.rejects(resolveSlashSkill(get, cwd, "/app/skills", "/ProjectCheck", "/other/.codex/skills/project-check/SKILL.md", "/project"), /unavailable/);
+  for (const skills of [[], [{ ...destination, enabled: false }], [{ ...destination, scope: "user" }]]) {
+    await assert.rejects(resolveSlashSkill(async () => ({ data: [{ skills }] }), cwd, "/app/skills", "/ProjectCheck", selection, "/project"), /unavailable/);
+  }
+});

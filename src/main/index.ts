@@ -7721,6 +7721,7 @@ app.whenReady().then(async () => {
     if (authScope?.owner && authScope.keyFingerprint === keyFingerprint(readStoredKey()?.key ?? "")) await verifiedOwner();
 
     const pane = ensurePane(paneId);
+    const commandSourceCwd = !pane.threadId && paneId === "main" ? pendingCwd : null;
     let created = false;
     if (!pane.threadId) {
       let started: { thread: { id: string } };
@@ -7865,7 +7866,8 @@ app.whenReady().then(async () => {
     const turnCwd = (pane.threadId ? threadCwds.get(pane.threadId) : null) ?? mainCwd;
     if (payload.commandText !== undefined && typeof payload.commandText !== "string") throw new Error("Invalid skill command.");
     if (payload.skillPath !== undefined && typeof payload.skillPath !== "string") throw new Error("Invalid skill selection.");
-    const selectedSkill = await resolveSlashSkill((method, params) => engine.request(method, params), turnCwd, bundledSkillsDir(), payload.commandText ?? text, payload.skillPath);
+    const worktreeSource = created && turnCwd && commandSourceCwd && loadWorktrees()[turnCwd]?.project === commandSourceCwd ? commandSourceCwd : undefined;
+    const selectedSkill = await resolveSlashSkill((method, params) => engine.request(method, params), turnCwd, bundledSkillsDir(), payload.commandText ?? text, payload.skillPath, worktreeSource);
     const projectContext = configuredProjectContext(turnCwd, pane.threadId);
     const needsProjectContext = !!projectContext && !!pane.threadId && projectContextSeen.get(pane.threadId) !== projectContext;
     const input: Record<string, unknown>[] = [{ type: "text", text }];
