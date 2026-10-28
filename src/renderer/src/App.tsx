@@ -17310,7 +17310,7 @@ function SettingsView({
       items: [
         { id: "appearance", label: "Appearance", icon: <ContrastIcon /> },
         { id: "agent", label: "Agent", icon: <Bot size={15} /> },
-        { id: "personalization", label: "Personalization", icon: <Sparkles size={15} /> },
+        { id: "personalization", label: "Personalization", icon: <PersonalizationIcon /> },
         { id: "pals", label: "Pals", icon: <Heart size={15} /> },
         { id: "account", label: "Account", icon: <PersonIcon /> },
       ],
@@ -18809,6 +18809,7 @@ function SidebarSectionPreview({
             <SidebarPreviewLabel>Personal</SidebarPreviewLabel>
             <SidebarPreviewRow icon={<ContrastIcon />} title="Appearance" onClick={() => onOpenSettings("appearance")} />
             <SidebarPreviewRow icon={<Bot size={15} />} title="Agent" onClick={() => onOpenSettings("agent")} />
+            <SidebarPreviewRow icon={<PersonalizationIcon />} title="Personalization" onClick={() => onOpenSettings("personalization")} />
             <SidebarPreviewRow icon={<Heart size={15} />} title="Pals" onClick={() => onOpenSettings("pals")} />
             <SidebarPreviewRow icon={<PersonIcon />} title="Account" onClick={() => onOpenSettings("account")} />
             <SidebarPreviewLabel>Application</SidebarPreviewLabel>
@@ -19042,6 +19043,17 @@ function SectionLabel({
       {children}
       <Chevron open={!collapsed} size={14} />
     </button>
+  );
+}
+
+function PersonalizationIcon({ size = 15 }: { size?: number } = {}) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M11 28V6a4 4 0 0 1 4-4h21a4 4 0 0 1 4 4v12" />
+      <path d="M19 12h12M19 20h12" />
+      <path d="M26 29H6a4 4 0 0 0-4 4v2a6 6 0 0 0 6 6h12" />
+      <path d="M39.5 27a4.24 4.24 0 0 1 6 6L33 45l-6 1 .5-6Z" strokeWidth="3.5" />
+    </svg>
   );
 }
 

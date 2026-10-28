@@ -115,6 +115,14 @@ the agent to update instructions for all Unbiased chats. Project `AGENTS.md`
 files still apply. Global changes are reloaded on the next turn in existing
 and new chats; a turn already running keeps its current instructions.
 
+Personalization also shows read-only **Default instructions** for completing
+authorized tasks, respecting consent, handling untrusted content, preserving work,
+protecting private information, verifying results, recovering from failures, and
+communicating clearly. The app and model prompt use the same built-in definition.
+Saving or clearing custom instructions does not change the defaults. These are
+agent guidance; the app's tool approval and sandbox mechanisms still enforce
+runtime permissions.
+
 The desktop connects the engine's private `AGENTS.md` to this file on startup,
 using the engine's existing per-turn instruction refresh. Existing private-home
 instructions migrate when there is no canonical file. Conflicting private files

@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { locked, noSymlinks } from "./atomic-store";
 import type { IpcMain } from "electron";
 import { AGENT_INSTRUCTIONS_MAX_BYTES, type AgentInstructions, type AgentInstructionsSaveResult } from "../shared/agent-instructions";
+import { defaultAgentInstructions } from "../shared/default-agent-instructions";
 
 export function agentInstructionsPath(home: string): string {
   return join(home, ".unbiased", "AGENTS.md");
@@ -100,4 +101,8 @@ export function agentInstructionsGuidance(home: string): string {
     "These global instructions reload at the next turn in existing and new chats. Project AGENTS.md instructions also apply. " +
     "Honor instructions requiring explicit user consent, such as before merging a PR; tool access alone is not that consent. " +
     "Saving a project memory note alone does not update global instructions.";
+}
+
+export function builtInAgentInstructions(home: string): string {
+  return `${defaultAgentInstructions()}\n\n${agentInstructionsGuidance(home)}`;
 }

@@ -7,7 +7,8 @@ const fs = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 require("tsx/cjs");
-const { agentInstructionsGuidance, connectAgentInstructions, readAgentInstructions, saveAgentInstructions } = require("../src/main/agent-instructions.ts");
+const { builtInAgentInstructions, connectAgentInstructions, readAgentInstructions, saveAgentInstructions } = require("../src/main/agent-instructions.ts");
+const { DEFAULT_AGENT_INSTRUCTIONS } = require("../src/shared/default-agent-instructions.ts");
 const { listSlashCommands, resolveSlashSkill } = require("../src/main/skill-commands.ts");
 
 async function main() {
@@ -70,7 +71,7 @@ async function main() {
     await new Promise(done => { current.once("exit", done); current.kill(); });
   }
   async function thread(cwd) {
-    return (await request("thread/start", { cwd, approvalPolicy: "never", sandbox: "danger-full-access", developerInstructions: agentInstructionsGuidance(home), config: { "features.code_mode": false } })).thread.id;
+    return (await request("thread/start", { cwd, approvalPolicy: "never", sandbox: "danger-full-access", developerInstructions: builtInAgentInstructions(home), config: { "features.code_mode": false } })).thread.id;
   }
   async function turn(id, extraInput = []) {
     const prior = requests.length;
@@ -96,6 +97,11 @@ async function main() {
     return input.flatMap(item => item.role === "user" && Array.isArray(item.content) ? item.content.map(part => part.text ?? "") : [])
       .filter(text => text.includes("# AGENTS.md instructions")).at(-1) ?? "";
   }
+  function assertDefaults(raw) {
+    const developerText = JSON.parse(raw).input.filter(item => item.role === "developer")
+      .flatMap(item => item.content?.map(part => part.text ?? "") ?? []).join("\n");
+    for (const rule of DEFAULT_AGENT_INSTRUCTIONS) assert.ok(developerText.includes(rule.text), `Missing developer instruction: ${rule.id}`);
+  }
   try {
     const projectA = join(home, "project-a"), projectB = join(home, "project-b");
     fs.mkdirSync(projectA); fs.mkdirSync(projectB); fs.mkdirSync(join(home, ".codex"));
@@ -105,15 +111,21 @@ async function main() {
     save("GLOBAL_RULE_FIRST"); await start();
     const a = await thread(projectA);
     const first = await turn(a);
+    assertDefaults(first);
     assert.match(first, /GLOBAL_RULE_FIRST/); assert.match(first, /PROJECT_A_RULE/); assert.doesNotMatch(first, /CODEX_ONLY_MUST_NOT_LOAD/);
     save("GLOBAL_RULE_SECOND");
-    const refreshed = latestInstructions(await turn(a));
+    const updatedTurn = await turn(a);
+    assertDefaults(updatedTurn);
+    const refreshed = latestInstructions(updatedTurn);
     assert.match(refreshed, /GLOBAL_RULE_SECOND/, "existing thread refreshes instructions on next turn");
     assert.doesNotMatch(refreshed, /GLOBAL_RULE_FIRST/, "active instructions replace the previous global text");
     const secondProject = await turn(await thread(projectB));
+    assertDefaults(secondProject);
     assert.match(secondProject, /GLOBAL_RULE_SECOND/); assert.match(secondProject, /PROJECT_B_RULE/); assert.doesNotMatch(secondProject, /PROJECT_A_RULE/);
     save("");
-    const cleared = latestInstructions(await turn(a));
+    const clearedTurn = await turn(a);
+    assertDefaults(clearedTurn);
+    const cleared = latestInstructions(clearedTurn);
     assert.match(cleared, /PROJECT_A_RULE/);
     assert.doesNotMatch(cleared, /GLOBAL_RULE_FIRST|GLOBAL_RULE_SECOND/, "clearing removes global rules from active instructions");
     save("GLOBAL_RULE_SECOND");
@@ -132,7 +144,7 @@ async function main() {
     assert.match(reviewRequest, /Mysterious Name/);
     assert.ok(reviewRequest.includes("references/github.md"));
     assert.equal(fs.readFileSync(join(home, ".codex", "AGENTS.md"), "utf8"), "CODEX_ONLY_MUST_NOT_LOAD");
-    console.log("PASS: release wrapper/server preserve global/project instruction behavior and Codex isolation; discover CodeReview and expand its explicit skill input with complete review instructions and supporting-file references. All model requests used a local mock.");
+    console.log("PASS: release wrapper/server preserve read-only defaults, custom global/project rules, restart/resume and Codex isolation; discover CodeReview and expand its explicit skill input with complete review instructions and supporting-file references. All model requests used a local mock.");
   } finally { await stop(); server.closeAllConnections(); await new Promise(done => server.close(done)); fs.rmSync(home, { recursive: true, force: true }); }
 }
 const deadline = setTimeout(() => { console.error("Global instructions engine smoke timed out"); process.exit(1); }, 60000); deadline.unref();

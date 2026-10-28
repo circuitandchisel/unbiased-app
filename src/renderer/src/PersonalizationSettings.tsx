@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentInstructions, AgentInstructionsSaveResult, SaveAgentInstructions } from "../../shared/agent-instructions";
+import { DEFAULT_AGENT_INSTRUCTIONS } from "../../shared/default-agent-instructions";
 
 export type AgentInstructionsAPI = {
   read: () => Promise<AgentInstructions>;
@@ -7,6 +8,7 @@ export type AgentInstructionsAPI = {
 };
 
 export function PersonalizationSettings({ api }: { api: AgentInstructionsAPI }) {
+  const [showDefaults, setShowDefaults] = useState(false);
   const [editing, setEditing] = useState(false);
   const [document, setDocument] = useState<AgentInstructions | null>(null);
   const [draft, setDraft] = useState("");
@@ -46,6 +48,23 @@ export function PersonalizationSettings({ api }: { api: AgentInstructionsAPI }) 
   return (
     <div style={{ maxWidth: 760, margin: "0 auto" }}>
       <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "var(--track-title)", lineHeight: 1.15, margin: "0 0 32px" }}>Personalization</h1>
+      <h2 style={{ fontSize: 14, fontWeight: 500, margin: "0 0 12px" }}>Default instructions</h2>
+      <section style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel)", overflow: "hidden", marginBottom: 28 }}>
+        <button type="button" aria-expanded={showDefaults} aria-controls="default-agent-instructions" onClick={() => setShowDefaults(value => !value)} style={{ width: "100%", border: 0, background: "transparent", color: "var(--fg)", textAlign: "left", padding: "18px 20px", display: "flex", alignItems: "center", gap: 16, cursor: "pointer", font: "inherit" }}>
+          <span style={{ flex: 1 }}>
+            <span style={{ display: "block", fontSize: 14 }}>Unbiased instructions</span>
+            <span style={{ display: "block", color: "var(--dim)", fontSize: 12.5, lineHeight: 1.6, marginTop: 4 }}>Built-in guidance for every chat. Managed by Unbiased.</span>
+          </span>
+          <span style={{ border: "1px solid var(--border)", borderRadius: 6, color: "var(--dim)", padding: "3px 7px", fontSize: 11.5, whiteSpace: "nowrap" }}>Read only</span>
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ transform: showDefaults ? "rotate(90deg)" : undefined, flexShrink: 0 }}><path d="m6 3 5 5-5 5" /></svg>
+        </button>
+        {showDefaults && <div id="default-agent-instructions" role="region" aria-label="Default agent instructions" tabIndex={0} style={{ borderTop: "1px solid var(--border)", padding: "4px 20px 20px", maxHeight: 360, overflowY: "auto" }}>
+          {DEFAULT_AGENT_INSTRUCTIONS.map(rule => <section key={rule.id} style={{ marginTop: 18 }}>
+            <h3 style={{ fontSize: 13, fontWeight: 600, margin: "0 0 6px" }}>{rule.title}</h3>
+            <p style={{ fontSize: 12.5, lineHeight: 1.7, color: "var(--fg-soft, var(--fg))", margin: 0 }}>{rule.text}</p>
+          </section>)}
+        </div>}
+      </section>
       <h2 style={{ fontSize: 14, fontWeight: 500, margin: "0 0 12px" }}>Custom instructions</h2>
       <section style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--panel)", overflow: "hidden" }}>
         <button type="button" aria-expanded={editing} aria-controls="custom-agent-instructions-editor" onClick={() => setEditing(!editing)} disabled={busy} style={{ width: "100%", border: 0, background: "transparent", color: "var(--fg)", textAlign: "left", padding: "18px 20px", display: "flex", alignItems: "center", gap: 20, cursor: "pointer", font: "inherit" }}>

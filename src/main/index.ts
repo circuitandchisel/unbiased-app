@@ -1,6 +1,6 @@
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
 import { listSlashCommands, resolveSlashSkill } from "./skill-commands";
-import { agentInstructionsGuidance, connectAgentInstructions, registerAgentInstructionsIpc } from "./agent-instructions";
+import { builtInAgentInstructions, connectAgentInstructions, registerAgentInstructionsIpc } from "./agent-instructions";
 import { SkillOwnershipStore, installOwnedSkill } from "./skill-ownership";
 import { ScopedIdentity } from "./scoped-identity";
 import { ConversationLineage } from "./conversation-lineage";
@@ -485,12 +485,11 @@ function saveAgentStylePrefs(value: unknown): { ok: boolean; prefs: AgentStylePr
 // "shall I?" instead of calling the tool that triggers the real prompt.
 const APP_DEVELOPER_INSTRUCTIONS = [
   ...OPENUI_VISUAL_INSTRUCTIONS,
-  "Permission in this app is handled by the app, not by you. When a tool needs the user's consent —",
-  "network access, or a signed-in browser session — calling it shows the user a permission card they",
-  "approve or deny. So call the tool directly and never ask the user in chat for permission first,",
-  "never wait for a yes, and never re-describe what you are about to do instead of doing it. This",
-  "applies to private data too (their email, messages, dashboards): the card covers it. The one case",
-  "to stop and ask is when a tool result says the browser profile is new and not signed in yet — then",
+  "Use the app's permission controls for tool access. When a tool needs network access or a signed-in",
+  "browser session, call it to show the permission card instead of adding a duplicate chat approval",
+  "request for that same tool permission. This applies to private-data access too. A permission card",
+  "or Full access mode does not replace the user's action-specific consent requirements in the",
+  "built-in or custom instructions. When a tool says its browser profile is new and not signed in,",
   "tell the user to sign in in the window that opened, and never ask them for a password yourself.",
   "When a real missing detail or preference blocks progress, use ask_user to show a question card",
   "and continue with its answer. Do not use it for progress updates, passwords, or tool permissions.",
@@ -605,7 +604,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
  *  index a running conversation sees is a snapshot, same as Claude Code's
  *  per-session index, refreshed on the next thread/start or resume. */
 function baseDeveloperInstructions(): string {
-  return `${APP_DEVELOPER_INSTRUCTIONS}\n\n${agentStyleInstructions(agentStylePrefs())}\n\n${agentInstructionsGuidance(homedir())}`;
+  return `${builtInAgentInstructions(homedir())}\n\n${APP_DEVELOPER_INSTRUCTIONS}\n\n${agentStyleInstructions(agentStylePrefs())}`;
 }
 
 function developerInstructionsFor(cwd: string | null, threadId: string | null = null, projectId?: string | null): string {
