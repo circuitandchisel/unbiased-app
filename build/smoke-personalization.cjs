@@ -7,6 +7,7 @@ const { tmpdir } = require("node:os");
 const { build } = require("esbuild");
 require("tsx/cjs");
 const { agentInstructionsPath, connectAgentInstructions, registerAgentInstructionsIpc } = require("../src/main/agent-instructions.ts");
+const { DEFAULT_AGENT_INSTRUCTIONS } = require("../src/shared/default-agent-instructions.ts");
 
 async function main() {
   const home = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), "unbiased-personalization-")));
@@ -56,6 +57,17 @@ async function main() {
     };
     const type = text => evaluate(`{const t=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(t,${JSON.stringify(text)});t.dispatchEvent(new Event('input',{bubbles:true}));}`);
     await click("Personalization");
+    await until("!!document.querySelector('[aria-controls=\"default-agent-instructions\"]')", "Default instructions card mounts");
+    await evaluate("document.querySelector('[aria-controls=\"default-agent-instructions\"]').click()");
+    await until("!!document.querySelector('#default-agent-instructions')", "Default instructions expand");
+    const defaultsText = await evaluate("document.querySelector('#default-agent-instructions').textContent");
+    for (const rule of DEFAULT_AGENT_INSTRUCTIONS) assert.ok(defaultsText.includes(rule.text));
+    assert.equal(await evaluate("document.querySelectorAll('#default-agent-instructions input, #default-agent-instructions textarea, #default-agent-instructions [contenteditable=true], #default-agent-instructions button').length"), 0, "built-in rules have no editing or saving controls");
+    if (process.env.UNBIASED_PERSONALIZATION_SCREENSHOT) {
+      await new Promise(r => setTimeout(r, 100));
+      fs.writeFileSync(process.env.UNBIASED_PERSONALIZATION_SCREENSHOT.replace(/\.png$/, "-defaults.png"), (await win.webContents.capturePage()).toPNG());
+    }
+    await evaluate("document.querySelector('[aria-controls=\"default-agent-instructions\"]').click()");
     await until("!!document.querySelector('[aria-controls=\"custom-agent-instructions-editor\"]')", "Custom instructions card mounts");
     await evaluate("document.querySelector('[aria-controls=\"custom-agent-instructions-editor\"]').click()");
     await until("!!document.querySelector('textarea:not(:disabled)')", "Instructions load");
@@ -64,6 +76,10 @@ async function main() {
     await until("document.querySelector('[role=status]')?.textContent.startsWith('Saved.')", "Save completes");
     assert.equal(fs.readFileSync(file, "utf8"), rules);
     assert.equal(fs.readFileSync(join(engineHome, "AGENTS.md"), "utf8"), rules);
+    await evaluate("document.querySelector('[aria-controls=\"default-agent-instructions\"]').click()");
+    await until("!!document.querySelector('#default-agent-instructions')", "Defaults reopen after saving custom rules");
+    assert.equal(await evaluate("document.querySelector('#default-agent-instructions').textContent"), defaultsText, "custom saves leave built-in defaults unchanged");
+    await evaluate("document.querySelector('[aria-controls=\"default-agent-instructions\"]').click()");
     await click("Appearance"); await click("Personalization");
     await evaluate("document.querySelector('[aria-controls=\"custom-agent-instructions-editor\"]').click()");
     await until(`document.querySelector('textarea')?.value===${JSON.stringify(rules)}`, "Saved rules survive remount");
@@ -82,7 +98,7 @@ async function main() {
     await until("document.querySelector('[role=status]')?.textContent.startsWith('Saved.')", "Clearing saves");
     assert.equal(fs.readFileSync(file, "utf8"), "");
     assert.equal(fs.readFileSync(codex, "utf8"), "Do not change me.");
-    console.log("PASS: Settings hover preview opens Personalization; real settings save, reload, remount, clear and reject stale edits through production preload/IPC; engine link follows edits; Codex is untouched.");
+    console.log("PASS: Settings preview opens Personalization; built-in defaults are read-only and separate from editable custom instructions; real settings save, reload, remount, clear and reject stale edits through production preload/IPC; engine link follows edits; Codex is untouched.");
   } finally { win.destroy(); fs.rmSync(home, { recursive: true, force: true }); }
 }
 const deadline = setTimeout(() => { console.error("Personalization regression timed out"); app.exit(1); }, 30000); deadline.unref();
