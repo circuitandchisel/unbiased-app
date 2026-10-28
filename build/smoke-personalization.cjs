@@ -21,14 +21,17 @@ async function main() {
   const bundle = await build({
     stdin: { resolveDir: process.cwd(), loader: "tsx", contents: `
       import React from 'react'; import {createRoot} from 'react-dom/client';
-      import {SettingsView,DEFAULT_THEME} from './src/renderer/src/App';
-      const noop=()=>{}; window.mountSettings=()=>createRoot(document.getElementById('root')).render(<SettingsView initialTab="appearance" theme={DEFAULT_THEME} onChange={noop} onBack={noop} onOpenProject={noop} onOpenConnectors={noop} onOpenScheduled={noop} onOpenWhatsNew={noop} onUpdate={noop} onSignOut={noop} releases={[]} />);
-      window.mountSettings();
+      import {SettingsView,SidebarSectionPreview,DEFAULT_THEME} from './src/renderer/src/App';
+      const noop=()=>{};
+      function Fixture(){const [tab,setTab]=React.useState(null);return tab
+        ? <SettingsView initialTab={tab} theme={DEFAULT_THEME} onChange={noop} onBack={()=>setTab(null)} onOpenProject={noop} onOpenConnectors={noop} onOpenScheduled={noop} onOpenWhatsNew={noop} onUpdate={noop} onSignOut={noop} releases={[]} />
+        : <div style={{width:320}}><SidebarSectionPreview section="settings" projects={[]} mosaicChats={[]} updateVersion={null} latestRelease={null} onOpenSettings={setTab} /></div>;}
+      createRoot(document.getElementById('root')).render(<Fixture />);
     ` },
     bundle: true, write: false, outfile: "settings.js", platform: "browser", format: "iife", logLevel: "silent",
     plugins: [{ name: "settings-test-exports", setup(b) {
       b.onLoad({ filter: /\.md$/ }, a => ({ contents: fs.readFileSync(a.path, "utf8"), loader: "text" }));
-      b.onLoad({ filter: /\/src\/renderer\/src\/App\.tsx$/ }, a => ({ contents: fs.readFileSync(a.path, "utf8") + "\nexport {SettingsView,DEFAULT_THEME};", loader: "tsx" }));
+      b.onLoad({ filter: /\/src\/renderer\/src\/App\.tsx$/ }, a => ({ contents: fs.readFileSync(a.path, "utf8") + "\nexport {SettingsView,SidebarSectionPreview,DEFAULT_THEME};", loader: "tsx" }));
     } }],
   });
   const win = new BrowserWindow({ show: false, width: 1200, height: 850, webPreferences: { preload: resolve("out/preload/index.js"), contextIsolation: true, sandbox: true } });
@@ -79,7 +82,7 @@ async function main() {
     await until("document.querySelector('[role=status]')?.textContent.startsWith('Saved.')", "Clearing saves");
     assert.equal(fs.readFileSync(file, "utf8"), "");
     assert.equal(fs.readFileSync(codex, "utf8"), "Do not change me.");
-    console.log("PASS: real Personalization settings save, reload, remount, clear and reject stale edits through production preload/IPC; engine link follows edits; Codex is untouched.");
+    console.log("PASS: Settings hover preview opens Personalization; real settings save, reload, remount, clear and reject stale edits through production preload/IPC; engine link follows edits; Codex is untouched.");
   } finally { win.destroy(); fs.rmSync(home, { recursive: true, force: true }); }
 }
 const deadline = setTimeout(() => { console.error("Personalization regression timed out"); app.exit(1); }, 30000); deadline.unref();
