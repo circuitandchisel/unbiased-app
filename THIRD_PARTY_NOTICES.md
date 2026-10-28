@@ -45,3 +45,10 @@ at `Contents/Resources/licenses/robot-heads/LICENSE`.
 The GitHub link mark comes from [GitHub Octicons](https://github.com/primer/octicons),
 licensed under MIT. Its copyright and license text ship at
 `Contents/Resources/licenses/octicons/LICENSE`.
+
+## Matt Pocock Skills
+
+The bundled Code Review skill is adapted from
+[mattpocock/skills](https://github.com/mattpocock/skills/tree/59db609eb1e18aaf59b63284d0e52255aff0c63c/skills/engineering/code-review),
+licensed under MIT. Its copyright, license, upstream revision, and adaptation
+notes ship at `Contents/Resources/skills/code-review/`.

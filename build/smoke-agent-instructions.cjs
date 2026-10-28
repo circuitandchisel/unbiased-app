@@ -8,6 +8,7 @@ const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 require("tsx/cjs");
 const { agentInstructionsGuidance, connectAgentInstructions, readAgentInstructions, saveAgentInstructions } = require("../src/main/agent-instructions.ts");
+const { listSlashCommands, resolveSlashSkill } = require("../src/main/skill-commands.ts");
 
 async function main() {
   assert.ok(process.env.UNBIASED_ENGINE_DIR, "Set UNBIASED_ENGINE_DIR to the release engine bundle");
@@ -71,10 +72,10 @@ async function main() {
   async function thread(cwd) {
     return (await request("thread/start", { cwd, approvalPolicy: "never", sandbox: "danger-full-access", developerInstructions: agentInstructionsGuidance(home), config: { "features.code_mode": false } })).thread.id;
   }
-  async function turn(id) {
+  async function turn(id, extraInput = []) {
     const prior = requests.length;
     const firstMessage = messages.length;
-    await request("turn/start", { threadId: id, input: [{ type: "text", text: "Reply briefly. This is a local fixture." }] });
+    await request("turn/start", { threadId: id, input: [{ type: "text", text: "Reply briefly. This is a local fixture." }, ...extraInput] });
     for (let i = 0; i < 150; i++) {
       const completion = messages.slice(firstMessage).find(msg => msg.method === "turn/completed" && msg.params.threadId === id);
       if (completion) {
@@ -120,8 +121,18 @@ async function main() {
     const resumed = await request("thread/resume", { threadId: a });
     assert.equal(resumed.thread.id, a);
     assert.match(await turn(a), /GLOBAL_RULE_SECOND/, "instructions survive engine restart and resume");
+    const skillsRoot = resolve("resources/skills");
+    await request("skills/extraRoots/set", { extraRoots: [skillsRoot] });
+    const commands = await listSlashCommands(request, projectA, skillsRoot);
+    const review = commands.find(command => command.command === "CodeReview");
+    assert.ok(review?.skill, "packaged Code Review skill must be discovered");
+    const skillInput = await resolveSlashSkill(request, projectA, skillsRoot, "/CodeReview origin/main", review.skill.path);
+    const reviewRequest = await turn(await thread(projectA), [skillInput]);
+    assert.match(reviewRequest, /Two-axis review/);
+    assert.match(reviewRequest, /Mysterious Name/);
+    assert.ok(reviewRequest.includes("references/github.md"));
     assert.equal(fs.readFileSync(join(home, ".codex", "AGENTS.md"), "utf8"), "CODEX_ONLY_MUST_NOT_LOAD");
-    console.log("PASS: release wrapper/server load canonical global rules, replace and clear them on existing turns, preserve project instructions, work across projects and restart/resume, and exclude Codex's file. All model requests used a local mock.");
+    console.log("PASS: release wrapper/server preserve global/project instruction behavior and Codex isolation; discover CodeReview and expand its explicit skill input with complete review instructions and supporting-file references. All model requests used a local mock.");
   } finally { await stop(); server.closeAllConnections(); await new Promise(done => server.close(done)); fs.rmSync(home, { recursive: true, force: true }); }
 }
 const deadline = setTimeout(() => { console.error("Global instructions engine smoke timed out"); process.exit(1); }, 60000); deadline.unref();
