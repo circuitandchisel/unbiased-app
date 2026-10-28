@@ -30,6 +30,13 @@ test("sending a command attaches the exact live engine skill, not model-guessed 
   await assert.rejects(resolveSlashSkill(async () => ({ data: [{ skills: [] }] }), "/project", "/app/skills", "/CodeReview"), /disabled or unavailable/);
 });
 
+test("the spaced Code Review alias resolves the same skill and preserves arguments", async () => {
+  assert.deepEqual(commandToken("/cOdE Review origin/main\nSpec: docs/review.md"), { name: "CodeReview", rest: "origin/main\nSpec: docs/review.md" });
+  assert.deepEqual(await resolveSlashSkill(request, "/project", "/app/skills", "/Code Review origin/main", bundled.path), await resolveSlashSkill(request, "/project", "/app/skills", "/CodeReview origin/main", bundled.path));
+  assert.equal(commandToken("/Code Review/path")?.name, "Code");
+  assert.notEqual(commandToken("/Code Reviewer")?.name, "CodeReview");
+});
+
 test("ambiguous skill names require a source selection; revalidation blocks stale project choices", async () => {
   const local = { ...bundled, path: "/project/.codex/skills/code-review/SKILL.md", scope: "repo" };
   const duplicates = async () => ({ data: [{ skills: [bundled, local] }] });

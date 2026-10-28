@@ -52,3 +52,26 @@ The bundled Code Review skill is adapted from
 [mattpocock/skills](https://github.com/mattpocock/skills/tree/59db609eb1e18aaf59b63284d0e52255aff0c63c/skills/engineering/code-review),
 licensed under MIT. Its copyright, license, upstream revision, and adaptation
 notes ship at `Contents/Resources/skills/code-review/`.
+
+## Sentry Security Review and OWASP
+
+Code Review includes adapted material from
+[getsentry/skills](https://github.com/getsentry/skills/tree/d12f250460ffd961f549dbebf7eeb0cf4afd4c2e/skills/security-review).
+The repository's Apache-2.0 license and the skill's CC BY-SA 4.0 notice for
+OWASP-derived reference material ship in `Contents/Resources/skills/code-review/modules/security/`.
+That directory includes the full CC BY-SA 4.0 license. Unbiased's security-module
+adaptations are also offered under CC BY-SA 4.0; changes and attribution are
+documented in the skill's `UPSTREAM.md`.
+
+## Addy Osmani Agent Skills
+
+Code Review includes adapted security-and-hardening guidance and its supporting
+patterns/checklist from
+[addyosmani/agent-skills](https://github.com/addyosmani/agent-skills/tree/aeac41d4d005999432bb7312f7ff06383a91d59d),
+Copyright (c) 2025 Addy Osmani, under MIT. Its license ships at
+`Contents/Resources/skills/code-review/modules/hardening/LICENSE-UPSTREAM`.
+
+Better Auth review guidance is independently written by Unbiased and links to
+official documentation; no material from the repository `better-auth/skills`
+is redistributed because that revision declares no license. See Code Review's
+`UPSTREAM.md` for the inspected revision.

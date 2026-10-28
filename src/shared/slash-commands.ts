@@ -10,6 +10,8 @@ export type SlashCommand = {
 export const PLAN_COMMAND: SlashCommand = { id: "plan", command: "Plan", label: "Plan", description: "Research first, propose a plan, then act", source: "Unbiased" };
 
 export function commandToken(text: string): { name: string; rest: string } | null {
+  const review = /^\/code[ \t]+review(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  if (review) return { name: "CodeReview", rest: review[1] ?? "" };
   const match = /^\/([\p{L}\p{N}_-]+)(?:\s+([\s\S]*))?$/u.exec(text.trim());
   return match ? { name: match[1], rest: match[2] ?? "" } : null;
 }
