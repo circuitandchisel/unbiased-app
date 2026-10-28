@@ -198,6 +198,10 @@ jobs:
         working-directory: unbiased-app
         run: node build/smoke-browser.cjs release/mac-arm64/Unbiased.app/Contents/Resources/browser
 
+      - name: smoke test packaged global instructions
+        working-directory: unbiased-app
+        run: UNBIASED_ENGINE_DIR="$PWD/release/mac-arm64/Unbiased.app/Contents/Resources/engine" npm run smoke:agent-instructions
+
       - name: smoke test packaged standalone runtime without Electron
         working-directory: unbiased-app
         run: node build/smoke-browser-runtime.cjs release/mac-arm64/Unbiased.app/Contents/Resources/browser release/mac-arm64/Unbiased.app/Contents/Resources/browser-runtime/main.js

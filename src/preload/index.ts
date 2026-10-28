@@ -1,6 +1,7 @@
 import type { EnvironmentManifest, SettingsScope } from "../main/environment";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AgentStylePrefs } from "../shared/agent-style";
+import type { SaveAgentInstructions } from "../shared/agent-instructions";
 import type { PalScale, PalsSettings } from "../shared/pals";
 
 // The renderer's entire view of the engine. Typed, minimal, and additive.
@@ -37,6 +38,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   setUpdatePrefs: (p: { autoDownload: boolean }) => ipcRenderer.invoke("update:set-prefs", p),
   agentStyle: () => ipcRenderer.invoke("agent-style:get"),
   setAgentStyle: (prefs: AgentStylePrefs) => ipcRenderer.invoke("agent-style:set", prefs),
+  agentInstructions: () => ipcRenderer.invoke("agent-instructions:get"),
+  setAgentInstructions: (value: SaveAgentInstructions) => ipcRenderer.invoke("agent-instructions:set", value),
   palsSettings: (): Promise<PalsSettings> => ipcRenderer.invoke("pals:get"),
   selectPal: (id: string) => ipcRenderer.invoke("pals:select", id),
   setPalVisible: (visible: boolean): Promise<PalsSettings> => ipcRenderer.invoke("pals:visible", visible),

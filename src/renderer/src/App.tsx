@@ -1,4 +1,6 @@
 import { AgentMirrorPane } from "./AgentMirrorPane";
+import { PersonalizationSettings, type AgentInstructionsAPI } from "./PersonalizationSettings";
+import type { AgentInstructions, AgentInstructionsSaveResult, SaveAgentInstructions } from "../../shared/agent-instructions";
 import type { SkillOwnership } from "../../main/skill-ownership";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
@@ -336,7 +338,7 @@ type ProjectInfo = {
   threads: ThreadSummary[];
 };
 type RailPeekSection = "home" | "mosaic" | "projects" | "connectors" | "scheduled" | "updates" | "whats-new" | "settings";
-type SettingsTab = "appearance" | "agent" | "pals" | "account" | "updates" | "resources";
+type SettingsTab = "appearance" | "agent" | "personalization" | "pals" | "account" | "updates" | "resources";
 /** A thread we know exists because we just created it, but which the engine
  *  will not return from thread/list yet — verified: a list issued straight
  *  after thread/start does not include the new id. Without a stand-in row, a
@@ -912,6 +914,8 @@ declare global {
       updatePrefs: () => Promise<{ autoDownload: boolean; version: string; lastCheckedAt: number | null }>;
       setUpdatePrefs: (p: { autoDownload: boolean }) => Promise<{ ok: boolean }>;
       agentStyle: () => Promise<AgentStylePrefs>;
+      agentInstructions: () => Promise<AgentInstructions>;
+      setAgentInstructions: (value: SaveAgentInstructions) => Promise<AgentInstructionsSaveResult>;
       setAgentStyle: (prefs: AgentStylePrefs) => Promise<{ ok: boolean; prefs: AgentStylePrefs }>;
       palsSettings: () => Promise<PalsSettingsState>;
       selectPal: (id: string) => Promise<{ ok: boolean; settings: PalsSettingsState }>;
@@ -17123,6 +17127,11 @@ function ResourcesView() {
   );
 }
 
+const agentInstructionsAPI: AgentInstructionsAPI = {
+  read: () => window.unbiased.agentInstructions(),
+  save: value => window.unbiased.setAgentInstructions(value),
+};
+
 function SettingsView({
   initialTab,
   theme,
@@ -17349,6 +17358,7 @@ function SettingsView({
       items: [
         { id: "appearance", label: "Appearance", icon: <ContrastIcon /> },
         { id: "agent", label: "Agent", icon: <Bot size={15} /> },
+        { id: "personalization", label: "Personalization", icon: <Sparkles size={15} /> },
         { id: "pals", label: "Pals", icon: <Heart size={15} /> },
         { id: "account", label: "Account", icon: <PersonIcon /> },
       ],
@@ -17554,6 +17564,8 @@ function SettingsView({
             </div>
             </Group>
           </div>
+        ) : tab === "personalization" ? (
+          <PersonalizationSettings api={agentInstructionsAPI} />
         ) : tab === "agent" ? (
           <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "var(--track-title)", lineHeight: 1.15, margin: "0 0 28px" }}>Agent</h1>

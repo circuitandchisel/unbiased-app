@@ -93,6 +93,23 @@ For what sits *below* this diagram — what the engine wrapper does, what the
 codex app-server owns, how a turn reaches the model, and where conversations
 live on disk — see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
+## Custom agent instructions
+
+Settings → Personalization → Custom agent instructions edits
+`~/.unbiased/AGENTS.md`. You can also edit that file directly or explicitly ask
+the agent to update instructions for all Unbiased chats. Project `AGENTS.md`
+files still apply. Global changes are reloaded on the next turn in existing
+and new chats; a turn already running keeps its current instructions.
+
+The desktop connects the engine's private `AGENTS.md` to this file on startup,
+using the engine's existing per-turn instruction refresh. Existing private-home
+instructions migrate when there is no canonical file. Conflicting private files
+or overrides produce an actionable startup error rather than silently discarding
+rules. `~/.codex/AGENTS.md` is neither imported nor changed.
+
+The editor detects files changed since loading and requires a reload before
+saving over them. Clearing and saving removes the custom global instructions.
+
 ## Development
 
 Requires Node.js 22 and sibling checkouts of the engine and accessibility
