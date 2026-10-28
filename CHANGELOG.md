@@ -6,6 +6,24 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.26 — October 28, 2026
+
+### Added
+
+- **Code Review is built in.** Use `/CodeReview` or `/Code Review` to review changes for code quality, requirements, security vulnerabilities, and hardening opportunities. Better Auth checks are included when relevant to your project.
+- **Find skill commands as you type.** Type `/` in the chat input to browse matching commands, choose with the keyboard or mouse, and add details before sending.
+- **Personalize instructions for every chat.** Settings → Personalization lets you edit your custom agent instructions. They are saved in Unbiased's own global instructions file and stay separate from other coding tools.
+
+### Improved
+
+- **Default and custom instructions are clearly separated.** Read the app's built-in guidance in Personalization while keeping your own instructions editable.
+- **Code Review keeps findings clear.** Confirmed security vulnerabilities, items needing verification, and hardening suggestions appear separately, alongside code quality and requirements findings.
+
+### Fixed
+
+- **Personalization is available from the Settings hover preview.** It also has a distinct document-and-pencil icon.
+- **Project skill commands work in new worktree chats.** Selecting a skill before your first message keeps the selection valid in the destination checkout.
+
 ## 1.13.25 — October 27, 2026
 
 ### Improved
