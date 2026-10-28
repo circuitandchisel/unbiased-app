@@ -97,11 +97,16 @@ live on disk — see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
 Type `/` in a chat composer to see matching enabled skills and built-in commands.
 Use Up/Down to choose, Enter or Tab to select, and Escape to dismiss. Selecting a
-skill inserts its command; add details and send when ready. `/CodeReview` uses
-the bundled Code Review skill, for example `/CodeReview origin/main` followed by
+skill inserts its command; add details and send when ready. `/CodeReview` (also
+`/Code Review`) uses the bundled Code Review skill, for example `/CodeReview origin/main` followed by
 a PR link or spec path. `/Plan` toggles plan mode. Commands are case-insensitive.
 
-Code Review reports **Standards** and **Spec** separately. It asks for a missing
+Code Review combines code quality and requirements (**Standards** and **Spec**),
+**Security vulnerabilities**, and **Hardening suggestions** in one report, keeping
+confirmed vulnerabilities separate from uncertain candidates and optional improvements.
+Better Auth checks load only when the reviewed application uses Better Auth and
+the change touches its auth boundary. Supporting modules are not separate commands.
+The skill asks for a missing
 comparison base or spec, and reviews without editing files or posting GitHub
 comments. Its upstream source and license are recorded alongside the bundled
 skill. The picker uses each chat's skill scope; disabled or unavailable skills

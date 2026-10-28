@@ -138,11 +138,18 @@ async function main() {
     const commands = await listSlashCommands(request, projectA, skillsRoot);
     const review = commands.find(command => command.command === "CodeReview");
     assert.ok(review?.skill, "packaged Code Review skill must be discovered");
-    const skillInput = await resolveSlashSkill(request, projectA, skillsRoot, "/CodeReview origin/main", review.skill.path);
+    const skillInput = await resolveSlashSkill(request, projectA, skillsRoot, "/Code Review origin/main", review.skill.path);
     const reviewRequest = await turn(await thread(projectA), [skillInput]);
-    assert.match(reviewRequest, /Two-axis review/);
-    assert.match(reviewRequest, /Mysterious Name/);
-    assert.ok(reviewRequest.includes("references/github.md"));
+    const requestTexts = [];
+    function collectText(value) {
+      if (typeof value === "string") requestTexts.push(value);
+      else if (Array.isArray(value)) value.forEach(collectText);
+      else if (value && typeof value === "object") Object.values(value).forEach(collectText);
+    }
+    collectText(JSON.parse(reviewRequest));
+    const routerBody = fs.readFileSync(join(skillsRoot, "code-review", "SKILL.md"), "utf8").split("---").slice(2).join("---").trim();
+    assert.ok(requestTexts.some(text => text.includes(routerBody)), "engine must expand the complete router, not just its description");
+    assert.equal(commands.filter(command => command.skill?.path.includes("/code-review/")).length, 1, "supporting modules must not be separately discovered skills");
     assert.equal(fs.readFileSync(join(home, ".codex", "AGENTS.md"), "utf8"), "CODEX_ONLY_MUST_NOT_LOAD");
     console.log("PASS: release wrapper/server preserve read-only defaults, custom global/project rules, restart/resume and Codex isolation; discover CodeReview and expand its explicit skill input with complete review instructions and supporting-file references. All model requests used a local mock.");
   } finally { await stop(); server.closeAllConnections(); await new Promise(done => server.close(done)); fs.rmSync(home, { recursive: true, force: true }); }

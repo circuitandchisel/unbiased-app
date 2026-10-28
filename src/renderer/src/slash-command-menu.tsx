@@ -13,7 +13,8 @@ export function useSlashCommands({ paneId, contextKey, connected, draft, changeD
   const [selection, setSelection] = useState<{ command: string; path: string } | null>(null);
   const loadingRequest = useRef(0);
   const hasSlash = draft.startsWith("/");
-  const query = /^\/([^\s/]*)$/.exec(draft)?.[1] ?? null;
+  const typedQuery = /^\/([^/\r\n]*)$/.exec(draft)?.[1] ?? null;
+  const query = typedQuery !== null && !/\s$/.test(typedQuery) && (!/\s/.test(typedQuery) || commands.some(command => commandMatches(command, typedQuery))) ? typedQuery : null;
   const matches = query === null ? [] : commands.filter(command => commandMatches(command, query));
   const open = connected && query !== null && dismissed !== draft;
   const menuId = `slash-commands-${paneId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
