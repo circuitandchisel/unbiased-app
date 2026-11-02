@@ -33,9 +33,10 @@ function Harness(){
       <aside data-testid="project-tree" style={{width:280,padding:8,background:'var(--nav-bg)'}}>
         <div style={{padding:'9px 12px',color:'var(--dim)'}}>Projects</div>
         <div className="u-sidebar-project-row" style={{padding:'9px 12px'}}>Unbiased App</div>
-        <div className="u-sidebar-thread-list u-sidebar-thread-list--project">
-          {['Completed conversation','Selected conversation','Running conversation','Unread conversation'].map((title,index)=><ThreadRow key={title} thread={{id:title,title}} active={index===1} hovered={false} running={index===2} unread={index===3} indent projectChild onHover={noop} onOpen={async()=>{}} onTogglePin={noop} onMenu={noop}/>)}
+        <div className="u-sidebar-thread-list" data-testid="project-children">
+          {['Completed conversation','Selected conversation','Running conversation','Unread conversation'].map((title,index)=><ThreadRow key={title} thread={{id:title,title}} active={index===1} hovered={false} running={index===2} unread={index===3} indent onHover={noop} onOpen={async()=>{}} onTogglePin={noop} onMenu={noop}/>)}
         </div>
+        <div className="u-sidebar-thread-list" data-testid="pinned-tree"><ThreadRow thread={{id:'pinned',title:'Pinned conversation'}} active={false} hovered={false} pinned indent onHover={noop} onOpen={async()=>{}} onTogglePin={noop} onMenu={noop}/></div>
         <div className="u-sidebar-thread-list" data-testid="recent-tree"><ThreadRow thread={{id:'recent',title:'Recent conversation'}} active={false} hovered={false} indent onHover={noop} onOpen={async()=>{}} onTogglePin={noop} onMenu={noop}/></div>
       </aside>
       <StartPage projectName="Theme QA" onPick={noop}/>
@@ -82,11 +83,12 @@ createRoot(document.getElementById('root')).render(<Harness/>);
       assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"Theme profiles\"] [aria-pressed=true]').length"), 1);
       await evaluate("window.qaView('samples')");
       await until("document.querySelector('.mermaid-diagram svg .node rect') && getComputedStyle(document.querySelector('.mermaid-diagram svg .node rect')).fill===getComputedStyle(document.querySelector('.u-theme-profile')).backgroundColor", "diagram follows live profile");
-      assert.equal(await evaluate("document.querySelectorAll('[data-testid=project-tree] .u-sidebar-thread-dot').length"), 4, "project children retain idle hollow markers alongside status markers");
-      assert.equal(await evaluate("document.querySelector('[data-testid=recent-tree] .u-sidebar-thread-dot')"), null, "recent conversations do not gain project markers");
-      assert.equal(await evaluate("getComputedStyle(document.querySelector('.u-sidebar-thread-list--project'),'::before').width"), "1px", "project guide is visible");
-      assert.equal(await evaluate("getComputedStyle(document.querySelector('[data-testid=recent-tree]'),'::before').content"), "none", "guide is scoped to project children");
-      assert.equal(await evaluate("const list=document.querySelector('.u-sidebar-thread-list--project');const dot=list.querySelector('.u-sidebar-thread-dot');const rect=dot.getBoundingClientRect();Math.abs(rect.x+rect.width/2-(list.getBoundingClientRect().x+parseFloat(getComputedStyle(list,'::before').left)+0.5))<1"), true, "guide passes through marker centers");
+      assert.equal(await evaluate("document.querySelectorAll('[data-testid=project-children] .u-sidebar-thread-dot').length"), 4, "project children retain idle hollow markers alongside status markers");
+      for (const group of ["project-children", "pinned-tree", "recent-tree"]) {
+        assert.ok(await evaluate(`document.querySelector('[data-testid=${group}] .u-sidebar-thread-dot')!==null`), `${group} has a marker`);
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-testid=${group}]'),'::before').width`), "1px", `${group} has a guide`);
+        assert.equal(await evaluate(`const list=document.querySelector('[data-testid=${group}]');const dot=list.querySelector('.u-sidebar-thread-dot');const rect=dot.getBoundingClientRect();Math.abs(rect.x+rect.width/2-(list.getBoundingClientRect().x+parseFloat(getComputedStyle(list,'::before').left)+0.5))<1`), true, `${group} guide passes through marker centers`);
+      }
       const code = await evaluate("getComputedStyle(document.querySelector('.token.keyword')).color");
       const keyword = await evaluate("const probe=document.createElement('span');probe.style.color='var(--code-keyword)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();color");
       assert.equal(code, keyword, "Prism follows the selected profile");
@@ -137,7 +139,7 @@ createRoot(document.getElementById('root')).render(<Harness/>);
     const sidebarBounds = await evaluate("const r=document.querySelector('[data-testid=project-tree]').getBoundingClientRect();({x:Math.round(r.x),y:Math.round(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)})");
     fs.writeFileSync("/tmp/unbiased-theme-project-tree.png", (await win.webContents.capturePage(sidebarBounds)).toPNG());
     assert.deepEqual(errors.filter(error => !error.includes("Electron Security Warning")), []);
-    console.log("PASS: real settings select six profiles by mouse/keyboard, preserve fonts and legacy preferences, persist across reload, customize/reset, fit narrow layouts, retheme Prism/Mermaid and retain the running terminal; project guides and hollow/status markers remain aligned in every theme.");
+    console.log("PASS: real settings select six profiles by mouse/keyboard, preserve fonts and legacy preferences, persist across reload, customize/reset, fit narrow layouts, retheme Prism/Mermaid and retain the running terminal; Project, Pinned, and Recents guides and hollow/status markers remain aligned in every theme.");
   } finally { win.destroy(); fs.rmSync(fixture, { recursive: true, force: true }); }
 }
 main().then(() => app.exit(0), error => { console.error(error); app.exit(1); });
