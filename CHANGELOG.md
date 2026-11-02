@@ -6,6 +6,22 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.27 — November 2, 2026
+
+### Added
+
+- **Six themes made for Unbiased.** Choose Ember, Chalk, Tide, Grove, Dune, or Vesper in Settings → Appearance. Each coordinates the app's surfaces, text, code blocks, diagrams, and terminal colors.
+
+### Improved
+
+- **Make a theme your own.** Customize colors and typography, keep your preferred fonts when switching profiles, or import an existing Codex theme. Changes save automatically for the next time you open the app.
+
+### Fixed
+
+- **Sidebar conversation guides are back.** Vertical lines and hollow circles appear in Projects, Pinned, and Recents, alongside running and unread indicators.
+- **Repeated links reuse their browser tab.** Opening the same URL selects its existing side-browser tab without reloading it, including while the page is loading or the side panel is closed.
+- **Clearing a font keeps your theme.** An empty font field uses the default font without resetting your selected theme or custom colors after reopening the app.
+
 ## 1.13.26 — October 28, 2026
 
 ### Added
