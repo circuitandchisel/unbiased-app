@@ -1,0 +1,21 @@
+.u-theme-profiles { display: grid; gap: 14px; }
+.u-theme-profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap: 12px; }
+.u-theme-profile { display: grid; gap: 12px; min-width: 0; padding: 13px; background: var(--panel); color: var(--fg); border: 1px solid var(--border); border-radius: 12px; text-align: left; font: inherit; cursor: pointer; }
+.u-theme-profile:hover { background: var(--panel-2); }
+.u-theme-profile[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.u-theme-profile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.u-theme-profile-label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 500; font-size: 13.5px; }
+.u-theme-profile-mode { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 400; color: var(--dim); }
+.u-theme-profile-description { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; font-size: 12.5px; color: var(--dim); }
+.u-theme-profile-description strong { color: var(--fg); font-size: 13px; font-weight: 500; }
+.u-theme-profile-sample { display: grid; grid-template-columns: 23% 1fr; gap: 12px; min-height: 82px; padding: 9px; border: 1px solid var(--sample-border); border-radius: 7px; background: var(--sample-bg); }
+.u-theme-sample-sidebar { display: grid; align-content: start; gap: 5px; background: var(--sample-sidebar); border-radius: 3px; padding: 8px 5px; }
+.u-theme-sample-sidebar i { display: block; height: 3px; width: 85%; background: var(--sample-text); opacity: .4; border-radius: 2px; }
+.u-theme-sample-sidebar i:first-child { width: 60%; background: var(--sample-accent); opacity: 1; }
+.u-theme-sample-chat { display: grid; align-content: end; gap: 6px; padding: 5px 0; }
+.u-theme-sample-chat > i { display: block; height: 3px; background: var(--sample-text); opacity: .7; width: 94%; border-radius: 2px; }
+.u-theme-sample-chat > i:first-child { width: 55%; background: var(--sample-accent); opacity: 1; }
+.u-theme-sample-chat > i:nth-child(3) { width: 72%; }
+.u-theme-sample-composer { display: block; height: 16px; margin-top: 2px; background: var(--sample-raised); border-radius: 7px; }
+.u-theme-customize { border-top: 1px solid var(--border); padding-top: 18px; }
+.u-theme-customize > summary { cursor: pointer; color: var(--fg); font-size: 14px; font-weight: 500; margin-bottom: 18px; width: fit-content; }

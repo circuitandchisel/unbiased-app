@@ -56,8 +56,8 @@
          The UA default is the right answer; the theme's own font stack already
          carries the tuning. */
       ::-webkit-scrollbar { width: 6px; height: 6px; }
-      ::-webkit-scrollbar-thumb { background: #3a3a40; border-radius: 3px; }
-      ::-webkit-scrollbar-thumb:hover { background: #4a4a52; }
+      ::-webkit-scrollbar-thumb { background: var(--gutter, #3a3a40); border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--dim, #4a4a52); }
       ::-webkit-scrollbar-track { background: transparent; }
 
       /* Keyboard focus. Every control in this app sets outline:none and, until
@@ -166,6 +166,18 @@
       .u-sidebar-thread-list {
         position: relative;
       }
+      /* Every sidebar conversation group shares a guide through its markers. */
+      .u-sidebar-thread-list::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 19px;
+        width: 1px;
+        background: color-mix(in srgb, var(--fg) 22%, transparent);
+        pointer-events: none;
+        z-index: 1;
+      }
       .u-sidebar-project-row {
         margin-bottom: 2px;
       }
@@ -193,7 +205,7 @@
         animation: unbiased-pulse 1.2s ease-in-out infinite;
       }
       .u-sidebar-thread-dot.is-unread {
-        background: #4bbf87;
+        background: var(--ok, #4bbf87);
       }
       .u-sidebar-pin-toggle {
         color: var(--dim);
