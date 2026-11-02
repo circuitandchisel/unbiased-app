@@ -14,7 +14,7 @@ async function main() {
   const css = [];
   const result = await build({ stdin: { resolveDir: root, loader: "tsx", contents: `
 import React,{useEffect,useState} from 'react';import {createRoot} from 'react-dom/client';
-import {SettingsView,TerminalPane,CodeBlock,StartPage} from './src/renderer/src/App';
+import {SettingsView,TerminalPane,CodeBlock,StartPage,ThreadRow} from './src/renderer/src/App';
 import {MermaidDiagram} from './src/renderer/src/mermaid-diagram';
 import {loadTheme,saveTheme,themeVars,applyDocumentTheme} from './src/renderer/src/theme';
 window.qaCalls=[];window.qaListeners=new Map();window.qaEmit=(name,payload)=>{for(const callback of window.qaListeners.get(name)??[])callback(payload)};
@@ -30,6 +30,14 @@ function Harness(){
   return <div style={{...themeVars(theme),fontFamily:'var(--font-ui)',background:'var(--bg)',color:'var(--fg)',minHeight:'100vh'}}>
     <div hidden={view!=='settings'}><SettingsView initialTab="appearance" theme={theme} onChange={change} onBack={noop} onOpenProject={noop} onOpenConnectors={noop} onOpenScheduled={noop} onOpenWhatsNew={noop} onUpdate={noop} onSignOut={noop} updateAvailable={false} updateStaged={false} changelogUnread={false} missedCount={0} releases={[]}/></div>
     <section hidden={view!=='samples'} style={{padding:24}}>
+      <aside data-testid="project-tree" style={{width:280,padding:8,background:'var(--nav-bg)'}}>
+        <div style={{padding:'9px 12px',color:'var(--dim)'}}>Projects</div>
+        <div className="u-sidebar-project-row" style={{padding:'9px 12px'}}>Unbiased App</div>
+        <div className="u-sidebar-thread-list u-sidebar-thread-list--project">
+          {['Completed conversation','Selected conversation','Running conversation','Unread conversation'].map((title,index)=><ThreadRow key={title} thread={{id:title,title}} active={index===1} hovered={false} running={index===2} unread={index===3} indent projectChild onHover={noop} onOpen={async()=>{}} onTogglePin={noop} onMenu={noop}/>)}
+        </div>
+        <div className="u-sidebar-thread-list" data-testid="recent-tree"><ThreadRow thread={{id:'recent',title:'Recent conversation'}} active={false} hovered={false} indent onHover={noop} onOpen={async()=>{}} onTogglePin={noop} onMenu={noop}/></div>
+      </aside>
       <StartPage projectName="Theme QA" onPick={noop}/>
       <CodeBlock><code className="language-javascript">{'// Keep a readable comment\\nconst message = "Hello";\\nif (ready) return 42;'}</code></CodeBlock>
       <MermaidDiagram diagram={'graph LR\\n A[Input] --> B[Validate]'} />
@@ -42,7 +50,7 @@ createRoot(document.getElementById('root')).render(<Harness/>);
 ` }, bundle: true, write: false, platform: "browser", format: "iife", jsx: "automatic", define: { "import.meta.glob": "__qaGlob" }, banner: { js: "var __qaGlob=()=>({});" }, loader: { ".svg": "dataurl", ".png": "dataurl", ".webp": "dataurl" }, plugins: [{ name: "qa", setup(b) {
     b.onLoad({ filter: /\.css$/ }, args => { css.push(fs.readFileSync(args.path, "utf8")); return { contents: "", loader: "js" }; });
     b.onLoad({ filter: /\.md$/ }, args => ({ contents: fs.readFileSync(args.path, "utf8"), loader: "text" }));
-    b.onLoad({ filter: /\/src\/renderer\/src\/App\.tsx$/ }, args => ({ contents: fs.readFileSync(args.path, "utf8") + "\nexport {SettingsView,TerminalPane,CodeBlock,StartPage};", loader: "tsx" }));
+    b.onLoad({ filter: /\/src\/renderer\/src\/App\.tsx$/ }, args => ({ contents: fs.readFileSync(args.path, "utf8") + "\nexport {SettingsView,TerminalPane,CodeBlock,StartPage,ThreadRow};", loader: "tsx" }));
   } }] });
   const baseCSS = fs.readFileSync(join(root, "src/renderer/index.html"), "utf8").match(/<style>([\s\S]*?)<\/style>/)[1];
   const html = join(fixture, "index.html");
@@ -74,6 +82,11 @@ createRoot(document.getElementById('root')).render(<Harness/>);
       assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"Theme profiles\"] [aria-pressed=true]').length"), 1);
       await evaluate("window.qaView('samples')");
       await until("document.querySelector('.mermaid-diagram svg .node rect') && getComputedStyle(document.querySelector('.mermaid-diagram svg .node rect')).fill===getComputedStyle(document.querySelector('.u-theme-profile')).backgroundColor", "diagram follows live profile");
+      assert.equal(await evaluate("document.querySelectorAll('[data-testid=project-tree] .u-sidebar-thread-dot').length"), 4, "project children retain idle hollow markers alongside status markers");
+      assert.equal(await evaluate("document.querySelector('[data-testid=recent-tree] .u-sidebar-thread-dot')"), null, "recent conversations do not gain project markers");
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.u-sidebar-thread-list--project'),'::before').width"), "1px", "project guide is visible");
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('[data-testid=recent-tree]'),'::before').content"), "none", "guide is scoped to project children");
+      assert.equal(await evaluate("const list=document.querySelector('.u-sidebar-thread-list--project');const dot=list.querySelector('.u-sidebar-thread-dot');const rect=dot.getBoundingClientRect();Math.abs(rect.x+rect.width/2-(list.getBoundingClientRect().x+parseFloat(getComputedStyle(list,'::before').left)+0.5))<1"), true, "guide passes through marker centers");
       const code = await evaluate("getComputedStyle(document.querySelector('.token.keyword')).color");
       const keyword = await evaluate("const probe=document.createElement('span');probe.style.color='var(--code-keyword)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();color");
       assert.equal(code, keyword, "Prism follows the selected profile");
@@ -119,8 +132,12 @@ createRoot(document.getElementById('root')).render(<Harness/>);
     await evaluate("document.querySelector('[aria-label=\"Chalk, light theme\"]').click()");
     await new Promise(resolve => setTimeout(resolve, 150));
     fs.writeFileSync("/tmp/unbiased-theme-settings-chalk.png", (await win.webContents.capturePage()).toPNG());
+    await evaluate("window.qaView('samples')");
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const sidebarBounds = await evaluate("const r=document.querySelector('[data-testid=project-tree]').getBoundingClientRect();({x:Math.round(r.x),y:Math.round(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)})");
+    fs.writeFileSync("/tmp/unbiased-theme-project-tree.png", (await win.webContents.capturePage(sidebarBounds)).toPNG());
     assert.deepEqual(errors.filter(error => !error.includes("Electron Security Warning")), []);
-    console.log("PASS: real settings select six profiles by mouse/keyboard, preserve fonts and legacy preferences, persist across reload, customize/reset, fit narrow layouts, retheme Prism/Mermaid and retain the running terminal.");
+    console.log("PASS: real settings select six profiles by mouse/keyboard, preserve fonts and legacy preferences, persist across reload, customize/reset, fit narrow layouts, retheme Prism/Mermaid and retain the running terminal; project guides and hollow/status markers remain aligned in every theme.");
   } finally { win.destroy(); fs.rmSync(fixture, { recursive: true, force: true }); }
 }
 main().then(() => app.exit(0), error => { console.error(error); app.exit(1); });

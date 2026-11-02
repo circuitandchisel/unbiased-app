@@ -3896,7 +3896,7 @@ export function App() {
                 )}
               </div>
               {!collapsedProjects.has(p.id) && p.threads.some((t) => !pinnedThreadIds.has(t.id)) && (
-                <div className="u-sidebar-thread-list">
+                <div className="u-sidebar-thread-list u-sidebar-thread-list--project">
                   {p.threads.filter((t) => !pinnedThreadIds.has(t.id)).map((t) => (
                     <ThreadRow
                       key={t.id}
@@ -3906,6 +3906,7 @@ export function App() {
                       running={runningThreads.has(t.id)}
                       unread={unreadCompletedThreads.has(t.id)}
                       indent
+                      projectChild
                       onHover={setHoveredThreadId}
                       onOpen={openThread}
                       onTogglePin={() => toggleThreadPin(t, true)}
@@ -19780,6 +19781,7 @@ function ThreadRow({
   unread,
   pinned,
   indent,
+  projectChild,
   onHover,
   onOpen,
   onTogglePin,
@@ -19793,6 +19795,7 @@ function ThreadRow({
   unread?: boolean;
   pinned?: boolean;
   indent?: boolean;
+  projectChild?: boolean;
   onHover: (id: string | null) => void;
   onOpen: (id: string) => Promise<void>;
   onTogglePin: () => void;
@@ -19848,7 +19851,7 @@ function ThreadRow({
           {pinned ? <PinOff size={14} strokeWidth={1.8} /> : <Pin size={14} strokeWidth={1.8} />}
         </button>
       )}
-      {indent && (running || unread) && (
+      {indent && (projectChild || running || unread) && (
         <span
           className={`u-sidebar-thread-dot${running ? " is-running" : unread ? " is-unread" : ""}`}
           role={running || unread ? "status" : undefined}
@@ -19895,7 +19898,7 @@ function ThreadRow({
               width: 7,
               height: 7,
               borderRadius: "50%",
-              background: running ? "var(--accent)" : "#4bbf87",
+              background: running ? "var(--accent)" : "var(--ok)",
               flexShrink: 0,
               animation: running ? "unbiased-pulse 1.2s ease-in-out infinite" : undefined,
             }}

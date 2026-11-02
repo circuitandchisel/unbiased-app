@@ -166,6 +166,18 @@
       .u-sidebar-thread-list {
         position: relative;
       }
+      /* Project children share a guide through their hollow/status markers. */
+      .u-sidebar-thread-list--project::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 19px;
+        width: 1px;
+        background: color-mix(in srgb, var(--fg) 22%, transparent);
+        pointer-events: none;
+        z-index: 1;
+      }
       .u-sidebar-project-row {
         margin-bottom: 2px;
       }
