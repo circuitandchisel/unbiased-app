@@ -70,6 +70,7 @@ import { parsePinnedThreads, togglePinnedThread } from "./sidebar-pins";
 import { parseUnreadCompletedThreads, setThreadUnread, unreadAfterThreadActivity } from "./sidebar-unread";
 import { groupRecentThreads } from "./sidebar-recency";
 import { browserHistoryUrl, parseBrowserVisits, recordBrowserVisit, suggestedBrowserSites, updateBrowserVisitTitle, type BrowserVisit } from "./browser-start";
+import { browserLinkAction } from "./browser-tabs";
 import { appendCommandOutputDelta, closeFinishedAutoOpenedPanels, commandStatusAfterEvent, settleTurnSteps, settleUnconfirmedSteps, showsCommandOutputPanel } from "./transcript-command-status";
 import { dayMarkerIndices, formatConversationDayMarker, formatConversationTime } from "../../shared/conversation-time";
 import { shiftRunningTurnStart } from "../../shared/transcript-pages";
@@ -2255,7 +2256,9 @@ export function App() {
     browserTabsRef.current = [];
     setBrowserTabs([]);
     blankBrowserTabsRef.current.clear();
+    pendingBrowserUrlsRef.current.clear();
     setAgentMirrorOpen(false);
+    browserStatesRef.current = {};
     setBrowserStates({});
     lastRecordedBrowserUrl.current.clear();
     // The main process closes these panes and retains their threads briefly.
@@ -2537,6 +2540,7 @@ export function App() {
   const browserTabsRef = useRef(browserTabs);
   browserTabsRef.current = browserTabs;
   const blankBrowserTabsRef = useRef(new Set<number>());
+  const pendingBrowserUrlsRef = useRef(new Map<number, string>());
   const sideChatsRef = useRef(sideChats);
   sideChatsRef.current = sideChats;
   const [browserStates, setBrowserStates] = useState<Record<number, BrowserState>>({});
@@ -2550,7 +2554,9 @@ export function App() {
   useEffect(
     () =>
       window.unbiased.onBrowserState((st) => {
-        setBrowserStates((states) => ({ ...states, [st.id]: st }));
+        browserStatesRef.current = { ...browserStatesRef.current, [st.id]: st };
+        setBrowserStates(browserStatesRef.current);
+        if (st.url && st.url !== "about:blank") pendingBrowserUrlsRef.current.delete(st.id);
         const url = browserHistoryUrl(st.url);
         if (!url) {
           lastRecordedBrowserUrl.current.delete(st.id);
@@ -2855,6 +2861,7 @@ export function App() {
     if (browserTabsRef.current.length >= MAX_TABS_PER_KIND) return false;
     const id = tabIdRef.current++;
     if (!url) blankBrowserTabsRef.current.add(id);
+    else pendingBrowserUrlsRef.current.set(id, url);
     browserTabsRef.current = [...browserTabsRef.current, id];
     setBrowserTabs(browserTabsRef.current);
     setPanelMode(`browser:${id}`);
@@ -2870,15 +2877,23 @@ export function App() {
     }
   }
 
-  // A new link must not replace an open page. At the tab cap, let the system
-  // browser handle it rather than discarding or overwriting a live tab.
+  // Reuse the same destination without navigating/reloading its live page.
+  // At the cap, new destinations still go to the system browser.
   function openInBrowser(url: string) {
     if (!/^https?:\/\//i.test(url)) return;
     if (isStripeOnboardingPage(url, window.location.protocol === "http:")) {
       void window.unbiased.openExternal(url);
       return;
     }
-    if (!createBrowserTab(url)) void window.unbiased.openExternal(url);
+    const action = browserLinkAction(url, browserTabsRef.current, browserStatesRef.current, pendingBrowserUrlsRef.current, MAX_TABS_PER_KIND);
+    if (action.kind === "focus") {
+      setPanelMode(`browser:${action.id}`);
+      setSideOpenPersisted(true);
+    } else if (action.kind === "external") {
+      void window.unbiased.openExternal(url);
+    } else if (action.kind === "create" && !createBrowserTab(url)) {
+      void window.unbiased.openExternal(url);
+    }
   }
 
   const openInBrowserRef = useRef(openInBrowser);
@@ -2890,13 +2905,14 @@ export function App() {
 
   function closeBrowserTab(id: number) {
     blankBrowserTabsRef.current.delete(id);
+    pendingBrowserUrlsRef.current.delete(id);
     lastRecordedBrowserUrl.current.delete(id);
-    setBrowserTabs((ts) => ts.filter((x) => x !== id));
-    setBrowserStates((m) => {
-      const rest = { ...m };
-      delete rest[id];
-      return rest;
-    });
+    browserTabsRef.current = browserTabsRef.current.filter((x) => x !== id);
+    setBrowserTabs(browserTabsRef.current);
+    const rest = { ...browserStatesRef.current };
+    delete rest[id];
+    browserStatesRef.current = rest;
+    setBrowserStates(rest);
     void window.unbiased.closeBrowser(id);
     // Fallback to a surviving tab happens in the tab-order effect.
   }

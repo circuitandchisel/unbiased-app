@@ -63,6 +63,9 @@ jobs:
       - name: Smoke test theme profiles
         run: npm run smoke:themes
 
+      - name: Smoke test side browser tab reuse
+        run: npm run smoke:browser-tabs
+
   browser-bundle:
     name: Browser bundle
     runs-on: macos-15
