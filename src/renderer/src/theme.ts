@@ -233,6 +233,10 @@ export function customizeTheme(theme: ThemeConfig, patch: Partial<Omit<ThemeConf
   return { ...theme, ...patch, fonts: { ...(patch.fonts ?? theme.fonts) }, ...(colorsChanged ? { profile: "custom" as const } : {}), ...(deriveSurfaces ? { palette: undefined } : {}) };
 }
 
+function fontOrDefault(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() && value.length <= 300 ? value : fallback;
+}
+
 export function themeVars(theme: ThemeConfig): Record<string, string> {
   const light = themeMode(theme) === "light";
   const mix = (step: number) => mixHex(theme.surface, theme.ink, Math.min(step * Math.max(theme.contrast, 5) / 50, 1));
@@ -252,7 +256,7 @@ export function themeVars(theme: ThemeConfig): Record<string, string> {
     "--code-keyword": p?.codeKeyword ?? theme.accent, "--code-function": p?.codeFunction ?? (light ? "#285F9A" : "#8EBDF0"),
     "--code-number": p?.codeNumber ?? (light ? "#744D08" : "#E4BE7B"),
     "--accent-tint": light ? "8%" : "14%", "--color-scheme": light ? "light" : "dark",
-    "--font-ui": `${theme.fonts.ui}, -apple-system, system-ui, sans-serif`, "--font-code": `${theme.fonts.code}, ui-monospace, Menlo, monospace`,
+    "--font-ui": `${fontOrDefault(theme.fonts.ui, DEFAULT_FONTS.ui)}, -apple-system, system-ui, sans-serif`, "--font-code": `${fontOrDefault(theme.fonts.code, DEFAULT_FONTS.code)}, ui-monospace, Menlo, monospace`,
     colorScheme: light ? "light" : "dark",
   };
 }
@@ -276,8 +280,8 @@ function decodeTheme(value: unknown): ThemeConfig | null {
     for (const key of ["ui", "code"] as const) {
       const font = (raw.fonts as Record<string, unknown>)[key];
       if (font !== undefined) {
-        if (typeof font !== "string" || !font.trim() || font.length > 300) return null;
-        result.fonts[key] = font;
+        // A partial font edit must never invalidate the user's colors/profile.
+        result.fonts[key] = fontOrDefault(font, DEFAULT_FONTS[key]);
       }
     }
   }

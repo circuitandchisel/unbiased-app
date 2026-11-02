@@ -108,6 +108,24 @@ createRoot(document.getElementById('root')).render(<Harness/>);
     await until("window.qaTheme?.profile==='chalk'", "selected profile survives reload");
     assert.equal(await evaluate("document.documentElement.style.colorScheme"), "light");
     await evaluate("window.qaView('settings')");
+    await until("document.querySelector('[aria-label=\"Tide, dark theme\"]')!==null", "settings return after reload");
+    await evaluate("document.querySelector('[aria-label=\"Tide, dark theme\"]').click()");
+    await until("window.qaTheme.profile==='tide'", "Tide selected before editing fonts");
+    for (const [label, key, fallback] of [["UI font", "ui", "Geist, Inter"], ["Code font", "code", '\"Geist Mono\", ui-monospace, \"SFMono-Regular\"']]) {
+      await evaluate("document.querySelector('.u-theme-customize').open=true");
+      const otherKey = key === "ui" ? "code" : "ui";
+      const otherFont = await evaluate(`window.qaTheme.fonts.${otherKey}`);
+      await evaluate(`const field=document.querySelector('[aria-label="${label}"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'');field.dispatchEvent(new Event('input',{bubbles:true}))`);
+      await until(`window.qaTheme.fonts.${key}===''`, `${label} can be cleared`);
+      assert.equal(await evaluate("JSON.parse(localStorage.getItem('themeV1')).profile"), "tide");
+      await new Promise(resolve => { win.webContents.once("did-finish-load", resolve); win.webContents.reload(); });
+      await until("window.qaTheme?.profile==='tide'", `clearing ${label} preserves Tide across reload`);
+      assert.equal(await evaluate(`window.qaTheme.fonts.${key}`), fallback);
+      assert.equal(await evaluate(`window.qaTheme.fonts.${otherKey}`), otherFont, "the other font remains unchanged");
+      assert.equal(await evaluate("window.qaTheme.surface"), "#111B23");
+      await evaluate("window.qaView('settings')");
+      await until("document.querySelector('[aria-label=\"Tide, dark theme\"]')!==null", "settings remount");
+    }
     await click("Reset to default");
     await until("window.qaTheme.profile==='ember'", "reset restores Ember");
     assert.equal(await evaluate("window.qaTheme.fonts.ui"), "Geist, Inter");
@@ -139,7 +157,7 @@ createRoot(document.getElementById('root')).render(<Harness/>);
     const sidebarBounds = await evaluate("const r=document.querySelector('[data-testid=project-tree]').getBoundingClientRect();({x:Math.round(r.x),y:Math.round(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)})");
     fs.writeFileSync("/tmp/unbiased-theme-project-tree.png", (await win.webContents.capturePage(sidebarBounds)).toPNG());
     assert.deepEqual(errors.filter(error => !error.includes("Electron Security Warning")), []);
-    console.log("PASS: real settings select six profiles by mouse/keyboard, preserve fonts and legacy preferences, persist across reload, customize/reset, fit narrow layouts, retheme Prism/Mermaid and retain the running terminal; Project, Pinned, and Recents guides and hollow/status markers remain aligned in every theme.");
+    console.log("PASS: real settings select six profiles by mouse/keyboard, preserve fonts and legacy preferences, persist across reload even after clearing either font, customize/reset, fit narrow layouts, retheme Prism/Mermaid and retain the running terminal; Project, Pinned, and Recents guides and hollow/status markers remain aligned in every theme.");
   } finally { win.destroy(); fs.rmSync(fixture, { recursive: true, force: true }); }
 }
 main().then(() => app.exit(0), error => { console.error(error); app.exit(1); });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contrastRatio, customizeTheme, DEFAULT_THEME, loadTheme, mixHex, parseThemeImport, saveTheme, selectedThemeProfile, THEME_PROFILES, themeForProfile, themeMode, themeVars } from "./theme";
+import { contrastRatio, customizeTheme, DEFAULT_FONTS, DEFAULT_THEME, loadTheme, mixHex, parseThemeImport, saveTheme, selectedThemeProfile, THEME_PROFILES, themeForProfile, themeMode, themeVars } from "./theme";
 
 test("six original profiles cover light/dark and keep text, links and statuses readable", () => {
   assert.deepEqual(THEME_PROFILES.map(profile => profile.id), ["ember", "chalk", "tide", "grove", "dune", "vesper"]);
@@ -71,4 +71,30 @@ test("existing Codex imports still work; malformed saved/imported values fail sa
   const stale = parseThemeImport(JSON.stringify({ ...themeForProfile("chalk"), surface: "#111111" }));
   assert.equal(selectedThemeProfile(stale!), null);
   assert.deepEqual(loadTheme({ getItem: () => { throw new Error("unavailable"); } }), DEFAULT_THEME);
+});
+
+test("invalid font edits fall back individually without losing the saved theme", () => {
+  for (const key of ["ui", "code"] as const) {
+    for (const value of ["", "   ", "x".repeat(301), null, 42]) {
+      const theme = themeForProfile("tide", { ui: "Custom UI", code: "Menlo" });
+      const raw = { ...theme, fonts: { ...theme.fonts, [key]: value } };
+      const restored = loadTheme({ getItem: () => JSON.stringify(raw) });
+      assert.equal(restored.profile, "tide");
+      assert.deepEqual(restored.palette, theme.palette);
+      assert.equal(restored.accent, theme.accent);
+      assert.equal(restored.surface, theme.surface);
+      assert.equal(restored.fonts[key], DEFAULT_FONTS[key]);
+      const other = key === "ui" ? "code" : "ui";
+      assert.equal(restored.fonts[other], theme.fonts[other]);
+    }
+  }
+  const custom = customizeTheme(themeForProfile("dune"), { accent: "#7A3456" });
+  custom.fonts = { ui: "", code: " " };
+  const restored = loadTheme({ getItem: () => JSON.stringify(custom) });
+  assert.equal(restored.profile, "custom");
+  assert.equal(restored.accent, custom.accent);
+  assert.deepEqual(restored.palette, custom.palette);
+  assert.deepEqual(restored.fonts, DEFAULT_FONTS);
+  assert.equal(themeVars(custom)["--font-ui"], themeVars(restored)["--font-ui"], "blank fields also use default fonts before restart");
+  assert.equal(themeVars(custom)["--font-code"], themeVars(restored)["--font-code"]);
 });

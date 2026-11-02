@@ -17505,6 +17505,7 @@ function SettingsView({
             <div style={rowStyle}>
               <span>UI font</span>
               <input
+                aria-label="UI font"
                 value={theme.fonts.ui}
                 onChange={(e) => onChange(customizeTheme(theme, { fonts: { ...theme.fonts, ui: e.target.value } }))}
                 spellCheck={false}
@@ -17514,6 +17515,7 @@ function SettingsView({
             <div style={rowStyle}>
               <span>Code font</span>
               <input
+                aria-label="Code font"
                 value={theme.fonts.code}
                 onChange={(e) => onChange(customizeTheme(theme, { fonts: { ...theme.fonts, code: e.target.value } }))}
                 spellCheck={false}
