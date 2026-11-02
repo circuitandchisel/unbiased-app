@@ -6,9 +6,9 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 28px;
-  background: #1b1d1f;
+  background: var(--panel);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
-  color: #f4f6f8;
+  color: var(--fg);
   font-family: var(--font-ui);
   font-size: 14px;
 }
@@ -20,7 +20,7 @@
   gap: 12px;
   min-height: 46px;
   padding: 0 14px 0 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--border);
 }
 
 .mermaid-diagram__title,
@@ -44,13 +44,13 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #b6bec6;
+  color: var(--dim);
   cursor: pointer;
 }
 
 .mermaid-diagram__tools button:hover:not(:disabled) {
-  background: #303438;
-  color: #f4f6f8;
+  background: var(--chip-raised);
+  color: var(--fg);
 }
 
 .mermaid-diagram__tools button:disabled {
@@ -73,8 +73,8 @@
 .mermaid-diagram__viewport {
   max-height: min(70vh, 700px);
   overflow: auto;
-  background-color: #191b1e;
-  background-image: radial-gradient(#34393d 0.6px, transparent 0.6px);
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--border) 0.6px, transparent 0.6px);
   background-size: 20px 20px;
 }
 
@@ -85,7 +85,7 @@
 
 .mermaid-diagram__viewport::-webkit-scrollbar-thumb {
   border-radius: 3px;
-  background: #41474c;
+  background: var(--gutter);
 }
 
 .mermaid-diagram__drawing {
@@ -107,5 +107,5 @@
   min-height: 96px;
   box-sizing: border-box;
   padding: 24px;
-  color: #adb3ba;
+  color: var(--dim);
 }

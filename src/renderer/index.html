@@ -56,8 +56,8 @@
          The UA default is the right answer; the theme's own font stack already
          carries the tuning. */
       ::-webkit-scrollbar { width: 6px; height: 6px; }
-      ::-webkit-scrollbar-thumb { background: #3a3a40; border-radius: 3px; }
-      ::-webkit-scrollbar-thumb:hover { background: #4a4a52; }
+      ::-webkit-scrollbar-thumb { background: var(--gutter, #3a3a40); border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--dim, #4a4a52); }
       ::-webkit-scrollbar-track { background: transparent; }
 
       /* Keyboard focus. Every control in this app sets outline:none and, until
@@ -193,7 +193,7 @@
         animation: unbiased-pulse 1.2s ease-in-out infinite;
       }
       .u-sidebar-thread-dot.is-unread {
-        background: #4bbf87;
+        background: var(--ok, #4bbf87);
       }
       .u-sidebar-pin-toggle {
         color: var(--dim);

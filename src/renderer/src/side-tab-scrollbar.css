@@ -34,10 +34,10 @@
 }
 
 .u-side-tab-strip::-webkit-scrollbar-thumb {
-  background: #3a3a40;
+  background: var(--gutter);
   border-radius: 2px;
 }
 
 .u-side-tab-strip::-webkit-scrollbar-thumb:hover {
-  background: #56565c;
+  background: var(--dim);
 }

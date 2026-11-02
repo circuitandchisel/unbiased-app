@@ -31,7 +31,10 @@ import "prismjs/components/prism-toml";
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-sql";
 import "prismjs/components/prism-markdown";
-import "prismjs/themes/prism-tomorrow.css";
+import "./syntax-theme.css";
+import { ThemeProfiles, ThemeColorRow } from "./theme-profiles";
+import { DEFAULT_THEME, applyDocumentTheme, customizeTheme, loadTheme, parseThemeImport, saveTheme, selectedThemeProfile, THEME_CHANGE_EVENT, themeVars, type ThemeConfig } from "./theme";
+export type { ThemeConfig } from "./theme";
 import "./side-tab-scrollbar.css";
 import "./project-picker.css";
 import "./mermaid-diagram.css";
@@ -949,7 +952,7 @@ declare global {
 }
 
 // All chrome colors resolve through CSS variables set from the active
-// theme at the root — see themeVars(). Semantic status colors stay fixed.
+// theme at the root — see themeVars(). Status hues retain their meaning in every profile.
 const colors = {
   bg: "var(--bg)",
   panel: "var(--panel)",
@@ -957,9 +960,9 @@ const colors = {
   fg: "var(--fg)",
   dim: "var(--dim)",
   accent: "var(--accent)",
-  ok: "#5DCAA5",
-  err: "#F09595",
-  amber: "#FAC775",
+  ok: "var(--ok)",
+  err: "var(--err)",
+  amber: "var(--amber)",
 };
 
 // ── Buttons ─────────────────────────────────────────────────────────────
@@ -979,7 +982,7 @@ const btnPrimaryStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  background: "color-mix(in srgb, var(--accent) 14%, transparent)",
+  background: "color-mix(in srgb, var(--accent) var(--accent-tint, 14%), transparent)",
   border: "none",
   borderRadius: 999,
   color: colors.accent,
@@ -1012,145 +1015,6 @@ const btnSmallStyle: React.CSSProperties = {
   padding: "6px 14px",
   flexShrink: 0,
 };
-
-export type ThemeConfig = {
-  accent: string;
-  surface: string;
-  ink: string;
-  contrast: number; // 0..100, 50 = baseline
-  fonts: { ui: string; code: string };
-};
-
-// The default follows the user's Codex dark theme (codex-theme-v1 import).
-const DEFAULT_THEME: ThemeConfig = {
-  accent: "#FF563F",
-  surface: "#111111",
-  ink: "#fcfcfc",
-  contrast: 50,
-  fonts: { ui: "Geist, Inter", code: '"Geist Mono", ui-monospace, "SFMono-Regular"' },
-};
-
-function loadTheme(): ThemeConfig {
-  try {
-    const parsed = JSON.parse(localStorage.getItem("themeV1") ?? "");
-    return { ...DEFAULT_THEME, ...parsed, fonts: { ...DEFAULT_THEME.fonts, ...(parsed.fonts ?? {}) } };
-  } catch {
-    return DEFAULT_THEME;
-  }
-}
-
-function saveTheme(t: ThemeConfig): void {
-  localStorage.setItem("themeV1", JSON.stringify(t));
-}
-
-function hexToRgb(hex: string): [number, number, number] | null {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-function mixHex(a: string, b: string, t: number): string {
-  const ra = hexToRgb(a) ?? [17, 17, 17];
-  const rb = hexToRgb(b) ?? [252, 252, 252];
-  const mixed = ra.map((v, i) => Math.round(v + (rb[i] - v) * t));
-  return "#" + mixed.map((v) => v.toString(16).padStart(2, "0")).join("");
-}
-
-/** WCAG 2.1 relative luminance — the gamma-corrected kind the contrast
- *  formula is defined against, not a weighted average of the raw channels. */
-function relLuminance(hex: string): number {
-  const [r, g, b] = hexToRgb(hex) ?? [0, 0, 0];
-  const lin = (v: number) => {
-    const s = v / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-/** WCAG contrast ratio between two opaque colours, 1:1 … 21:1. */
-function contrastRatio(a: string, b: string): number {
-  const la = relLuminance(a);
-  const lb = relLuminance(b);
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-}
-
-/**
- * Which ink to put ON a filled swatch — measured, not guessed.
- *
- * This used to be a Rec.601 luma test against a 0.6 threshold, and it got the
- * brand accent wrong: #FF563F lands at luma 0.525, so it chose white, which is
- * 3.16:1 — under the 4.5:1 WCAG AA needs for body text. Dark ink on the same
- * fill is 5.98:1, nearly double. The design system flags the identical trap in
- * its own notes, calling brand-fill contrast "already borderline (~3.1:1)".
- *
- * A retuned threshold would only move the failure to a different hue, and the
- * accent is user-themeable — an imported theme can carry any colour at all. So
- * compare the two candidates properly and take the winner; that is right for
- * every accent rather than for the one we happened to test.
- */
-function bestInkOn(fill: string): string {
-  return contrastRatio("#111111", fill) >= contrastRatio("#ffffff", fill) ? "#111111" : "#ffffff";
-}
-
-/** Derive every chrome shade from surface + ink + contrast, Codex-style. */
-function themeVars(t: ThemeConfig): Record<string, string> {
-  const k = Math.max(t.contrast, 5) / 50;
-  const m = (x: number) => mixHex(t.surface, t.ink, Math.min(x * k, 1));
-  return {
-    "--bg": t.surface,
-    "--fg": t.ink,
-    "--accent": t.accent,
-    // Match the lighter coral used by the dotted project heading.
-    "--link": "#FF7764",
-    "--accent-fg": bestInkOn(t.accent),
-    "--nav-bg": m(0.05),
-    "--code-bg": mixHex(t.surface, "#000000", 0.3),
-    "--code-fg": mixHex(t.ink, t.surface, 0.14),
-    "--panel": m(0.05),
-    "--panel-2": m(0.09),
-    "--chip": m(0.09),
-    // A control resting on an inset needs to sit ABOVE it. --chip and
-    // --panel-2 are the same 0.09 step, so a chip button dropped into an inset
-    // group rendered as bare text on an identically-shaded field — visible in
-    // the MCP panel and the Skills list both. This is the step up that makes a
-    // row action read as a control, and it scales with contrast like the rest
-    // of the ladder rather than being a fixed colour.
-    "--chip-raised": m(0.17),
-    "--border": m(0.095),
-    "--dim": mixHex(t.surface, t.ink, 0.52),
-    // Between fg and dim: sidebar thread titles, Codex-style.
-    "--fg-soft": mixHex(t.surface, t.ink, 0.78),
-    // Assistant prose stays readable without competing with controls and headings.
-    "--fg-msg": mixHex(t.surface, t.ink, 0.84),
-    "--gutter": m(0.25),
-    "--font-ui": `${t.fonts.ui}, -apple-system, system-ui, sans-serif`,
-    "--font-code": `${t.fonts.code}, ui-monospace, Menlo, monospace`,
-  };
-}
-
-/** Parse a Codex theme export: `codex-theme-v1:{...}` or the raw JSON. */
-function parseThemeImport(raw: string): ThemeConfig | null {
-  try {
-    const json = raw.trim().replace(/^codex-theme-v1:/, "");
-    const parsed = JSON.parse(json);
-    const src = parsed.theme ?? parsed;
-    const next: ThemeConfig = {
-      accent: typeof src.accent === "string" ? src.accent : DEFAULT_THEME.accent,
-      surface: typeof src.surface === "string" ? src.surface : DEFAULT_THEME.surface,
-      ink: typeof src.ink === "string" ? src.ink : DEFAULT_THEME.ink,
-      contrast: typeof src.contrast === "number" ? src.contrast : DEFAULT_THEME.contrast,
-      fonts: {
-        ui: typeof src.fonts?.ui === "string" ? src.fonts.ui : DEFAULT_THEME.fonts.ui,
-        code: typeof src.fonts?.code === "string" ? src.fonts.code : DEFAULT_THEME.fonts.code,
-      },
-    };
-    if (!hexToRgb(next.accent) || !hexToRgb(next.surface) || !hexToRgb(next.ink)) return null;
-    return next;
-  } catch {
-    return null;
-  }
-}
 
 const REMARK_PLUGINS = [remarkGfm];
 const StreamingVisualContext = createContext({ streaming: false, markdown: "" });
@@ -1249,21 +1113,7 @@ function toDisplayBlocks(entries: Entry[]): DisplayBlock[] {
 
 export function App() {
   const [theme, setTheme] = useState<ThemeConfig>(loadTheme);
-  // themeVars() rides as an inline style object on each root wrapper, so no
-  // :root rule exists — which is fine for everything that inherits, and wrong
-  // for exactly one thing. A ::highlight() pseudo is resolved at document
-  // level and cannot see a variable declared on a div, so the annotation tints
-  // were stuck on a hard-coded accent. Publishing this one variable to
-  // documentElement lets index.html's tints follow the user's accent.
-  useEffect(() => {
-    document.documentElement.style.setProperty("--accent", theme.accent);
-  }, [theme.accent]);
-  useEffect(() => {
-    // The body is outside the themed wrapper, so it keeps index.html's static
-    // dark unless told the live surface colour. Only visible if some layout
-    // escapes the root — at which point dark beats white.
-    document.body.style.background = theme.surface;
-  }, [theme.surface]);
+  useEffect(() => { applyDocumentTheme(theme); }, [theme]);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("appearance");
   const [showChangelog, setShowChangelog] = useState(false);
@@ -5703,7 +5553,7 @@ export function App() {
                 onClick={() => void discardAndSwitch()}
                 disabled={branchBusy}
                 style={{
-                  background: "rgba(240, 149, 149, 0.14)",
+                  background: "color-mix(in srgb, var(--err) 14%, transparent)",
                   border: "none",
                   borderRadius: 999,
                   color: colors.err,
@@ -5966,7 +5816,7 @@ export function App() {
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  background: "rgba(240, 149, 149, 0.14)",
+                  background: "color-mix(in srgb, var(--err) 14%, transparent)",
                   border: "none",
                   borderRadius: 999,
                   color: colors.err,
@@ -6356,7 +6206,7 @@ export function App() {
                     setEditProj(null);
                     setConfirmDialog({ kind: "remove", id, name, count: 0 });
                   }}
-                  style={{ background: "rgba(240, 149, 149, 0.14)", border: "none", borderRadius: 10, color: colors.err, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit", padding: "9px 16px" }}
+                  style={{ background: "color-mix(in srgb, var(--err) 14%, transparent)", border: "none", borderRadius: 10, color: colors.err, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit", padding: "9px 16px" }}
                 >
                   Remove local project
                 </button>
@@ -6597,7 +6447,7 @@ export function App() {
               <button
                 onClick={() => void runConfirmedAction()}
                 style={{
-                  background: "rgba(240, 149, 149, 0.14)",
+                  background: "color-mix(in srgb, var(--err) 14%, transparent)",
                   border: "none",
                   borderRadius: 10,
                   color: colors.err,
@@ -7114,7 +6964,7 @@ function ReviewPane({ gitPath }: { gitPath: string | null }) {
               width: 8,
               height: 8,
               borderRadius: 2,
-              border: "1.5px solid #FF8A50",
+              border: `1.5px solid ${colors.amber}`,
               flexShrink: 0,
             }}
           />
@@ -7134,7 +6984,7 @@ function ReviewPane({ gitPath }: { gitPath: string | null }) {
             <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {n.name}
             </span>
-            <span style={{ width: 6, height: 6, borderRadius: 3, background: "#FF8A50", flexShrink: 0 }} />
+            <span style={{ width: 6, height: 6, borderRadius: 3, background: colors.amber, flexShrink: 0 }} />
           </div>
           {renderTree(n.children, depth + 1)}
         </div>
@@ -7413,9 +7263,9 @@ function ReviewPane({ gitPath }: { gitPath: string | null }) {
                               lineHeight: 1.6,
                               background:
                                 l.t === "a"
-                                  ? "rgba(93, 202, 165, 0.10)"
+                                  ? "color-mix(in srgb, var(--ok) 10%, transparent)"
                                   : l.t === "d"
-                                    ? "rgba(240, 110, 110, 0.11)"
+                                    ? "color-mix(in srgb, var(--err) 11%, transparent)"
                                     : "transparent",
                             }}
                           >
@@ -8280,18 +8130,21 @@ function TerminalPane() {
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const cs = getComputedStyle(host);
-    const v = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
+    const defaults = themeVars(DEFAULT_THEME);
+    const v = (name: string, fallback = defaults[name]) => getComputedStyle(host).getPropertyValue(name).trim() || fallback;
+    const terminalTheme = () => ({
+      background: v("--code-bg"), foreground: v("--code-fg"), cursor: v("--accent"), cursorAccent: v("--accent-fg"),
+      selectionBackground: v("--border"),
+      black: v("--dim"), brightBlack: v("--dim"), white: v("--fg-soft"), brightWhite: v("--fg"),
+      red: v("--err"), brightRed: v("--err"), green: v("--ok"), brightGreen: v("--ok"),
+      yellow: v("--amber"), brightYellow: v("--amber"), blue: v("--info"), brightBlue: v("--info"),
+      magenta: v("--violet"), brightMagenta: v("--violet"), cyan: v("--cyan"), brightCyan: v("--cyan"),
+    });
     const term = new Terminal({
       fontFamily: v("--font-code", "Menlo, monospace"),
       fontSize: 12.5,
       cursorBlink: true,
-      theme: {
-        background: v("--code-bg", "#0d0d0d"),
-        foreground: v("--fg", "#fcfcfc"),
-        cursor: v("--accent", "#FF563F"),
-        selectionBackground: "rgba(127, 127, 127, 0.35)",
-      },
+      theme: terminalTheme(),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -8327,9 +8180,16 @@ function TerminalPane() {
       if (termId) void window.unbiased.resizeTerminal(termId, term.cols, term.rows);
     });
     ro.observe(host);
+    const retheme = () => {
+      term.options.theme = terminalTheme();
+      term.options.fontFamily = v("--font-code", "Menlo, monospace");
+      if (host.offsetWidth > 0) fit.fit();
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, retheme);
 
     return () => {
       disposed = true;
+      window.removeEventListener(THEME_CHANGE_EVENT, retheme);
       ro.disconnect();
       dataDisp.dispose();
       offs.forEach((off) => off());
@@ -8871,7 +8731,7 @@ function FileViewer({
                 right: 0,
                 top: PAD_TOP + (file.line - 1) * LINE_H,
                 height: LINE_H,
-                background: "color-mix(in srgb, var(--accent) 14%, transparent)",
+                background: "color-mix(in srgb, var(--accent) var(--accent-tint, 14%), transparent)",
                 pointerEvents: "none",
               }}
             />
@@ -11480,7 +11340,7 @@ function ChatPane({
   const contextBreakdownRows = contextBreakdown
     ? [
         { key: "system", label: "System instructions", tokens: contextBreakdown.systemTokens, color: colors.dim },
-        { key: "tools", label: "Tool definitions", tokens: contextBreakdown.toolsTokens, color: "#9b7cff" },
+        { key: "tools", label: "Tool definitions", tokens: contextBreakdown.toolsTokens, color: "var(--violet)" },
         { key: "messages", label: "Messages + other", tokens: contextBreakdown.messageTokens, color: colors.accent },
       ]
     : [];
@@ -12957,7 +12817,7 @@ const CodeBlock = memo(function CodeBlock({ children, position }: { children?: R
   const lang = /language-([\w-]+)/.exec(className)?.[1]?.toLowerCase() ?? "";
   const label = LANGUAGE_NAMES[lang] ?? (lang ? lang.toUpperCase() : "Plain text");
   const text = extractText(children).replace(/\n$/, "");
-  // Syntax colors (prism-tomorrow, already themed for the file viewer).
+  // Syntax colors inherit the profile through CSS variables, including memoized blocks.
   const prismLang = FENCE_TO_PRISM[lang];
   const grammar = prismLang ? Prism.languages[prismLang] : undefined;
   // Every streaming delta re-renders the whole Markdown tree — only
@@ -13111,7 +12971,7 @@ function ConfirmRemove({
           <button
             onClick={onConfirm}
             style={{
-              background: "rgba(240, 149, 149, 0.14)", border: "none", borderRadius: 10,
+              background: "color-mix(in srgb, var(--err) 14%, transparent)", border: "none", borderRadius: 10,
               color: colors.err, fontSize: 14.5, fontWeight: 500, cursor: "pointer",
               fontFamily: "inherit", padding: "9px 18px",
             }}
@@ -13139,7 +12999,7 @@ function IconDangerButton({ label, onClick, disabled }: { label: string; onClick
       style={{
         display: "flex", alignItems: "center", justifyContent: "center",
         width: 30, height: 30, flexShrink: 0,
-        background: hover && !disabled ? "rgba(240, 149, 149, 0.14)" : "transparent",
+        background: hover && !disabled ? "color-mix(in srgb, var(--err) 14%, transparent)" : "transparent",
         border: "none", borderRadius: 999,
         color: disabled ? colors.dim : hover ? colors.err : colors.dim,
         cursor: disabled ? "default" : "pointer",
@@ -14954,7 +14814,7 @@ function ScheduledView({
                                     setConfirmDelete(null);
                                   })
                                 }
-                                style={{ ...ghostButton, color: colors.err, background: "color-mix(in srgb, #F09595 16%, transparent)" }}
+                                style={{ ...ghostButton, color: colors.err, background: "color-mix(in srgb, var(--err) 16%, transparent)" }}
                               >
                                 Delete
                               </button>
@@ -16025,7 +15885,7 @@ function SkillsPanel({ cwd, projectId, onClose }: { cwd: string | null; projectI
               }}
               style={{
                 border: `1px dashed ${dragging ? colors.accent : colors.border}`,
-                background: dragging ? "rgba(255, 86, 63, 0.06)" : "var(--panel-2)",
+                background: dragging ? "color-mix(in srgb, var(--accent) 6%, transparent)" : "var(--panel-2)",
                 borderRadius: 12, padding: "16px 16px", textAlign: "center",
               }}
             >
@@ -16548,8 +16408,8 @@ function LoginView({ onSignedIn }: { onSignedIn: () => void }) {
                     gap: 8,
                     alignItems: "flex-start",
                     color: colors.fg,
-                    background: "rgba(255, 138, 80, 0.10)",
-                    border: "1px solid rgba(255, 138, 80, 0.35)",
+                    background: "color-mix(in srgb, var(--amber) 10%, transparent)",
+                    border: "1px solid color-mix(in srgb, var(--amber) 35%, transparent)",
                     borderRadius: 8,
                     padding: "8px 10px",
                   }}
@@ -16621,7 +16481,7 @@ function LoginView({ onSignedIn }: { onSignedIn: () => void }) {
           </>
         )}
 
-        {warn && <div style={{ color: "#FF8A50", fontSize: 12, marginTop: 12, lineHeight: 1.4 }}>{warn}</div>}
+        {warn && <div style={{ color: colors.amber, fontSize: 12, marginTop: 12, lineHeight: 1.4 }}>{warn}</div>}
       </div>
     </div>
   );
@@ -17058,7 +16918,7 @@ function ResourcesView() {
               <button
                 onClick={() => void runConfirmedDelete()}
                 style={{
-                  background: "rgba(240, 149, 149, 0.14)",
+                  background: "color-mix(in srgb, var(--err) 14%, transparent)",
                   border: "none",
                   borderRadius: 10,
                   color: colors.err,
@@ -17083,6 +16943,25 @@ const agentInstructionsAPI: AgentInstructionsAPI = {
   read: () => window.unbiased.agentInstructions(),
   save: value => window.unbiased.setAgentInstructions(value),
 };
+
+/** Heading above a group of settings. */
+function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section style={{ marginBottom: 36 }}>
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 500,
+          color: "var(--fg-soft)",
+          margin: "0 0 14px 2px",
+        }}
+      >
+        {title}
+      </div>
+      {children}
+    </section>
+  );
+}
 
 function SettingsView({
   initialTab,
@@ -17119,6 +16998,7 @@ function SettingsView({
 }) {
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [search, setSearch] = useState("");
+  const [customizeOpen, setCustomizeOpen] = useState(() => !selectedThemeProfile(theme));
   const [agentPrefs, setAgentPrefs] = useState<AgentStylePrefs | null>(null);
   const [agentPrefsSaving, setAgentPrefsSaving] = useState(false);
   const [agentPrefsError, setAgentPrefsError] = useState<string | null>(null);
@@ -17253,57 +17133,6 @@ function SettingsView({
     outline: "none",
   };
 
-  /** Heading above a group of settings. */
-  function Group({ title, children }: { title: string; children: React.ReactNode }) {
-    return (
-      <section style={{ marginBottom: 36 }}>
-        <div
-          style={{
-            fontSize: 14,
-            fontWeight: 500,
-            color: "var(--fg-soft)",
-            margin: "0 0 14px 2px",
-          }}
-        >
-          {title}
-        </div>
-        {children}
-      </section>
-    );
-  }
-
-  function ColorRow({ label, value, set }: { label: string; value: string; set: (v: string) => void }) {
-    return (
-      <div style={rowStyle}>
-        <span>{label}</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, justifyContent: "flex-end" }}>
-          <input
-            type="color"
-            value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#000000"}
-            onChange={(e) => set(e.target.value)}
-            aria-label={`${label} colour`}
-            style={{
-              width: 26,
-              height: 26,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 7,
-              background: "transparent",
-              padding: 2,
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          />
-          <input
-            value={value}
-            onChange={(e) => set(e.target.value)}
-            spellCheck={false}
-            style={{ ...textInputStyle, flex: "0 0 110px", maxWidth: 110 }}
-          />
-        </span>
-      </div>
-    );
-  }
-
   const settingsSections = [
     {
       group: "Personal",
@@ -17426,7 +17255,7 @@ function SettingsView({
           <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "var(--track-title)", lineHeight: 1.15, margin: "0 0 28px" }}>Updates</h1>
 
-            <Group title="Automatic updates">
+            <SettingsGroup title="Automatic updates">
             <div
               style={{
                 border: `1px solid ${colors.border}`,
@@ -17483,9 +17312,9 @@ function SettingsView({
                 </button>
               </div>
             </div>
-            </Group>
+            </SettingsGroup>
 
-            <Group title="This version">
+            <SettingsGroup title="This version">
             <div
               style={{
                 border: `1px solid ${colors.border}`,
@@ -17514,14 +17343,14 @@ function SettingsView({
                 </>
               )}
             </div>
-            </Group>
+            </SettingsGroup>
           </div>
         ) : tab === "personalization" ? (
           <PersonalizationSettings api={agentInstructionsAPI} />
         ) : tab === "agent" ? (
           <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "var(--track-title)", lineHeight: 1.15, margin: "0 0 28px" }}>Agent</h1>
-            <Group title="Responses">
+            <SettingsGroup title="Responses">
               <div style={{ border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.panel }}>
                 {([
                   { key: "outputDetail", label: "Output detail", options: [["concise", "Brief", "The essentials, without the detour"], ["balanced", "Balanced", "Enough context to act with confidence"], ["detailed", "Thorough", "Explore examples and tradeoffs"]] },
@@ -17541,7 +17370,7 @@ function SettingsView({
                   </div>
                 ))}
               </div>
-            </Group>
+            </SettingsGroup>
             <p style={{ color: colors.dim, fontSize: 12.5, margin: "-18px 0 0 2px" }}>Changes apply when a chat starts or resumes.</p>
             {agentPrefsError && <p role="alert" style={{ color: colors.err, fontSize: 12.5, marginTop: 12 }}>{agentPrefsError}</p>}
           </div>
@@ -17647,7 +17476,12 @@ function SettingsView({
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
           <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "var(--track-title)", lineHeight: 1.15, margin: "0 0 28px" }}>Appearance</h1>
 
-          <Group title="Theme">
+          <SettingsGroup title="Theme">
+            <ThemeProfiles theme={theme} onChange={onChange} />
+          </SettingsGroup>
+          <details className="u-theme-customize" open={customizeOpen} onToggle={event => setCustomizeOpen(event.currentTarget.open)}>
+          <summary>Customize colors and typography</summary>
+          <SettingsGroup title="Colors and typography">
           <div
             style={{
               border: `1px solid ${colors.border}`,
@@ -17657,7 +17491,7 @@ function SettingsView({
             }}
           >
             <div style={{ ...rowStyle, fontWeight: 500 }}>
-              <span>Dark theme</span>
+              <span>{selectedThemeProfile(theme)?.name ?? "Custom theme"}</span>
               <button
                 onClick={() => onChange(DEFAULT_THEME)}
                 style={btnSmallStyle}
@@ -17665,14 +17499,14 @@ function SettingsView({
                 Reset to default
               </button>
             </div>
-            <ColorRow label="Accent" value={theme.accent} set={(v) => onChange({ ...theme, accent: v })} />
-            <ColorRow label="Background" value={theme.surface} set={(v) => onChange({ ...theme, surface: v })} />
-            <ColorRow label="Foreground" value={theme.ink} set={(v) => onChange({ ...theme, ink: v })} />
+            <ThemeColorRow rowStyle={rowStyle} inputStyle={textInputStyle} label="Accent" value={theme.accent} set={(v) => onChange(customizeTheme(theme, { accent: v }))} />
+            <ThemeColorRow rowStyle={rowStyle} inputStyle={textInputStyle} label="Background" value={theme.surface} set={(v) => onChange(customizeTheme(theme, { surface: v }))} />
+            <ThemeColorRow rowStyle={rowStyle} inputStyle={textInputStyle} label="Foreground" value={theme.ink} set={(v) => onChange(customizeTheme(theme, { ink: v }))} />
             <div style={rowStyle}>
               <span>UI font</span>
               <input
                 value={theme.fonts.ui}
-                onChange={(e) => onChange({ ...theme, fonts: { ...theme.fonts, ui: e.target.value } })}
+                onChange={(e) => onChange(customizeTheme(theme, { fonts: { ...theme.fonts, ui: e.target.value } }))}
                 spellCheck={false}
                 style={textInputStyle}
               />
@@ -17681,7 +17515,7 @@ function SettingsView({
               <span>Code font</span>
               <input
                 value={theme.fonts.code}
-                onChange={(e) => onChange({ ...theme, fonts: { ...theme.fonts, code: e.target.value } })}
+                onChange={(e) => onChange(customizeTheme(theme, { fonts: { ...theme.fonts, code: e.target.value } }))}
                 spellCheck={false}
                 style={textInputStyle}
               />
@@ -17694,7 +17528,7 @@ function SettingsView({
                   min={10}
                   max={100}
                   value={theme.contrast}
-                  onChange={(e) => onChange({ ...theme, contrast: Number(e.target.value) })}
+                  onChange={(e) => onChange(customizeTheme(theme, { contrast: Number(e.target.value) }))}
                   style={{ width: 160, accentColor: theme.accent }}
                 />
                 <span style={{ fontVariantNumeric: "tabular-nums", width: 28, textAlign: "right" }}>
@@ -17703,9 +17537,9 @@ function SettingsView({
               </span>
             </div>
           </div>
-          </Group>
+          </SettingsGroup>
 
-          <Group title="Import theme">
+          <SettingsGroup title="Import theme">
           <div
             style={{
               border: `1px solid ${colors.border}`,
@@ -17772,7 +17606,8 @@ function SettingsView({
               {importError && <span style={{ color: colors.err, fontSize: 12.5 }}>{importError}</span>}
             </div>
           </div>
-          </Group>
+          </SettingsGroup>
+          </details>
         </div>
         )}
           </div>
@@ -17804,25 +17639,25 @@ function StartPage({
   const cards = [
     {
       icon: <TelescopeIcon />,
-      color: "#5B9DFF",
+      color: "var(--info)",
       label: "Explore and understand code",
       prompt: "Explore this codebase and explain how it works at a high level.",
     },
     {
       icon: <HammerIcon />,
-      color: "#B58CFF",
+      color: "var(--violet)",
       label: "Build a new feature, app, or tool",
       prompt: "Help me build a new feature: ",
     },
     {
       icon: <ReviewIcon />,
-      color: "#5DCAA5",
+      color: colors.ok,
       label: "Review code and suggest changes",
       prompt: "Review the current changes and suggest improvements.",
     },
     {
       icon: <BugIcon />,
-      color: "#FF8A50",
+      color: colors.amber,
       label: "Fix issues and failures",
       prompt: "Help me find and fix issues or failing tests.",
     },
@@ -17838,16 +17673,16 @@ function StartPage({
             What should we build in{" "}
             <span
               style={{
-                // The logo's lighter coral, not the theme accent.
-                color: "#FF7764",
+                // Keep the brand coral, with a readable variant for light profiles.
+                color: "var(--link)",
                 textDecoration: "underline dotted",
                 textUnderlineOffset: 7,
-                textDecorationColor: "#FF7764",
+                textDecorationColor: "var(--link)",
               }}
             >
               {projectName}
             </span>
-            <span style={{ color: "#FF7764" }}>?</span>
+            <span style={{ color: "var(--link)" }}>?</span>
           </>
         ) : (
           "What should we build?"

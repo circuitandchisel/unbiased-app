@@ -1,15 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { Scan, ZoomIn, ZoomOut } from "lucide-react";
 import { MAX_MERMAID_LENGTH } from "./mermaid-model";
+import { DEFAULT_THEME, THEME_CHANGE_EVENT, themeVars } from "./theme";
 
-let initializedFont: string | null = null;
+let initializedTheme: string | null = null;
 let nextRenderId = 0;
 let renderQueue: Promise<void> = Promise.resolve();
 
-function renderDiagram(diagram: string, fontFamily: string): Promise<string> {
+function renderDiagram(diagram: string, fontFamily: string, colors: Record<string, string>): Promise<string> {
   const task = renderQueue.then(async () => {
     const { default: mermaid } = await import("mermaid");
-    if (initializedFont !== fontFamily) {
+    const themeKey = JSON.stringify([fontFamily, colors]);
+    if (initializedTheme !== themeKey) {
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
@@ -20,21 +22,14 @@ function renderDiagram(diagram: string, fontFamily: string): Promise<string> {
         theme: "base",
         fontFamily,
         themeVariables: {
-          darkMode: true,
-          background: "#191b1e",
-          primaryColor: "#263b3b",
-          primaryTextColor: "#f4f6f8",
-          primaryBorderColor: "#82c7be",
-          secondaryColor: "#3d3239",
-          tertiaryColor: "#303943",
-          lineColor: "#b2bdc7",
-          textColor: "#f4f6f8",
-          clusterBkg: "#22272b",
-          clusterBorder: "#63717b",
-          edgeLabelBackground: "#252a2e",
+          darkMode: colors["--color-scheme"] === "dark",
+          background: colors["--bg"], primaryColor: colors["--panel"], primaryTextColor: colors["--fg"],
+          primaryBorderColor: colors["--accent"], secondaryColor: colors["--panel-2"], tertiaryColor: colors["--nav-bg"],
+          lineColor: colors["--dim"], textColor: colors["--fg"], clusterBkg: colors["--panel-2"],
+          clusterBorder: colors["--border"], edgeLabelBackground: colors["--panel"],
         },
       });
-      initializedFont = fontFamily;
+      initializedTheme = themeKey;
     }
     return (await mermaid.render(`unbiased-mermaid-${++nextRenderId}`, diagram)).svg;
   });
@@ -56,6 +51,12 @@ export function MermaidDiagram({ diagram, title, embedded = false }: { diagram: 
   const [state, setState] = useState<RenderState>({ diagram });
   const [zoom, setZoom] = useState(1);
   const [fitWidth, setFitWidth] = useState<number | null>(null);
+  const [themeRevision, setThemeRevision] = useState(0);
+  useEffect(() => {
+    const update = () => setThemeRevision(value => value + 1);
+    window.addEventListener(THEME_CHANGE_EVENT, update);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, update);
+  }, []);
   useEffect(() => {
     let active = true;
     setState({ diagram });
@@ -64,7 +65,11 @@ export function MermaidDiagram({ diagram, title, embedded = false }: { diagram: 
       return () => { active = false; };
     }
     const fontFamily = containerRef.current ? getComputedStyle(containerRef.current).fontFamily : "system-ui, sans-serif";
-    void renderDiagram(diagram, fontFamily).then(
+    const computed = containerRef.current ? getComputedStyle(containerRef.current) : null;
+    const defaults = themeVars(DEFAULT_THEME);
+    const tokens = ["--color-scheme", "--bg", "--panel", "--fg", "--accent", "--panel-2", "--nav-bg", "--dim", "--border"];
+    const colors = Object.fromEntries(tokens.map(token => [token, computed?.getPropertyValue(token).trim() || defaults[token]]));
+    void renderDiagram(diagram, fontFamily, colors).then(
       (svg) => { if (active) setState({ diagram, svg }); },
       (error) => {
         if (active) {
@@ -74,7 +79,7 @@ export function MermaidDiagram({ diagram, title, embedded = false }: { diagram: 
       },
     );
     return () => { active = false; };
-  }, [diagram]);
+  }, [diagram, themeRevision]);
 
   const current = state.diagram === diagram ? state : { diagram };
   useLayoutEffect(() => {

@@ -36,6 +36,18 @@ Homebrew or Chrome installation is needed. Browser automation requires macOS
 Its separate application identity keeps external links going to
 your normal browser; its separate profile requires its own website sign-ins.
 
+## Appearance
+
+Choose a theme in **Settings → Appearance**: Ember (the Unbiased default),
+Chalk, Tide, Grove, Dune, or Vesper. Each profile coordinates the app's
+surfaces, text, status colors, code blocks, diagrams, and terminal. Changes
+save immediately and keep your font preferences.
+
+Expand **Customize colors and typography** to adjust colors, contrast, or
+fonts, or import an existing Codex theme. Existing custom themes remain
+available after upgrading. **Reset to default** restores Ember and the
+default fonts.
+
 ## Features
 
 - **Streaming chat** with markdown rendering, Prism-highlighted code

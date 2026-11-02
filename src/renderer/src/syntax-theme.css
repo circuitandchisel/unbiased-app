@@ -1,0 +1,11 @@
+/* Prism markup stays unchanged; colors follow the selected profile everywhere. */
+code[class*="language-"], pre[class*="language-"] { color: var(--code-fg); text-shadow: none; background: transparent; }
+.token.comment, .token.prolog, .token.doctype, .token.cdata { color: var(--code-comment); }
+.token.punctuation, .token.operator { color: var(--fg-soft); }
+.token.property, .token.tag, .token.keyword, .token.atrule, .token.important { color: var(--code-keyword); }
+.token.boolean, .token.number, .token.constant, .token.symbol { color: var(--code-number); }
+.token.selector, .token.attr-name, .token.string, .token.char, .token.builtin, .token.inserted { color: var(--code-string); }
+.token.function, .token.class-name, .token.attr-value, .token.regex, .token.variable { color: var(--code-function); }
+.token.deleted { color: var(--err); }
+.token.important, .token.bold { font-weight: 600; }
+.token.italic { font-style: italic; }

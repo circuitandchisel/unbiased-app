@@ -60,6 +60,9 @@ jobs:
           npx electron-vite build
           npm run smoke:personalization
 
+      - name: Smoke test theme profiles
+        run: npm run smoke:themes
+
   browser-bundle:
     name: Browser bundle
     runs-on: macos-15
