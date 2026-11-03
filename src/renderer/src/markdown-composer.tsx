@@ -84,7 +84,18 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
       editor.commands.setTextSelection(editor.state.doc.content.size);
       lastMarkdownRef.current = editor.getMarkdown();
     },
-    canRecallPrompt: (direction, browsing) => !!editor && editor.state.selection.empty && (browsing || editor.view.endOfTextblock(direction)),
+    canRecallPrompt: (direction, browsing) => {
+      if (!editor || !editor.state.selection.empty) return false;
+      if (browsing) return true;
+      const { $head } = editor.state.selection;
+      // A textblock boundary may be in the middle of the draft (paragraphs,
+      // list items, quotes). Let arrows cross those blocks before recalling.
+      for (let depth = 0; depth < $head.depth; depth++) {
+        const index = $head.index(depth), count = $head.node(depth).childCount;
+        if (direction === "up" ? index > 0 : index < count - 1) return false;
+      }
+      return editor.view.endOfTextblock(direction);
+    },
     focus: (position) => { editor?.commands.focus(position); },
     appendText: (text) => { editor?.chain().focus("end").insertContent({ type: "text", text }).run(); },
     replaceSelection: (text) => { editor?.chain().focus().insertContent({ type: "text", text }).run(); },

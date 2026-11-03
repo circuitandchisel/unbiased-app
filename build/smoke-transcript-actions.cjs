@@ -307,5 +307,32 @@ render();
  await until(async()=>await contents('main')==='Second main prompt','Up at the first line enters history');
  await key('ArrowDown','ArrowDown',40);
  await until(async()=>await contents('main')===multiline,'history restores the whole multiline draft');
+ // Separate paragraphs and nested list items must not become history boundaries.
+ const setRichDraft=async(doc,block)=>{
+   await focusComposer('main');
+   await win.webContents.executeJavaScript(`(()=>{const editor=document.querySelector('#main [role=textbox]').editor;editor.commands.setContent(${JSON.stringify(doc)});const blocks=[];editor.state.doc.descendants((node,pos)=>{if(node.isTextblock)blocks.push({pos,size:node.content.size})});const b=blocks[${block}];editor.commands.setTextSelection(b.pos+1+b.size)})()`);
+   await pause();
+ };
+ const paragraph=text=>({type:'paragraph',content:[{type:'text',text}]});
+ const richState=()=>win.webContents.executeJavaScript("(()=>{const e=document.querySelector('#main [role=textbox]').editor;return {doc:e.getJSON(),paragraph:e.state.selection.$head.parent.textContent}})()");
+ const paragraphs={type:'doc',content:[paragraph('First paragraph'),paragraph('Last paragraph')]};
+ await setRichDraft(paragraphs,1);
+ await key('ArrowUp','ArrowUp',38);await pause();
+ assert.deepEqual((await richState()).doc,paragraphs,'Up from the second paragraph must preserve the whole draft');
+ assert.equal((await richState()).paragraph,'First paragraph','Up moves into the preceding paragraph');
+ await key('ArrowDown','ArrowDown',40);await pause();
+ assert.equal((await richState()).paragraph,'Last paragraph','Down moves into the next paragraph');
+ await key('ArrowUp','ArrowUp',38);await pause();await key('ArrowUp','ArrowUp',38);
+ await until(async()=>await contents('main')==='Second main prompt','history starts only above the first paragraph');
+ await key('ArrowDown','ArrowDown',40);await pause();
+ assert.deepEqual((await richState()).doc,paragraphs,'Down restores the original multi-paragraph draft');
+ const list={type:'doc',content:[{type:'bulletList',content:[{type:'listItem',content:[paragraph('First list item')]},{type:'listItem',content:[paragraph('Last list item')]}]}]};
+ await setRichDraft(list,1);
+ const listBefore=(await richState()).doc; // Tiptap may append its normal trailing empty paragraph.
+ await key('ArrowUp','ArrowUp',38);await pause();
+ assert.deepEqual((await richState()).doc,listBefore,'Up between list items must preserve the list');
+ assert.equal((await richState()).paragraph,'First list item','Up moves into the preceding list item');
+ await key('ArrowDown','ArrowDown',40);await pause();
+ assert.equal((await richState()).paragraph,'Last list item','Down moves into the next list item');
  console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, prompt recall/draft restoration and side-chat/Mosaic scope.');win.destroy();app.quit();
 })().catch(e=>{console.error(e);app.exit(1)});

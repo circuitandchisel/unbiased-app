@@ -36,6 +36,11 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     for (let i = 0; i < 150; i++) { if (await evaluate(expression)) return; await new Promise(r => setTimeout(r, 30)); }
     throw new Error('Timed out: ' + expression + '\n' + errors.join('\n')+'\n'+JSON.stringify(await evaluate("({calls:window.qaCalls.slice(-30),tabs:window.qaSideTabs,text:document.body.innerText.slice(-1600)})")));
   };
+  const clickPreview = async id => {
+    const selector = `[data-browser-preview="${id}"]`;
+    await until(`document.querySelector(${JSON.stringify(selector)})!==null`);
+    await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  };
   const active = id => `document.querySelector('[data-browser-host="${id}"]')?.offsetWidth>0`;
   const tab = { id: -1, root: 'main', url: 'https://example.test/', title: 'Background work', agentOwned: true, controlled: true, working: true, lastUsedAt: 1, help: null };
   const emitTabs = update => evaluate(`window.qaSideTabs=${JSON.stringify(update)};window.qaEmit('onSideBrowserTabs',window.qaSideTabs)`);
@@ -106,12 +111,12 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await pointer('mouseReleased',rear.x+50,rear.y+8,{button:'left',buttons:0,clickCount:1});
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-4'");
     assert.equal(await evaluate(active(-4)), false, 'clicking a rear title promotes its preview without opening the side panel');
-    await evaluate("document.querySelector('[data-browser-preview=\"-3\"]').click()");
+    await clickPreview(-3);
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-3'");
     assert.equal(await evaluate(active(-3)), false, 'the back card can also become the front preview');
-    await evaluate("document.querySelector('[data-browser-preview=\"-4\"]').click()");
+    await clickPreview(-4);
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-4'");
-    await evaluate("document.querySelector('[data-browser-preview=\"-4\"]').click()");
+    await clickPreview(-4);
     await until(active(-4));
     await until("!document.querySelector('[data-browser-preview=\"-4\"]')&&document.querySelectorAll('[data-browser-preview]').length===3");
     assert.equal(await evaluate("document.querySelector('[data-preview-front]').dataset.browserPreview"), '-5', 'viewing a rear card leaves other background tabs stacked');
@@ -119,20 +124,21 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-4'");
     many[1].lastUsedAt = 100;
     await emitTabs({root:'main',tabs:many});
+    await until("document.querySelector('[data-browser-preview=\"-2\"]')!==null");
     assert.equal(await evaluate("document.querySelector('[data-preview-front]').dataset.browserPreview"), '-4', 'agent activity does not override the selected preview');
-    await evaluate("document.querySelector('[data-browser-preview=\"-2\"]').click()");
+    await clickPreview(-2);
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-2'");
     await evaluate("document.querySelector('[aria-label=\"Show 2 more browser tabs\"]').click()");
     await until("document.querySelectorAll('[data-preview-overflow]').length===2");
     await evaluate("document.querySelector('[data-preview-overflow=\"-1\"]').click()");
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-1'");
     assert.equal(await evaluate(active(-1)), false, 'overflow selection promotes a preview without opening its page');
-    await evaluate("document.querySelector('[data-browser-preview=\"-1\"]').click()");
+    await clickPreview(-1);
     await until(active(-1));
     await until("!document.querySelector('[aria-label=\"More background browser tabs\"]')");
     await evaluate("document.querySelector('[title=\"Close side panel\"]').click()");
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-1'");
-    await evaluate("document.querySelector('[data-browser-preview=\"-2\"]').click()");
+    await clickPreview(-2);
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-2'");
     const beforeStackDrag = await evaluate("[...document.querySelectorAll('[data-browser-preview]')].map(b=>({id:b.dataset.browserPreview,x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y}))");
     const rearDrag = await evaluate("document.querySelector('[data-browser-preview=\"-5\"]').getBoundingClientRect().toJSON()");
