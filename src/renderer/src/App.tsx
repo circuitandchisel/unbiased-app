@@ -1,3 +1,4 @@
+import type { BrowserCapture } from "../../shared/browser-capture";
 import { AgentMirrorPane } from "./AgentMirrorPane";
 import { useSlashCommands } from "./slash-command-menu";
 import { commandToken, type SlashCommand } from "../../shared/slash-commands";
@@ -97,6 +98,7 @@ type CommandItem = {
   source?: "shell" | "browser" | "memory" | "tool" | "approval" | "computer";
   /** For a computer step: the icon of the app it acted on, as a data URL. */
   appIcon?: string;
+  screenshots?: BrowserCapture[];
 };
 
 type Entry =
@@ -140,6 +142,7 @@ type Entry =
      source?: "shell" | "browser" | "memory" | "tool" | "approval" | "computer";
      /** For a computer step: the icon of the app it acted on, as a data URL. */
      appIcon?: string;
+     screenshots?: BrowserCapture[];
      status: string; // inProgress | completed | failed | declined | awaitingApproval | canceled | unconfirmed
      exitCode?: number;
      output?: string;
@@ -10581,6 +10584,7 @@ function ChatPane({
               // desktop step spent the whole turn looking like a shell command.
               source: item.source ?? existing.source,
               appIcon: item.appIcon ?? existing.appIcon,
+              screenshots: item.screenshots ?? existing.screenshots,
             };
           });
           if (found) return mapped;
@@ -10595,6 +10599,7 @@ function ChatPane({
               output: item.aggregatedOutput ?? item.output,
               source: item.source,
               appIcon: item.appIcon,
+              screenshots: item.screenshots,
             },
           ];
         });
@@ -11091,7 +11096,7 @@ function ChatPane({
   ): React.ReactNode => {
     if (block.kind === "steps") {
       return (
-        <StepsGroup key={`s${block.key}`} items={block.items} statusLabel={statusLabel} decide={decide} />
+        <StepsGroup key={`s${block.key}`} items={block.items} statusLabel={statusLabel} decide={decide} onPreviewImage={onPreviewImage} />
       );
     }
     const e = block.entry;
@@ -20735,7 +20740,7 @@ function memoryStepsLabel(items: CommandEntry[]): string | null {
   return `Updated memory · ${items.length} steps`;
 }
 
-function CommandOutputPanel({ entry }: { entry: CommandEntry }) {
+function CommandOutputPanel({ entry, onPreviewImage }: { entry: CommandEntry; onPreviewImage?: (image: Attachment) => void }) {
   const outputRef = useRef<HTMLPreElement>(null);
   const followOutput = useRef(true);
   useLayoutEffect(() => {
@@ -20769,6 +20774,11 @@ function CommandOutputPanel({ entry }: { entry: CommandEntry }) {
       >
         {isShellStep(entry) ? "Shell" : isComputerStep(entry) ? "Desktop" : "Output"}
       </div>
+      {entry.screenshots?.map(capture => <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
+        style={{ display: "block", width: "100%", padding: 12, background: "transparent", border: 0, cursor: onPreviewImage ? "zoom-in" : "default", textAlign: "left" }}>
+        <MdImage src={capture.path} alt={capture.name} chat />
+        <span style={{ display: "block", color: colors.dim, fontSize: 12, marginTop: 6 }}>Browser screenshot{onPreviewImage ? " · Open preview" : ""}</span>
+      </button>)}
       <pre
         ref={outputRef}
         onScroll={(event) => {
@@ -20803,7 +20813,9 @@ function StepsGroup({
   items,
   statusLabel,
   decide,
+  onPreviewImage,
 }: {
+  onPreviewImage?: (image: Attachment) => void;
   items: CommandEntry[];
   statusLabel: (e: CommandEntry) => { text: string; color: string };
   decide: (itemId: string, requestId: string, decision: ApprovalDecision) => Promise<void>;
@@ -21042,7 +21054,7 @@ function StepsGroup({
                     onDecide={(d) => void decide(e.itemId, e.approval!.requestId, d)}
                   />
                 ))}
-              {hasOutputPanel && itemOpen && <CommandOutputPanel entry={e} />}
+              {hasOutputPanel && itemOpen && <CommandOutputPanel entry={e} onPreviewImage={onPreviewImage} />}
             </div>
           );
         })}

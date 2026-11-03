@@ -10,6 +10,11 @@ test("a running shell command has an output panel before its first output", () =
   assert.equal(showsCommandOutputPanel({ status: "completed", output: "done" }, true), true);
 });
 
+test("a screenshot has an inspectable output panel without textual tool output", () => {
+  assert.equal(showsCommandOutputPanel({ status: "completed", screenshots: [{ path: "/capture.png" }] }, false), true);
+  assert.equal(showsCommandOutputPanel({ status: "completed", screenshots: [] }, false), false);
+});
+
 test("finished commands close only panels opened automatically", () => {
   const items = [
     { itemId: "first", status: "completed" },
