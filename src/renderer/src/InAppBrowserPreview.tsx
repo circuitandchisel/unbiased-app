@@ -89,14 +89,16 @@ export function InAppBrowserPreview({ tab, visible, capture, onOpen }: {
       const step = steps[event.key];
       if (step) { event.preventDefault(); event.stopPropagation(); setPosition(clamp({ x: position.x + step.x, y: position.y + step.y })); }
     }}
-    style={{ position: "absolute", left: position?.x, top: position?.y ?? 16, right: position ? undefined : 16, zIndex: 15, width: 260, maxWidth: "calc(100% - 24px)", padding: 0, border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden", background: "var(--panel)", color: "var(--fg)", boxShadow: "0 8px 32px #0005, 0 2px 6px #0003", textAlign: "left", font: "inherit", cursor: "grab", touchAction: "none", userSelect: "none" }}
+    style={{ position: "absolute", left: position?.x, top: position?.y ?? 16, right: position ? undefined : 16, zIndex: 15, width: 260, maxWidth: "calc(100% - 24px)", padding: 0, border: "1px solid #ffffff24", borderRadius: 16, overflow: "hidden", isolation: "isolate", background: "var(--panel)", color: "#fff", boxShadow: "0 10px 32px #0007, 0 2px 8px #0005", textAlign: "left", font: "inherit", cursor: "grab", touchAction: "none", userSelect: "none" }}
   >
     <span style={{ display: "block", width: "100%", aspectRatio: "16 / 10", background: "var(--panel-2)", pointerEvents: "none" }}>
-      {src ? <img src={src} alt="" draggable={false} style={{ display: "block", width: "100%", height: "100%", objectFit: "contain" }} /> : <span style={{ display: "grid", placeItems: "center", height: "100%", color: "var(--dim)", fontSize: 12 }}>Preparing preview…</span>}
+      {src ? <img src={src} alt="" draggable={false} style={{ display: "block", width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} /> : <span style={{ display: "grid", placeItems: "center", height: "100%", color: "var(--dim)", fontSize: 12 }}>Preparing preview…</span>}
     </span>
-    <span style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", minWidth: 0, pointerEvents: "none" }}>
+    <span aria-hidden="true" style={{ position: "absolute", inset: "28% 0 0", background: "linear-gradient(to bottom, transparent, #0009 55%, #000d)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", maskImage: "linear-gradient(to bottom, transparent, #000 55%)", pointerEvents: "none" }} />
+    <span aria-hidden="true" style={{ position: "absolute", inset: 0, borderRadius: "inherit", boxShadow: "inset 0 0 0 1px #ffffff12, inset 0 -12px 28px #0003", pointerEvents: "none" }} />
+    <span style={{ position: "absolute", inset: "auto 0 0", display: "flex", alignItems: "center", gap: 8, padding: "12px", minWidth: 0, color: "#fff", textShadow: "0 1px 4px #000b", pointerEvents: "none" }}>
       <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
-      <span style={{ minWidth: 0, flex: 1 }}><span style={{ display: "block", fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tab.title || "In-app browser"}</span><span style={{ display: "block", color: "var(--dim)", fontSize: 11, marginTop: 2 }}>In-app browser · Working</span></span>
+      <span style={{ minWidth: 0, flex: 1 }}><span style={{ display: "block", fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tab.title || "In-app browser"}</span><span style={{ display: "block", color: "#ffffffbf", fontSize: 11, marginTop: 2 }}>In-app browser · Working</span></span>
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><path d="M6 3H3v10h10v-3M9 2h5v5M14 2 7 9" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
     </span>
   </button>;
