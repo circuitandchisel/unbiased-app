@@ -85,12 +85,57 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     assert.equal(await evaluate(active(-1)), false, 'dragging does not open the tab');
     const moved = await evaluate(preview + '.getBoundingClientRect().toJSON()');
     win.setSize(850,600);
-    await until("(()=>{const b="+preview+";if(!b)return false;const p=b.parentElement.getBoundingClientRect(),r=b.getBoundingClientRect();return r.right<=p.right-10&&r.bottom<=p.bottom-10})()");
+    await until("(()=>{const b="+preview+";if(!b)return false;const p=b.closest('[data-browser-preview-stack]').parentElement.getBoundingClientRect(),r=b.getBoundingClientRect();return r.right<=p.right-10&&r.bottom<=p.bottom-10})()");
     win.setSize(1300,850);
     await evaluate(preview + '.click()'); await until(active(-1));
     await evaluate("document.querySelector('[title=\"Close side panel\"]').click()");
     await until(preview + '!==null');
     assert.ok((await evaluate(preview + '.getBoundingClientRect().toJSON()')).y>box.y+30, 'position survives opening and closing the page');
+    const many = [tab, ...[2,3,4,5].map(n => ({...tab,id:-n,title:['','', 'Docs','Dashboard','Pull request','Settings'][n],url:'https://example.test/'+n,lastUsedAt:n*10}))];
+    await emitTabs({root:'main',tabs:many});
+    await until("document.querySelectorAll('[data-browser-preview]').length===3&&document.querySelector('[data-preview-front]').dataset.browserPreview==='-5'");
+    assert.equal(await evaluate("document.querySelector('[aria-label=\"Show 2 more browser tabs\"]').textContent"), '+2 tabs');
+    const captureStart = await evaluate('window.qaCalls.length');
+    await new Promise(resolve => setTimeout(resolve,750));
+    const stackedCaptures = await evaluate(`window.qaCalls.slice(${captureStart}).filter(c=>c[0]==='previewSideBrowser').map(c=>c[1])`);
+    assert.ok(stackedCaptures.length>=3);
+    assert.ok(stackedCaptures.every(id=>[-5,-4,-3].includes(id)), 'only the three exposed cards capture frames');
+    const rear = await evaluate("document.querySelector('[data-browser-preview=\"-4\"]').getBoundingClientRect().toJSON()");
+    await pointer('mouseMoved',rear.x+50,rear.y+8);
+    await pointer('mousePressed',rear.x+50,rear.y+8,{button:'left',buttons:1,clickCount:1});
+    await pointer('mouseReleased',rear.x+50,rear.y+8,{button:'left',buttons:0,clickCount:1});
+    await until(active(-4));
+    await until("!document.querySelector('[data-browser-preview=\"-4\"]')&&document.querySelectorAll('[data-browser-preview]').length===3");
+    assert.equal(await evaluate("document.querySelector('[data-preview-front]').dataset.browserPreview"), '-5', 'viewing a rear card leaves other background tabs stacked');
+    await evaluate("document.querySelector('[title=\"Close side panel\"]').click()");
+    await until("document.querySelector('[data-browser-preview=\"-4\"]')!==null");
+    many[1].lastUsedAt = 100;
+    await emitTabs({root:'main',tabs:many});
+    await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-2'");
+    await evaluate("document.querySelector('[aria-label=\"Show 2 more browser tabs\"]').click()");
+    await until("document.querySelectorAll('[data-preview-overflow]').length===2");
+    await evaluate("document.querySelector('[data-preview-overflow=\"-1\"]').click()");
+    await until(active(-1));
+    await until("!document.querySelector('[aria-label=\"More background browser tabs\"]')");
+    await evaluate("document.querySelector('[title=\"Close side panel\"]').click()");
+    await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-2'");
+    const beforeStackDrag = await evaluate("[...document.querySelectorAll('[data-browser-preview]')].map(b=>({id:b.dataset.browserPreview,x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y}))");
+    const rearDrag = await evaluate("document.querySelector('[data-browser-preview=\"-5\"]').getBoundingClientRect().toJSON()");
+    await pointer('mouseMoved',rearDrag.x+50,rearDrag.y+8);
+    await pointer('mousePressed',rearDrag.x+50,rearDrag.y+8,{button:'left',buttons:1,clickCount:1});
+    await pointer('mouseMoved',rearDrag.x+10,rearDrag.y+48,{button:'left',buttons:1});
+    await pointer('mouseReleased',rearDrag.x+10,rearDrag.y+48,{button:'left',buttons:0,clickCount:1});
+    await until("document.querySelector('[data-browser-preview=\"-2\"]').getBoundingClientRect().y>"+(beforeStackDrag.find(b=>b.id==='-2').y+30));
+    const afterStackDrag = await evaluate("[...document.querySelectorAll('[data-browser-preview]')].map(b=>({id:b.dataset.browserPreview,x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y}))");
+    for(const previous of beforeStackDrag){const next=afterStackDrag.find(b=>b.id===previous.id);assert.ok(Math.abs(next.x-previous.x+40)<1);assert.ok(Math.abs(next.y-previous.y-40)<1)}
+    assert.equal(await evaluate(active(-5)), false, 'dragging a rear card moves the whole stack without opening it');
+    if(process.env.UNBIASED_STACK_QA_SCREENSHOT){win.showInactive();await until("[...document.querySelectorAll('[data-browser-preview] img')].length===3&&[...document.querySelectorAll('[data-browser-preview] img')].every(img=>img.complete&&img.naturalWidth>0)");await evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");fs.writeFileSync(process.env.UNBIASED_STACK_QA_SCREENSHOT,(await win.webContents.capturePage()).toPNG());win.hide()}
+    many[1].working = false;
+    await emitTabs({root:'main',tabs:many});
+    await until("!document.querySelector('[data-browser-preview=\"-2\"]')&&document.querySelector('[data-preview-front]').dataset.browserPreview==='-5'");
+    for(const item of many)item.working=false;
+    await emitTabs({root:'main',tabs:many});
+    await until("!document.querySelector('[data-browser-preview-stack]')");
     tab.working = false;
     await emitTabs({root:'main',tabs:[tab]});
     await until('!' + preview);
@@ -130,7 +175,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await until("document.querySelector('[data-browser-help=\"-1\"]')?.textContent.includes('confirm the next step')");
     if (process.env.UNBIASED_UI_QA_SCREENSHOT) fs.writeFileSync(process.env.UNBIASED_UI_QA_SCREENSHOT, (await win.webContents.capturePage()).toPNG());
     assert.deepEqual(errors.filter(e => !e.includes('Electron Security Warning')), []);
-    console.log('PASS: live picture-in-picture preview, pointer drag, resize bounds, existing-tab focus and capture suspension; background tab adoption stays quiet, help reveals the same tab, foreign tabs stay private, and Continue agent sends a visible continuation.');
+    console.log('PASS: three-card browser stack, overflow selection, recency ordering, rear-card click and group drag, per-tab hiding and completion, resize bounds and capture suspension; background tab adoption stays quiet, help reveals the same tab, foreign tabs stay private, and Continue agent sends a visible continuation.');
   } finally { win.destroy(); fs.rmSync(fixture, { recursive: true, force: true }); }
 }
 main().then(() => app.exit(0), error => { console.error(error); app.exit(1); });

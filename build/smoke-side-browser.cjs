@@ -73,6 +73,15 @@ async function main() {
       await assert.rejects(page.context().newPage(), /Browser-wide command is unavailable/);
       await page.bringToFront(); assert.equal(front.isVisible(), false);
     });
+    await controller.run('chat-one', tab.id, async page => {
+      await page.evaluate(() => { document.body.style.background = '#204060'; });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const firstFrame = await views.get(tab.id).webContents.capturePage(undefined, {stayHidden:true});
+      const otherFrame = await views.get(other.id).webContents.capturePage(undefined, {stayHidden:true});
+      assert.deepEqual([...firstFrame.toBitmap().subarray(0,3)], [0x60,0x40,0x20], 'a covered background tab supplies its own freshly updated pixels');
+      assert.deepEqual([...otherFrame.toBitmap().subarray(0,3)], [255,255,255], 'another background tab supplies a distinct frame');
+      assert.equal(background.isVisible(), false);
+    });
     assert.equal(await views.get(other.id).webContents.executeJavaScript('document.querySelector("h1").textContent'), 'Account page');
     await controller.run('chat-one', tab.id, async page => {
       await page.goto(url + '?next=1');

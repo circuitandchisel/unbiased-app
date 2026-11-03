@@ -104,12 +104,15 @@ shown alongside the reply, including when the agent provides text without image
 Markdown. Clicking a screenshot opens the image preview. Captures survive
 browser shutdown and conversation reopening; deleting a chat removes its files.
 
-While the agent is using a tab in the background, a live, draggable preview
-appears at the top right of the chat. Clicking the preview opens the existing
-tab without reloading it. The preview hides while that page is visible and
-returns when the side panel closes if the agent is still working. It stops
-when browser work ends or the agent requests user help. Preview capture is
-limited to the current conversation and pauses while the app is hidden.
+While the agent uses tabs in the background, up to three live previews form a
+draggable diagonal stack at the top right of the chat, with the most recently
+used tab in front. Exposed title strips identify the rear cards; a count badge
+opens a list of additional tabs. Clicking any card or list entry opens that
+existing tab without reloading it. Only that page's card hides while visible;
+it returns when the side panel closes if work continues. Dragging any card moves
+the whole stack, which stays within the chat as the window resizes. Finished or
+paused tabs leave the stack. Only the three exposed cards capture frames, scoped
+to the current conversation, and capture pauses while the app is hidden.
 
 The Playwright adapter attaches only to the selected sandboxed WebContentsView.
 It uses a random, loopback-only transport, rejects browser-origin connections,
