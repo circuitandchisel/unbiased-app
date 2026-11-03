@@ -520,7 +520,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "command to browse: those run outside the app's permission and mirroring, so the user cannot see or",
   "approve them. If a browser tool is genuinely absent from your tools, say the Agent browser is",
   "unavailable rather than substituting a shell command for it.",
-  "For pages already open in the in-app browser, use browser_side_list and browser_side_use. Existing tabs require the user's explicit approval before you read or act through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
+  "For pages already open in the in-app browser, use browser_side_list and browser_side_use. Full access allows controlling existing tabs without another permission prompt. In other modes, obtain approval before reading or acting through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
   "Keep browser work in the background unless the user asks to watch it. When sign-in, 2FA, CAPTCHA, a decision, or missing information needs the user, call browser_side_request_help with a precise request. That reveals the tab and pauses all agent access. Stop the turn and wait for the user to click Continue agent. Never resume yourself, interact with the app's approval UI, solve CAPTCHA, or request passwords in chat. After the user's continuation message, inspect the current page before continuing, and leave its tab open.",
   // Delegation. The collaboration tools are available on every turn, but models
   // rarely reach for them unprompted — Claude Code and codex get "automatic"
@@ -5427,16 +5427,12 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       return text(JSON.stringify(await sideBrowser.open(root, url)));
     }
     if (typeof a.tabId !== "number" || !Number.isInteger(a.tabId)) return text("Provide a tabId from browser_side_list or browser_side_open.", false);
-    const id = a.tabId; const entry = sideBrowser.get(root, id);
+    const id = a.tabId; sideBrowser.get(root, id);
     if (tool === "browser_side_use") {
-      sideBrowserUrl(entry.contents.getURL());
-      if (!entry.controlled) {
-        const origin = new URL(entry.contents.getURL()).origin;
-        const decision = await requestLocalApproval(threadId, `Control in-app browser tab: ${entry.contents.getTitle() || "In-app browser"}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${new URL(entry.contents.getURL()).origin}. The agent cannot access other tabs.`, { allowForSession: false });
-        if (decision === "decline") return text("The user declined control of this in-app browser tab. Do not retry or use another route to access it.", false);
-        if (new URL(sideBrowser.get(root, id).contents.getURL()).origin !== origin) return text("The tab changed sites while permission was pending. Request control again for its current page.", false);
-        sideBrowser.grant(root, id);
-      }
+      await sideBrowser.use(root, id, liveAccessMode(root) === "full", async ({ title, origin }) => {
+        const decision = await requestLocalApproval(threadId, `Control in-app browser tab: ${title}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${origin}. The agent cannot access other tabs.`, { allowForSession: false });
+        return decision !== "decline";
+      });
       return text(`Tab ${id} is available for this conversation. It stays in the background unless you request user help.`);
     }
     if (tool === "browser_side_request_help") {

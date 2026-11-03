@@ -84,7 +84,8 @@ Playwright in the user's project. Project test suites still use their own tools.
 
 The agent can list tabs for the current conversation, request control of an
 existing signed-in tab, or open a new page quietly in the background. Existing
-tabs require explicit control approval, including in Full access. New agent tabs
+tabs follow the selected access mode: Full access grants control without a
+prompt; other modes ask before first use. New agent tabs
 use an isolated session for that conversation, retained only until the app exits.
 Ask-for-approval mode still gates browser network access.
 

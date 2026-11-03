@@ -15,7 +15,7 @@ const text = (value: unknown, max = 1000) => { if (typeof value !== "string" || 
 export const SIDE_BROWSER_TOOLS = [
   { name: "browser_side_list", description: "List browser tabs belonging to this conversation. Does not reveal the side panel." },
   { name: "browser_side_open", description: "Open an HTTP/HTTPS page in a background in-app browser tab. Uses an isolated session for this conversation; does not raise the app. Reuses the same open URL.", properties: { url: { type: "string" } }, required: ["url"] },
-  { name: "browser_side_use", description: "Request permission to control an existing in-app browser tab, including its signed-in page. Does not switch the user's tab. Approval is required even in Full access.", properties: { tabId: { type: "number" } }, required: ["tabId"] },
+  { name: "browser_side_use", description: "Control an existing in-app browser tab, including its signed-in page. Does not switch the user's tab. Full access proceeds without approval; other modes request permission before first use.", properties: { tabId: { type: "number" } }, required: ["tabId"] },
   { name: "browser_side_navigate", description: "Navigate an authorized in-app browser tab to an HTTP/HTTPS URL, preserving that tab's signed-in session. Does not reveal the panel.", properties: { tabId: { type: "number" }, url: { type: "string" } }, required: ["tabId", "url"] },
   { name: "browser_side_snapshot", description: "Read the selected tab's accessible page structure, without revealing it.", properties: { tabId: { type: "number" } }, required: ["tabId"] },
   { name: "browser_side_click", description: "Click a unique element in an authorized in-app browser tab. Use either selector or role and name from the snapshot.", properties: { tabId: { type: "number" }, selector: { type: "string" }, role: { type: "string" }, name: { type: "string" } }, required: ["tabId"] },
@@ -57,6 +57,16 @@ export class SideBrowserController {
   needsBackgroundHost(id: number): boolean { return this.entries.get(id)?.controlled === true; }
   owner(id: number): string | null { return this.entries.get(id)?.root ?? null; }
   grant(root: string, id: number): void { const entry = this.get(root, id); sideBrowserUrl(entry.contents.getURL()); entry.controlled = true; this.host.controlled(id); this.host.update(root); }
+  async use(root: string, id: number, fullAccess: boolean, approve: (tab: { title: string; origin: string }) => Promise<boolean>): Promise<void> {
+    const entry = this.get(root, id);
+    const origin = new URL(sideBrowserUrl(entry.contents.getURL())).origin;
+    if (entry.controlled) return;
+    if (!fullAccess && !(await approve({ title: entry.contents.getTitle() || "In-app browser", origin }))) {
+      throw new Error("The user declined control of this in-app browser tab. Do not retry or use another route to access it.");
+    }
+    if (new URL(this.get(root, id).contents.getURL()).origin !== origin) throw new Error("The tab changed sites while permission was pending. Request control again for its current page.");
+    this.grant(root, id);
+  }
   async open(root: string, rawUrl: unknown): Promise<SideBrowserTab> {
     const url = sideBrowserUrl(rawUrl);
     const match = this.list(root).find(tab => { try { return sideBrowserUrl(tab.url) === url; } catch { return false; } });

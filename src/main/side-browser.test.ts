@@ -105,3 +105,43 @@ test('resuming help does not revive stale queued actions or late connections', a
   await rejected; assert.equal(closes, 1);
   await f.controller.shutdown();
 });
+
+
+test('Full access controls existing tabs without invoking approval', async () => {
+  const f = fixture();
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents);
+  await f.controller.use('one', 7, true, async () => assert.fail('Full access must not prompt'));
+  assert.equal(f.controller.list('one')[0].controlled, true);
+  assert.equal(await f.controller.run('one', 7, async () => 'clicked'), 'clicked');
+  await f.controller.shutdown();
+});
+test('approval mode asks before control, preserves denial, and reuses an approved grant', async () => {
+  const f = fixture();
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents);
+  let prompts = 0;
+  await assert.rejects(f.controller.use('one', 7, false, async () => { prompts++; return false; }), /declined/);
+  assert.equal(f.controller.list('one')[0].controlled, false);
+  assert.equal(f.connections(), 0);
+  await f.controller.use('one', 7, false, async tab => { prompts++; assert.equal(tab.origin, 'https://example.test'); return true; });
+  await f.controller.use('one', 7, false, async () => assert.fail('already-approved tab must not prompt again'));
+  assert.equal(prompts, 2); assert.equal(f.controller.list('one')[0].controlled, true);
+  await f.controller.shutdown();
+});
+test('Full access preserves conversation isolation and cannot resume a user handoff', async () => {
+  const f = fixture();
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents);
+  const noPrompt = async () => assert.fail('Full access must not prompt');
+  await assert.rejects(f.controller.use('two', 7, true, noPrompt), /different conversation/);
+  await f.controller.use('one', 7, true, noPrompt);
+  await f.controller.requestHelp('one', 7, 'Please sign in');
+  await f.controller.use('one', 7, true, noPrompt);
+  await assert.rejects(f.controller.run('one', 7, async () => {}), /waiting for the user/);
+  await f.controller.shutdown();
+});
+test('a site change during approval requires a fresh control request', async () => {
+  const f = fixture(); const contents = new Contents();
+  f.controller.register(7, 'one', contents as unknown as WebContents);
+  await assert.rejects(f.controller.use('one', 7, false, async () => { contents.url = 'https://different.test/'; return true; }), /changed sites/);
+  assert.equal(f.controller.list('one')[0].controlled, false);
+  await f.controller.shutdown();
+});
