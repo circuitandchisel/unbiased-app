@@ -6,6 +6,21 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.28 — November 3, 2026
+
+### Added
+
+- **Let the agent use the in-app browser.** Ask it to work with an open tab or open a new page in the background. New agent tabs have a separate session for each chat.
+- **Watch background browser work.** Live previews form a draggable stack in the chat. Click a rear title to bring its preview forward, or click the front preview to open the page without reloading it.
+- **Browser screenshots appear in the conversation.** Captures are attached automatically, open in the image preview, and remain available when you reopen the chat.
+- **Recall earlier prompts with Up and Down.** Browse your chat's previous prompts and return to your unsent draft. Arrow keys still move through multiline text, paragraphs, and lists before entering history.
+
+### Improved
+
+- **A clear handoff when your help is needed.** The agent can reveal a page for sign-in or another step that needs you, then wait until you click Continue agent. Your unsent draft stays intact.
+- **See when the agent has browser access.** A cursor follows its interactions, and the tab marks agent access. Full access proceeds without another control prompt; other modes ask before taking control of an existing tab.
+- **Browser work follows the conversation.** Controlled tabs stay with their chat when you switch away. Stop cancels pending browser actions, and deleting a chat also cleans up its side chats' browser tabs.
+
 ## 1.13.27 — November 2, 2026
 
 ### Added
