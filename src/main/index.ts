@@ -520,7 +520,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "command to browse: those run outside the app's permission and mirroring, so the user cannot see or",
   "approve them. If a browser tool is genuinely absent from your tools, say the Agent browser is",
   "unavailable rather than substituting a shell command for it.",
-  "For pages already open in the side UI, use browser_side_list and browser_side_use. Existing tabs require the user's explicit approval before you read or act through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
+  "For pages already open in the in-app browser, use browser_side_list and browser_side_use. Existing tabs require the user's explicit approval before you read or act through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
   "Keep browser work in the background unless the user asks to watch it. When sign-in, 2FA, CAPTCHA, a decision, or missing information needs the user, call browser_side_request_help with a precise request. That reveals the tab and pauses all agent access. Stop the turn and wait for the user to click Continue agent. Never resume yourself, interact with the app's approval UI, solve CAPTCHA, or request passwords in chat. After the user's continuation message, inspect the current page before continuing, and leave its tab open.",
   // Delegation. The collaboration tools are available on every turn, but models
   // rarely reach for them unprompted — Claude Code and codex get "automatic"
@@ -1254,7 +1254,12 @@ function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown): str
     const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "memory";
     return `${t === "memory_save" ? "save memory" : "forget memory"} · ${name}`;
   }
-  if (t === "browser_side_fill") return `fill input in side-browser tab ${String(args.tabId)}`;
+  if (t.startsWith("browser_side_")) {
+    const action = t.slice("browser_side_".length).replaceAll("_", " ");
+    const target = typeof args.tabId === "number" ? ` tab ${args.tabId}` : "";
+    const destination = typeof args.url === "string" ? ` · ${args.url}` : "";
+    return `${action} in-app browser${target}${destination}`;
+  }
   if (t === "computer_apps") return "list apps";
   if (t === "computer_raise") return `raise ${String(args.app)}`;
   if (t === "computer_menu") return typeof args.item === "string" && args.item.trim() ? `run menu command "${args.item}" in ${String(args.app)}` : `list menu commands in ${String(args.app)}`;
@@ -5427,8 +5432,8 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       sideBrowserUrl(entry.contents.getURL());
       if (!entry.controlled) {
         const origin = new URL(entry.contents.getURL()).origin;
-        const decision = await requestLocalApproval(threadId, `Control side-browser tab: ${entry.contents.getTitle() || "Browser"}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${new URL(entry.contents.getURL()).origin}. The agent cannot access other tabs.`, { allowForSession: false });
-        if (decision === "decline") return text("The user declined control of this side-browser tab. Do not retry or use another route to access it.", false);
+        const decision = await requestLocalApproval(threadId, `Control in-app browser tab: ${entry.contents.getTitle() || "In-app browser"}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${new URL(entry.contents.getURL()).origin}. The agent cannot access other tabs.`, { allowForSession: false });
+        if (decision === "decline") return text("The user declined control of this in-app browser tab. Do not retry or use another route to access it.", false);
         if (new URL(sideBrowser.get(root, id).contents.getURL()).origin !== origin) return text("The tab changed sites while permission was pending. Request control again for its current page.", false);
         sideBrowser.grant(root, id);
       }
@@ -5439,22 +5444,23 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       return text(`Waiting for the user in tab ${id}: ${help.message}. Stop automation. The user must click Continue agent before you can proceed.`);
     }
     const destination = tool === "browser_side_navigate" ? sideBrowserUrl(a.url) : null;
-    const refusal = await ensureBrowserAllowed(tool, threadId, destination ?? `side-browser tab ${id}`);
+    const refusal = await ensureBrowserAllowed(tool, threadId, destination ?? `in-app browser tab ${id}`);
     if (refusal) return text(refusal, false);
     if (tool === "browser_side_screenshot") {
-      const image = await sideBrowser.run(root, id, page => page.screenshot({ type: "png" }));
+      const image = await sideBrowser.run(root, id, (page, cursor) => cursor.withoutMarker(() => page.screenshot({ type: "png" })));
       return { success: true, contentItems: [{ type: "inputImage", imageUrl: `data:image/png;base64,${image.toString("base64")}` }] };
     }
-    const result = await sideBrowser.run(root, id, async page => {
+    const result = await sideBrowser.run(root, id, async (page, cursor) => {
       switch (tool) {
         case "browser_side_navigate": await page.goto(destination!, { waitUntil: "domcontentloaded" }); break;
         case "browser_side_snapshot": return (await page.locator("body").ariaSnapshot()).slice(0, 24000);
-        case "browser_side_click": await sideLocator(page, a).click(); break;
+        case "browser_side_click": { const target = sideLocator(page, a); await cursor.pointAt(target); await target.click(); break; }
         case "browser_side_fill":
           if (typeof a.text !== "string" || a.text.length > 10000) throw new Error("Provide input text of at most 10000 characters.");
           {
             const input = sideLocator(page, a);
             if ((await input.getAttribute("type"))?.toLowerCase() === "password") throw new Error("Request user help so the user can enter their password directly in the page.");
+            await cursor.pointAt(input);
             await input.fill(a.text);
           }
           break;
@@ -5465,8 +5471,9 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
         }
         case "browser_side_scroll":
           if (typeof a.pixels !== "number" || !Number.isFinite(a.pixels) || Math.abs(a.pixels) > 10000) throw new Error("Provide a scroll distance between -10000 and 10000 pixels.");
+          await cursor.move(100, 100);
           await page.mouse.move(100, 100); await page.mouse.wheel(0, a.pixels); break;
-        default: throw new Error("Unknown side-browser tool.");
+        default: throw new Error("Unknown in-app browser tool.");
       }
       return `Completed in tab ${id}. Use browser_side_snapshot to inspect the current page.`;
     }, tool === "browser_side_navigate");

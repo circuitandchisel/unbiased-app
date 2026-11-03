@@ -76,7 +76,7 @@ default fonts.
   contrast. Settings → Appearance edits them live; `codex-theme-v1:{…}`
   exports import directly.
 
-## Agent control of side-browser tabs
+## Agent control of in-app browser tabs
 
 The app includes a pinned `playwright-core` library. It controls Electron's
 embedded browser pages; it does not download another browser or require
@@ -92,7 +92,9 @@ When the agent needs sign-in, 2FA, CAPTCHA, or a decision, it can reveal the
 same tab with a **Your help is needed** banner. Automation of that tab is blocked
 until the user clicks **Continue agent**. This sends a continuation message
 without replacing the composer's draft; it queues if a turn is still running.
-The tab stays open afterward. Closing it ends agent access. Controlled tabs
+The tab stays open afterward. A coral cursor follows agent interactions, matching the computer-use cursor.
+A cursor icon in the tab marks ongoing agent access; the page cursor disappears
+when the agent requests help. Closing the tab ends agent access. Controlled tabs
 remain with their conversation when the user switches chats; ordinary browser
 tabs retain their existing close-on-switch behavior.
 

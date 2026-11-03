@@ -14,7 +14,8 @@ const deadline = setTimeout(() => { console.error('Side-browser regression timed
 async function main() {
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'text/html');
-    response.end(`<title>Side browser test</title><h1>Account page</h1><label>Name<input id="name"></label><button onclick="document.querySelector('h1').textContent='Saved '+document.querySelector('input').value">Save</button><div style="height:1600px">Scroll content</div>`);
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'unsafe-inline'; style-src 'none'; require-trusted-types-for 'script'");
+    response.end(`<title>Side browser test</title><h1>Account page</h1><label>Name<input id="name"></label><button onclick="document.querySelector('h1').textContent='Saved '+document.querySelector('input').value">Save</button><div>${'<p>Scroll content</p>'.repeat(80)}</div>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}/`;
@@ -41,14 +42,27 @@ async function main() {
     assert.equal(background.isVisible(), false); assert.equal(front.isVisible(), false); assert.equal(reveals, 0);
     // A second, stacked native view must not prevent automation of the first.
     const other = await controller.open('chat-two', url);
-    await controller.run('chat-one', tab.id, async page => {
+    await controller.run('chat-one', tab.id, async (page, cursor) => {
       assert.match(await page.locator('body').ariaSnapshot(), /Account page/);
-      await page.getByRole('textbox', { name: 'Name' }).fill('Background');
+      assert.equal(await page.locator('[data-unbiased-agent-cursor]').count(), 1, 'agent cursor appears during a browser action');
+      const name = page.getByRole('textbox', { name: 'Name' });
+      await cursor.pointAt(name);
+      const box = await name.boundingBox();
+      const point = await page.locator('[data-unbiased-agent-cursor]').evaluate(node => ({x:parseFloat(node.style.left)+57.25,y:parseFloat(node.style.top)+57.25,events:getComputedStyle(node).pointerEvents,aria:node.getAttribute('aria-hidden')}));
+      assert.ok(Math.abs(point.x-(box.x+box.width/2))<1); assert.ok(Math.abs(point.y-(box.y+box.height/2))<1);
+      assert.equal(point.events, 'none'); assert.equal(point.aria, 'true');
+      await name.fill('Background');
+      await cursor.pointAt(page.getByRole('button', { name: 'Save', exact: true }));
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       assert.equal(await page.locator('h1').innerText(), 'Saved Background');
       await page.mouse.move(100, 100); await page.mouse.wheel(0, 400);
       await page.waitForFunction(() => scrollY > 0);
-      const image = await page.screenshot(); assert.ok(image.length > 1000);
+      const image = await cursor.withoutMarker(async () => {
+        assert.equal(await page.locator('[data-unbiased-agent-cursor]').count(), 0, 'captures exclude the agent marker');
+        return page.screenshot();
+      }); assert.ok(image.length > 1000);
+      assert.equal(await page.locator('[data-unbiased-agent-cursor]').count(), 1, 'active marker returns after a capture');
+      if (process.env.UNBIASED_CURSOR_QA_SCREENSHOT) fs.writeFileSync(process.env.UNBIASED_CURSOR_QA_SCREENSHOT, await page.screenshot());
       assert.equal(image.subarray(1, 4).toString(), 'PNG');
       assert.equal(page.context().pages().length, 1, 'only the selected tab is exposed');
       await assert.rejects(page.context().newCDPSession(page), /Browser-wide command is unavailable/);
@@ -56,29 +70,40 @@ async function main() {
       await page.bringToFront(); assert.equal(front.isVisible(), false);
     });
     assert.equal(await views.get(other.id).webContents.executeJavaScript('document.querySelector("h1").textContent'), 'Account page');
+    await controller.run('chat-one', tab.id, async page => {
+      await page.goto(url + '?next=1');
+      await page.locator('[data-unbiased-agent-cursor]').waitFor({ state: 'attached' });
+      assert.equal(await page.locator('[data-unbiased-agent-cursor]').evaluate(node => getComputedStyle(node).opacity), '1', 'cursor survives navigation while working');
+    });
+    // Match the computer-use cursor's idle fade without losing its last position.
+    await views.get(tab.id).webContents.executeJavaScript(`new Promise(resolve => { const check=()=>{const node=document.querySelector('[data-unbiased-agent-cursor]');if(node&&getComputedStyle(node).opacity==='0')resolve(true);else setTimeout(check,50)};check(); })`);
+
     // No session/cookie sharing between conversations.
     await views.get(tab.id).webContents.session.cookies.set({ url, name: 'session', value: 'signed-in' });
     assert.equal((await views.get(other.id).webContents.session.cookies.get({ url })).length, 0);
     const help = await controller.requestHelp('chat-one', tab.id, 'Sign in, then continue.');
+    assert.equal(await views.get(tab.id).webContents.executeJavaScript('!!document.querySelector("[data-unbiased-agent-cursor]")'), false, 'user handoff removes the cursor');
     assert.equal(reveals, 1); assert.equal(views.get(tab.id).webContents.debugger.isAttached(), false);
     await assert.rejects(controller.run('chat-one', tab.id, async () => {}), /waiting for the user/);
     // Simulate the user's work in the same native tab; cookie and form state survive reparenting.
     await views.get(tab.id).webContents.executeJavaScript('document.querySelector("input").value="User finished"');
     controller.resume('chat-one', tab.id, help.requestId);
     await controller.run('chat-one', tab.id, async page => {
+      assert.equal(await page.locator('[data-unbiased-agent-cursor]').count(), 1, 'continuation restores the agent cursor');
       assert.equal(await page.getByRole('textbox').inputValue(), 'User finished');
       assert.equal((await views.get(tab.id).webContents.session.cookies.get({ url })).find(cookie => cookie.name === 'session')?.value, 'signed-in');
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       assert.equal(await page.locator('h1').innerText(), 'Saved User finished');
     });
     await controller.shutdown();
+    assert.equal(await views.get(tab.id).webContents.executeJavaScript('!!document.querySelector("[data-unbiased-agent-cursor]")'), false, 'disconnect removes the cursor');
     assert.equal(views.get(tab.id).webContents.isDestroyed(), false, 'disconnect keeps user tab alive');
     const wc = views.get(other.id).webContents; wc.debugger.attach('1.3');
     await assert.rejects(connectSidePage(wc), /already has a debugger/); wc.debugger.detach();
     const reconnect = await connectSidePage(wc); await reconnect.close();
     assert.equal(wc.debugger.isAttached(), false);
     assert.equal(front.isVisible(), false); assert.equal(background.isVisible(), false);
-    console.log('PASS: background native tabs, isolated sessions, page-only Playwright, screenshot/click/fill/scroll, help pause, same-tab resume and debugger cleanup.');
+    console.log('PASS: in-app browser cursor coordinates, click-through, navigation, idle fade, handoff cleanup and capture exclusion; background native tabs, isolated sessions, page-only Playwright, screenshot/click/fill/scroll, help pause, same-tab resume and debugger cleanup.');
   } finally {
     await controller.shutdown(); for (const view of views.values()) if (!view.webContents.isDestroyed()) view.webContents.close();
     front.destroy(); background.destroy(); await new Promise(resolve => server.close(resolve));

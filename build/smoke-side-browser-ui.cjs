@@ -53,6 +53,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await emitTabs({root:'chat-one',tabs:[tab],revealId:-1});
     await until(active(-1));
     await until("document.querySelector('[data-browser-help=\"-1\"]')?.textContent.includes('Please sign in')");
+    assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"Agent has access to this in-app browser tab\"]').length"), 0, 'user handoff hides the access cursor');
     // A foreign background update must neither show nor add a different chat's tab.
     await evaluate("window.qaEmit('onSideBrowserTabs',{root:'other-chat',tabs:[{id:-2,url:'https://private.test',controlled:true}]})");
     assert.equal(await evaluate("!!document.querySelector('[data-browser-host=\"-2\"]')"), false);
@@ -66,6 +67,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await until("window.qaCalls.some(c=>c[0]==='sendMessage'&&c[2]==='Browser step completed. Continue in tab -1.')");
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='resumeSideBrowser').length"), 1);
     await until("!document.querySelector('[data-browser-help=\"-1\"]')");
+    assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"Agent has access to this in-app browser tab\"]').length"), 1, 'continuation restores the access cursor');
     assert.equal(await evaluate(active(-1)), true, 'continuation leaves the same tab visible');
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='openBrowser'&&c[1]?.url).length"), 0, 'handoff does not reload the page');
     assert.equal(await evaluate("document.querySelector('[data-pane-id=main][role=textbox]').textContent"), 'Keep this unsent draft');

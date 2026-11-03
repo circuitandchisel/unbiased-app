@@ -44,11 +44,11 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await win.loadFile(html);
     await until("window.qaListeners?.get('onBrowserOpenLink')?.size>0&&document.querySelector('[aria-label=Sidebar]')!==null");
     await evaluate(`window.qaEmit('onBrowserOpenLink',{url:${JSON.stringify(pr)}});window.qaEmit('onBrowserOpenLink',{url:${JSON.stringify(pr)}})`);
-    await until("document.querySelectorAll('[aria-label=\"Close browser\"]').length===1");
+    await until("document.querySelectorAll('[aria-label=\"Close in-app browser\"]').length===1");
     const first = (await opens())[0][1].id;
     assert.equal((await opens()).length, 1, 'rapid repeat clicks create one native navigation');
     await state(first, pr); await emitLink(other);
-    await until("document.querySelectorAll('[aria-label=\"Close browser\"]').length===2");
+    await until("document.querySelectorAll('[aria-label=\"Close in-app browser\"]').length===2");
     const second = (await opens())[1][1].id; await state(second, other); await until(active(second));
     await emitLink(pr); await until(active(first));
     assert.equal((await opens()).length, 2, 'selecting an existing destination does not reload or create a tab');
@@ -57,9 +57,9 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await emitLink(other); await until(active(second));
     assert.equal((await opens()).length, 2, 'an existing tab is revealed when the side panel was hidden');
     await state(first, 'https://example.com/away');
-    await emitLink(pr); await until("document.querySelectorAll('[aria-label=\"Close browser\"]').length===3");
+    await emitLink(pr); await until("document.querySelectorAll('[aria-label=\"Close in-app browser\"]').length===3");
     const third = (await opens())[2][1].id; await state(third, pr); await until(active(third));
-    await evaluate(`[...document.querySelectorAll('.u-side-tab')].find(tab=>tab.querySelector('[aria-current="page"]')).querySelector('[aria-label="Close browser"]').click();window.qaEmit('onBrowserOpenLink',{url:${JSON.stringify(pr)}})`);
+    await evaluate(`[...document.querySelectorAll('.u-side-tab')].find(tab=>tab.querySelector('[aria-current="page"]')).querySelector('[aria-label="Close in-app browser"]').click();window.qaEmit('onBrowserOpenLink',{url:${JSON.stringify(pr)}})`);
     await until("window.qaCalls.filter(c=>c[0]==='openBrowser'&&c[1]?.url).length===4");
     assert.equal((await opens()).length, 4, 'closing and reopening in the same tick cannot select the closed tab');
     const fourth = (await opens())[3][1].id; await state(fourth, pr);
@@ -67,7 +67,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
       await emitLink(url);
       const id = (await opens()).at(-1)[1].id; await state(id, url);
     }
-    await until("document.querySelectorAll('[aria-label=\"Close browser\"]').length===5");
+    await until("document.querySelectorAll('[aria-label=\"Close in-app browser\"]').length===5");
     await emitLink(pr); await until(active(fourth));
     assert.equal((await opens()).length, 6, 'an existing tab is reused even at the tab limit');
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='openExternal').length"), 0);

@@ -5158,10 +5158,12 @@ export function App() {
                         ? { icon: <ReviewIcon />, label: "Review", close: closeReviewTab, aria: "Close review" }
                         : t.startsWith("browser:")
                           ? {
-                              icon: <GlobeIcon size={13} />,
-                              label: browserStates[Number(t.slice(8))]?.title || "Browser",
+                              icon: sideBrowserTabs[Number(t.slice(8))]?.controlled && !sideBrowserTabs[Number(t.slice(8))]?.help
+                                ? <span role="img" aria-label="Agent has access to this in-app browser tab" title="Agent has access to this in-app browser tab" style={{ display: "flex", color: "#FF7764", filter: "drop-shadow(0 0 4px #F8573B88)" }}><svg width="16" height="16" viewBox="-2 -2 22 22" fill="none" aria-hidden="true"><path d="M0 0L17.5 7L8 8L7 17.5Z" stroke="currentColor" strokeWidth="2.1" strokeLinejoin="round" /></svg></span>
+                                : <GlobeIcon size={13} />,
+                              label: browserStates[Number(t.slice(8))]?.title || "In-app browser",
                               close: () => closeTab(t),
-                              aria: "Close browser",
+                              aria: "Close in-app browser",
                             }
                           : agent
                             ? {
@@ -5235,7 +5237,7 @@ export function App() {
             })}
             </div>
             <span style={{ display: "flex", flexShrink: 0 }}>
-              <IconButton title="New browser tab" onClick={openBrowserTab}>
+              <IconButton title="New in-app browser tab" onClick={openBrowserTab}>
                 <PlusIcon />
               </IconButton>
             </span>
@@ -5281,7 +5283,7 @@ export function App() {
                 <LauncherRow icon={<FolderOutlineIcon size={15} />} label="Files" onClick={openFilesTab} />
               )}
               <LauncherRow icon={<TerminalIcon />} label="Terminal" onClick={openTerminalTab} />
-              <LauncherRow icon={<GlobeIcon />} label="Browser" onClick={openBrowserTab} />
+              <LauncherRow icon={<GlobeIcon />} label="In-app browser" onClick={openBrowserTab} />
               {inProject && <LauncherRow icon={<ReviewIcon />} label="Review" onClick={openReviewTab} />}
             </div>
           )}
@@ -7658,7 +7660,7 @@ function BrowserStartPage({
             </button>
             {moreOpen && (
               <>
-                {tool("New browser tab", <GlobeIcon />, onNewBrowser)}
+                {tool("New in-app browser tab", <GlobeIcon />, onNewBrowser)}
               </>
             )}
           </div>
@@ -20967,14 +20969,14 @@ function StepsGroup({
     ? { text: "Needs your approval", color: colors.fg, verb: null as string | null }
     : running
       ? {
-          text: browsing ? "Using" : sideBrowsing ? "Using side browser…" : memoryLabel ? "Updating memory…" : computing ? "Controlling desktop…" : "Working…",
+          text: browsing ? "Using" : sideBrowsing ? "Using in-app browser…" : memoryLabel ? "Updating memory…" : computing ? "Controlling desktop…" : "Working…",
           color: colors.amber,
           verb: browsing ? "Using" : null,
         }
       : browsing
         ? { text: `Used${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: "Used" }
         : sideBrowsing
-          ? { text: `Used side browser${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
+          ? { text: `Used in-app browser${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
         : computing
           ? { text: `Controlled desktop${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
         : memoryLabel
