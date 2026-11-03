@@ -1,3 +1,4 @@
+import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
 import { retainBrowserCapture, readBrowserCapture, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
 import { collectBrowserCaptures } from "../shared/browser-capture";
 import { SIDE_BROWSER_TOOLS, SideBrowserController, sideBrowserUrl, sideLocator } from "./side-browser";
@@ -362,6 +363,7 @@ function ensurePane(paneId: string): { threadId: string | null; turnId: string |
  *  torn-down pane would otherwise wedge the turn forever. */
 function settleLocalApprovals(threadId: string | null | undefined): void {
   if (!threadId) return;
+  blockTurnContinuation(threadId);
   for (const [reqId, pending] of pendingApprovals) {
     if (pending.kind !== "local" || pending.threadId !== threadId) continue;
     pendingApprovals.delete(reqId);
@@ -383,6 +385,7 @@ function dropSidePane(paneId: string): void {
   const pane = panes[paneId];
   if (!pane) return;
   const threadId = pane.threadId;
+  blockTurnContinuation(threadId);
   settleLocalApprovals(threadId);
   settleLocalUserInputs(threadId);
   if (threadId) {
@@ -2572,6 +2575,12 @@ function paneForThread(threadId: unknown): PaneId | null {
 // the engine turn running, so live turns are tracked by THREAD. That lets a
 // backgrounded conversation be reopened mid-turn with its busy state, the
 // partial assistant text, and any approval request the agent is blocked on.
+const turnContinuation = new TurnContinuation();
+const automaticTurnStarts = new Map<string, Promise<{ ok: boolean }>>();
+function blockTurnContinuation(threadId: string | null | undefined): void {
+  if (!threadId) return;
+  turnContinuation.block(threadId); turnContinuation.block(rootThreadOf(threadId));
+}
 const runningTurns = new Map<string, string>(); // threadId → turnId
 // Compaction outlives whichever normal/Mosaic pane requested it.
 const compactingThreads = new Set<string>();
@@ -3670,8 +3679,8 @@ function threadToEntries(
           // a fold — flush what came before it, folded, then show it.
           flush(false);
           entries.push({
-            kind: "user",
-            text: stripFileAttachmentContext(item.text ?? contentToText(item.content)),
+            kind: (item.text ?? contentToText(item.content)) === CONTINUATION_INPUT ? "assistant" : "user",
+            text: (item.text ?? contentToText(item.content)) === CONTINUATION_INPUT ? CONTINUATION_NOTICE : stripFileAttachmentContext(item.text ?? contentToText(item.content)),
             attachments: Array.isArray(item.content)
               ? item.content.flatMap((part: unknown) => {
                   if (!part || typeof part !== "object") return [];
@@ -3699,7 +3708,7 @@ function threadToEntries(
           const text = m.text ?? contentToText(m.content);
           if (!text) break;
           if (m.role === "user") {
-            entries.push({ kind: "user", text: stripFileAttachmentContext(text), ...(startedAt !== null ? { at: startedAt } : {}) });
+            entries.push({ kind: text === CONTINUATION_INPUT ? "assistant" : "user", text: text === CONTINUATION_INPUT ? CONTINUATION_NOTICE : stripFileAttachmentContext(text), ...(startedAt !== null ? { at: startedAt } : {}) });
             if (!foldThisTurn) runningTurnStart = entries.length;
           } else {
             bucket.push({ kind: "assistant", text, phase: m.phase ?? null, ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
@@ -3807,6 +3816,7 @@ function pushStatus(status: EngineStatus): void {
   if(status.state === "exited")turnEnvironments.reset();
   lastStatus = status;
   if (status.state === "exited") {
+    turnContinuation.reset();
     sideBrowser.finishWorker();
     for (const threadId of compactingThreads) updateThreadCompaction(threadId, "failed");
     if (petSettleTimer) clearTimeout(petSettleTimer);
@@ -5210,6 +5220,7 @@ const APPROVAL_BOOT = Math.random().toString(36).slice(2, 8);
 let nextEngineApproval = 1;
 
 function deliverUserInput(request: UserInputRequest, pending: PendingUserInput): void {
+  blockTurnContinuation(pending.threadId);
   pendingUserInputs.set(request.requestId, pending);
   const sub = pending.threadId ? subAgents.get(pending.threadId) : undefined;
   const target = sub ? sub.parent : pending.threadId;
@@ -5253,6 +5264,7 @@ function requestLocalApproval(
   reason: string,
   options: { allowForSession?: boolean; kind?: "command" | "computer" } = {},
 ): Promise<ApprovalDecision> {
+  blockTurnContinuation(threadId);
   const requestId = `apr_${APPROVAL_BOOT}_local_${nextLocalApproval++}`;
   return new Promise((resolve) => {
     pendingApprovals.set(requestId, { kind: "local", threadId, settle: resolve });
@@ -5472,6 +5484,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       return text(`Tab ${id} is available for this conversation. It stays in the background unless you request user help.`);
     }
     if (tool === "browser_side_request_help") {
+      blockTurnContinuation(threadId);
       const help = await sideBrowser.requestHelp(root, id, a.message);
       return text(`Waiting for the user in tab ${id}: ${help.message}. Stop automation. The user must click Continue agent before you can proceed.`);
     }
@@ -5808,7 +5821,11 @@ function wireNotifications(): void {
           // background judging can never compete with this turn for the
           // gateway's per-org concurrency.
           learning?.setIdle(false);
-          sideBrowser.beginWorker(threadId);
+          turnContinuation.turnStarted(threadId);
+          if (turnContinuation.startingCanceled(threadId)) {
+            void engine.request("turn/interrupt", { threadId, turnId: turn.id }).catch(() => {});
+            sideBrowser.finishWorker(threadId);
+          } else sideBrowser.beginWorker(threadId);
           runningTurns.set(threadId, turn.id);
           petReplies.set(threadId, { stream: "", last: "", final: "" });
           const petKey = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
@@ -5883,6 +5900,7 @@ function wireNotifications(): void {
         if (item?.type === "message" && phase === "completed" && threadId) {
           const m = item as unknown as { role?: string; text?: string; content?: unknown };
           const text = m.text ?? contentToText(m.content);
+          if (m.role === "assistant") turnContinuation.assistant(threadId, text);
           const reply = petReplies.get(threadId);
           if (reply && m.role !== "user") {
             reply.last = text || reply.stream;
@@ -5900,6 +5918,8 @@ function wireNotifications(): void {
           bgStream.delete(threadId);
         }
         if (item?.type === "agentMessage" && phase === "completed" && threadId) {
+          const message = item as typeof item & { text?: string; content?: unknown };
+          turnContinuation.assistant(threadId, message.text || contentToText(message.content) || petReplies.get(threadId)?.stream || "");
           const reply = petReplies.get(threadId);
           if (reply) {
             const message = item as typeof item & { text?: string; phase?: string | null };
@@ -6222,8 +6242,12 @@ function wireNotifications(): void {
         const turn = params.turn as
           | { status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
           | undefined;
+        const continuation = threadId ? turnContinuation.completed(threadId, turn?.status ?? "completed", !!paneId && !planMode && !subAgents.has(threadId) && !scheduledRuns.has(threadId) && !mcpApplyPending.has(threadId)
+          && ![...pendingApprovals.values()].some(p => p.threadId && rootThreadOf(p.threadId) === rootThreadOf(threadId))
+          && ![...pendingUserInputs.values()].some(p => p.threadId && rootThreadOf(p.threadId) === rootThreadOf(threadId))
+          && !sideBrowser.list(rootThreadOf(threadId)).some(tab => !!tab.help)) : {};
         if (threadId) {
-          if (turn?.status === "completed" && !subAgents.has(threadId)) {
+          if (turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId)) {
             const count = (completedTurnsSinceMemory.get(threadId) ?? 0) + 1;
             completedTurnsSinceMemory.set(threadId, count);
             if (count >= 25) {
@@ -6257,7 +6281,7 @@ function wireNotifications(): void {
           petReplies.delete(threadId);
           const scheduledKey = scheduledRuns.get(threadId)?.key;
           if (!scheduledKey) petFinished(`turn:${threadId}`, turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "completed");
-          if (turn?.status === "completed" && !subAgents.has(threadId) && !scheduledKey?.startsWith("tune:")) {
+          if (turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId) && !scheduledKey?.startsWith("tune:")) {
             const version = petNoticeVersion;
             void showCompletedPetNotice(threadId, reply?.final || reply?.last || "", reply?.stream || "", version);
           }
@@ -6330,7 +6354,7 @@ function wireNotifications(): void {
                 "unknown error",
             );
           }
-          send("chat:thread-activity", { threadId, running: false, completed: turn?.status === "completed" && !subAgents.has(threadId) });
+          send("chat:thread-activity", { threadId, running: false, completed: turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId) });
           // Nicknames, for the case where raws never arrive. The engine emits
           // raw items only for threads STARTED with experimentalRawEvents, so
           // a resumed conversation learns nothing from the live path — and a
@@ -6364,6 +6388,8 @@ function wireNotifications(): void {
         send("chat:turn-completed", {
           paneId,
           narrated,
+          ...(continuation.offer && threadId ? { continuation: { ...continuation.offer, threadId, originPane: paneId } } : {}),
+          ...(continuation.exhausted ? { continuationExhausted: true } : {}),
           status: turn?.status ?? "completed",
           usage: turn?.usage ?? null,
           // A failed turn is invisible without this — surface the cause.
@@ -6457,6 +6483,7 @@ function wireNotifications(): void {
       // the conversation is reopened. Auto-declining here would silently
       // reject work the user asked for.
       function deliverApproval(payload: Record<string, unknown>): void {
+        blockTurnContinuation(typeof params.threadId === "string" ? params.threadId : null);
         // An app-only signal. Rollouts carry no record that the user was ever
         // asked, so the sidecar's approval_decline weight is unreachable from
         // replayed history — these two events are the app's unique
@@ -7895,6 +7922,12 @@ app.whenReady().then(async () => {
     commandText?: string;
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
+    const previousThread = panes[paneId]?.threadId;
+    if (previousThread) {
+      turnContinuation.cancel(previousThread);
+      // A new user request must not race a canceled automatic turn/start RPC.
+      await automaticTurnStarts.get(previousThread)?.catch(() => {});
+    }
     for (const attachment of attachments ?? []) {
       if (!isAbsolute(attachment.path)) throw new Error(`Invalid attachment path: ${attachment.name}`);
       const info = statSync(attachment.path);
@@ -8073,6 +8106,7 @@ app.whenReady().then(async () => {
     if (planMode) input.unshift({ type: "text", text: PLAN_DIRECTIVE });
     pinTurnEnvironment(pane.threadId!);
     let turnAccepted = false;
+    turnContinuation.startTask(pane.threadId!, text, planMode);
     try {
     const result = (await engine.request("turn/start", {
       threadId: pane.threadId,
@@ -8095,6 +8129,40 @@ app.whenReady().then(async () => {
 
     return { turnId: pane.turnId, threadId: pane.threadId, created };
     } finally { if (!turnAccepted) turnEnvironments.end(pane.threadId!); }
+  });
+
+  // One-use host ticket: the renderer may decline for queued input, but cannot authorize a retry.
+  ipcMain.handle("chat:continue-unfinished", async (event, p: { paneId: string; threadId: string; token: string }) => {
+    if (event.sender !== win?.webContents) throw new Error("Only the app can continue a turn.");
+    const pane = p && panes[p.paneId];
+    if (!pane || pane.threadId !== p.threadId || runningTurns.has(p.threadId) || planMode || lastStatus.state !== "connected") return { ok: false };
+    const claim = turnContinuation.claim(p.threadId, p.token);
+    if (!claim) return { ok: false };
+    const start = async (): Promise<{ ok: boolean }> => {
+      pinTurnEnvironment(p.threadId);
+      try {
+        claim.signal.throwIfAborted();
+        const cwd = threadCwds.get(p.threadId) ?? null;
+        const result = await engine.request("turn/start", { threadId: p.threadId,
+          input: [{ type: "text", text: CONTINUATION_INPUT }],
+          approvalPolicy: threadPolicy().approvalPolicy, sandboxPolicy: turnSandbox(cwd),
+        }) as { turn?: { id?: string } };
+        if (claim.signal.aborted || panes[p.paneId] !== pane || pane.threadId !== p.threadId) {
+          if (result.turn?.id) await engine.request("turn/interrupt", { threadId: p.threadId, turnId: result.turn.id }).catch(() => {});
+          return { ok: false };
+        }
+        if (!result.turn?.id) throw new Error("The engine did not start an automatic continuation.");
+        pane.turnId = result.turn.id;
+        return { ok: true };
+      } catch (error) {
+        turnEnvironments.end(p.threadId);
+        if (claim.signal.aborted) return { ok: false };
+        throw error;
+      } finally { turnContinuation.started(p.threadId, claim.signal); }
+    };
+    const pending = start(); automaticTurnStarts.set(p.threadId, pending);
+    try { return await pending; }
+    finally { if (automaticTurnStarts.get(p.threadId) === pending) automaticTurnStarts.delete(p.threadId); }
   });
 
   // Client-side transcript cache: the engine's history omits things only
@@ -8694,6 +8762,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("chat:interrupt", async (_e, paneId: PaneId) => {
     const pane = ensurePane(paneId);
+    blockTurnContinuation(pane.threadId);
     // The per-thread record covers a conversation reopened mid-turn,
     // where the pane's own turnId may not have been set by turn/started.
     const turnId = pane.turnId ?? (pane.threadId ? runningTurns.get(pane.threadId) : null);
@@ -8724,6 +8793,7 @@ app.whenReady().then(async () => {
   // the gateway's cascade. Emits a contextCompaction item on completion,
   // which the renderer already renders as a divider.
   ipcMain.handle("chat:compact", async (_e, paneId: PaneId) => {
+    blockTurnContinuation(panes[paneId]?.threadId);
     const pane = ensurePane(paneId);
     if (!pane.threadId) return { ok: false, error: "no conversation" };
     const threadId = pane.threadId;
@@ -11820,6 +11890,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("threads:delete", async (_e, id: string) => {
+    blockTurnContinuation(id);
     sideBrowser.finishWorker(id);
     for (const [subId, info] of subAgents) if (info.parent === id) sideBrowser.finishWorker(subId);
     for (const record of sideChatRecents.recordsForParent(id)) {

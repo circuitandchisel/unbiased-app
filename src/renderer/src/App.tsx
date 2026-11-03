@@ -648,6 +648,7 @@ declare global {
         attachments?: Attachment[],
         options?: { computer?: boolean; visualize?: boolean; skillPath?: string; commandText?: string },
       ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
+      continueUnfinished: (p: { paneId: string; threadId: string; token: string }) => Promise<{ ok: boolean }>;
       slashCommands: (paneId: PaneId) => Promise<{ commands: SlashCommand[]; error: string | null }>;
       chooseAttachments: () => Promise<{ attachments: Attachment[]; errors?: string[] }>;
       attachPaths: (paths: string[]) => Promise<{ attachments: Attachment[]; errors?: string[] }>;
@@ -657,7 +658,7 @@ declare global {
       onTurnStarted: (cb: (p: { paneId: PaneId; turnId: string | null }) => void) => () => void;
       onDelta: (cb: (p: { paneId: PaneId; delta: string }) => void) => () => void;
       onTurnCompleted: (
-        cb: (p: { paneId: PaneId; status: string; error?: string | null; narrated?: boolean }) => void,
+        cb: (p: { paneId: PaneId; status: string; error?: string | null; narrated?: boolean; continuation?: { token: string; threadId: string; originPane: string; attempt: number; limit: number }; continuationExhausted?: boolean }) => void,
       ) => () => void;
       onThreadActivity: (cb: (p: { threadId: string; running: boolean; completed?: boolean }) => void) => () => void;
       setVisibleChats: (threadIds: string[], paneIds: string[]) => void;
@@ -10356,12 +10357,13 @@ function ChatPane({
         // for sign-ins, where the page is the only place to type.
         if (p.paneId === paneId) closeAgentMirrorRef.current?.();
         if (p.paneId !== paneId) return;
+        const automaticContinuation = queueRef.current.length === 0 ? p.continuation : undefined;
         const output = settleTurnOutput(p.status, !!p.narrated, producedRef.current, emptyStreakRef.current);
         emptyStreakRef.current = output.emptyStreak;
         turnPerfRef.current = { ...turnPerfRef.current, completedAt: Date.now() };
         publishTurnPerf();
         setBusy(false);
-        onTurnLanded?.();
+        if (!p.continuation) onTurnLanded?.();
         // Read-and-clear OUTSIDE the updater: React can invoke updaters
         // more than once (StrictMode), and a consumed ref on the second
         // pass would silently skip the work fold.
@@ -10459,7 +10461,9 @@ function ChatPane({
               ...next,
               { kind: "assistant", text: `⚠ Turn failed${p.error ? `: ${p.error}` : "."}` },
             ];
-          } else if (p.narrated) {
+          } else if (p.continuationExhausted) {
+            next = [...next, { kind: "assistant", text: "⚠ The agent still ended with unfinished work after two automatic continuations. Stopped to avoid a retry loop. Review its progress before continuing." }];
+          } else if (p.narrated && !p.continuation) {
             // The turn produced progress narration and then yielded without
             // writing an answer. The work generally DID happen — this is the
             // "narrate and stop" mode — but nothing on screen said so, and a
@@ -10486,6 +10490,7 @@ function ChatPane({
               },
             ];
           }
+          if (automaticContinuation) next = [...next, { kind: "assistant", text: `↻ Continuing unfinished work automatically (${automaticContinuation.attempt}/${automaticContinuation.limit})…` }];
           // Stamp the settled final message — the hover timestamp beside
           // its copy button.
           const settled = next[next.length - 1];
@@ -10499,6 +10504,18 @@ function ChatPane({
         if (head) {
           setQueue(rest);
           void sendNow(head);
+        } else if (p.continuation && p.continuation.originPane === paneId && threadIdRef.current === p.continuation.threadId) {
+          const offer = p.continuation;
+          setBusy(true);
+          void window.unbiased.continueUnfinished({ paneId, threadId: offer.threadId, token: offer.token }).then(result => {
+            // turn/started may arrive before the RPC result. Never clear a newer turn's busy state.
+            if (threadIdRef.current !== offer.threadId) return;
+            if (!result.ok && turnStartIndexRef.current === null) setBusy(false);
+          }).catch(error => {
+            if (threadIdRef.current !== offer.threadId) return;
+            if (turnStartIndexRef.current === null) setBusy(false);
+            setEntries(es => [...es, { kind: "assistant", text: `⚠ Automatic continuation could not start: ${String(error)}` }]);
+          });
         }
       }),
       window.unbiased.onApprovalRequest((p) => {
