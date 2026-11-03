@@ -338,8 +338,10 @@ async function pruneSideChatRecents(): Promise<void> {
     const record = sideChatRecents.get(paneId);
     if (!record) continue;
     try {
+      sideBrowser.finishWorker(record.threadId);
       await engine.request("thread/delete", { threadId: record.threadId });
       forgetBrowserCaptures(record.threadId);
+      void releaseConversationTab(record.threadId);
       sideChatRecents.remove(paneId);
       threadMcp.delete(record.threadId);
       rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -384,6 +386,7 @@ function dropSidePane(paneId: string): void {
   settleLocalApprovals(threadId);
   settleLocalUserInputs(threadId);
   if (threadId) {
+    sideBrowser.finishWorker(threadId);
     const turnId = pane.turnId ?? runningTurns.get(threadId) ?? null;
     if (turnId) {
       const interrupt = engine.request("turn/interrupt", { threadId, turnId }).catch(() => {
@@ -5447,15 +5450,17 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
   const text = (message: string, success = true): DynamicToolResponse => ({ success, contentItems: [{ type: "inputText", text: message }] });
   if (!threadId || browserShuttingDown) return text("No active local conversation is available.", false);
   const root = rootThreadOf(threadId);
+  const signal = sideBrowser.workerSignal(threadId);
   if (panes.main.threadId === root) sideBrowser.adoptDraft(root);
   try {
+    signal.throwIfAborted();
     if (tool === "browser_side_list") return text(JSON.stringify(sideBrowser.list(root)));
     if (tool === "browser_side_open") {
       const url = sideBrowserUrl(a.url);
       if (isStripeOnboardingPage(url, !app.isPackaged)) return text("This sign-in/setup page requires user interaction. Open a regular page and request user help rather than opening an external browser automatically.", false);
       const refusal = await ensureBrowserAllowed(tool, threadId, url);
       if (refusal) return text(refusal, false);
-      return text(JSON.stringify(await sideBrowser.open(root, url, threadId)));
+      return text(JSON.stringify(await sideBrowser.open(root, url, threadId, signal)));
     }
     if (typeof a.tabId !== "number" || !Number.isInteger(a.tabId)) return text("Provide a tabId from browser_side_list or browser_side_open.", false);
     const id = a.tabId; sideBrowser.get(root, id);
@@ -5463,7 +5468,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       await sideBrowser.use(root, id, liveAccessMode(root) === "full", async ({ title, origin }) => {
         const decision = await requestLocalApproval(threadId, `Control in-app browser tab: ${title}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${origin}. The agent cannot access other tabs.`, { allowForSession: false });
         return decision !== "decline";
-      }, threadId);
+      }, threadId, signal);
       return text(`Tab ${id} is available for this conversation. It stays in the background unless you request user help.`);
     }
     if (tool === "browser_side_request_help") {
@@ -5474,7 +5479,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
     const refusal = await ensureBrowserAllowed(tool, threadId, destination ?? `in-app browser tab ${id}`);
     if (refusal) return text(refusal, false);
     if (tool === "browser_side_screenshot") {
-      const image = await sideBrowser.run(root, id, (page, cursor) => cursor.withoutMarker(() => page.screenshot({ type: "png" })), false, threadId);
+      const image = await sideBrowser.run(root, id, (page, cursor) => cursor.withoutMarker(() => page.screenshot({ type: "png" })), false, threadId, signal);
       return { success: true, contentItems: [{ type: "inputImage", imageUrl: `data:image/png;base64,${image.toString("base64")}` }] };
     }
     const result = await sideBrowser.run(root, id, async (page, cursor) => {
@@ -5503,7 +5508,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
         default: throw new Error("Unknown in-app browser tool.");
       }
       return `Completed in tab ${id}. Use browser_side_snapshot to inspect the current page.`;
-    }, tool === "browser_side_navigate", threadId);
+    }, tool === "browser_side_navigate", threadId, signal);
     return text(result);
   } catch (error) { return text(error instanceof Error ? error.message : String(error), false); }
 }
@@ -5557,6 +5562,13 @@ function closeSideBrowserView(id: number): void {
     if (backgroundBrowserHost && !backgroundBrowserHost.isDestroyed() && backgroundBrowserHost.contentView.children.includes(view)) backgroundBrowserHost.contentView.removeChildView(view);
     if (!view.webContents.isDestroyed()) view.webContents.close();
   }
+}
+
+/** Release all native and managed browser pages when their owning thread is deleted. */
+async function releaseConversationTab(rootId: string): Promise<void> {
+  sideBrowser.finishWorker(rootId);
+  for (const tab of sideBrowser.list(rootId)) closeSideBrowserView(tab.id);
+  await browserRuntime.request("session.release", { sessionId: rootId }).catch(() => undefined);
 }
 
 function ensureBrowserView(id: number, owner = rootThreadOf(panes.main.threadId), isolated = false): WebContentsView {
@@ -5796,6 +5808,7 @@ function wireNotifications(): void {
           // background judging can never compete with this turn for the
           // gateway's per-org concurrency.
           learning?.setIdle(false);
+          sideBrowser.beginWorker(threadId);
           runningTurns.set(threadId, turn.id);
           petReplies.set(threadId, { stream: "", last: "", final: "" });
           const petKey = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
@@ -8685,6 +8698,8 @@ app.whenReady().then(async () => {
     // where the pane's own turnId may not have been set by turn/started.
     const turnId = pane.turnId ?? (pane.threadId ? runningTurns.get(pane.threadId) : null);
     if (!pane.threadId || !turnId) return { interrupted: false };
+    sideBrowser.finishWorker(pane.threadId);
+    for (const [subId, info] of subAgents) if (info.parent === pane.threadId) sideBrowser.finishWorker(subId);
     await engine.request("turn/interrupt", { threadId: pane.threadId, turnId });
     // Stop means stop: sub-agents run in their own sessions, so without a
     // cascade they keep working (and a sub blocked on an approval would
@@ -11804,19 +11819,16 @@ app.whenReady().then(async () => {
     return { attachment: { name, path, kind: "image", thumb: thumbDataUrl(image) } };
   });
 
-  /** Close a deleted conversation's browser tab. Best-effort: the browser may
-   *  not be running, and a failure here must never block the delete. */
-  async function releaseConversationTab(rootId: string): Promise<void> {
-    for (const tab of sideBrowser.list(rootId)) closeSideBrowserView(tab.id);
-    await browserRuntime.request("session.release", {sessionId:rootId}).catch(() => undefined);
-  }
-
   ipcMain.handle("threads:delete", async (_e, id: string) => {
+    sideBrowser.finishWorker(id);
+    for (const [subId, info] of subAgents) if (info.parent === id) sideBrowser.finishWorker(subId);
     for (const record of sideChatRecents.recordsForParent(id)) {
       dropSidePane(record.paneId);
       try {
+        sideBrowser.finishWorker(record.threadId);
         await engine.request("thread/delete", { threadId: record.threadId });
         forgetBrowserCaptures(record.threadId);
+        void releaseConversationTab(record.threadId);
         sideChatRecents.remove(record.paneId);
         threadMcp.delete(record.threadId);
         rmSync(sideChatTranscriptFile(record.threadId), { force: true });

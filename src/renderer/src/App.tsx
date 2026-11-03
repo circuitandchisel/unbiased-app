@@ -1,3 +1,4 @@
+import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
 import { InAppBrowserPreview } from "./InAppBrowserPreview";
 import type { SideBrowserHelp, SideBrowserTab, SideBrowserUpdate } from "../../shared/side-browser";
@@ -9676,7 +9677,9 @@ function ChatPane({
   const composerRef = useRef<MarkdownComposerHandle | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const promptHistory = useRef(new PromptHistory());
   const changeDraft = (text: string) => {
+    promptHistory.current.reset();
     drafts.setText(text);
     setDraft(text);
   };
@@ -9706,6 +9709,7 @@ function ChatPane({
     if (next) setAttachments(next);
   };
   useLayoutEffect(() => {
+    promptHistory.current.reset();
     const saved = drafts.transition(threadId ?? null, reset.nonce);
     if (!saved) return;
     setDraft(saved.text);
@@ -12180,6 +12184,19 @@ function ChatPane({
             onChange={changeDraft}
             onKeyDown={(e) => {
               if (slash.keyDown(e)) return;
+              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) {
+                const direction = e.key === "ArrowUp" ? "up" : "down";
+                if (composerRef.current?.canRecallPrompt(direction, promptHistory.current.active)) {
+                  const prompts = entries.flatMap(entry => entry.kind === "user" && entry.text.trim() ? [entry.text] : []);
+                  const recalled = promptHistory.current.navigate(direction, prompts, draft);
+                  if (recalled !== null) {
+                    e.preventDefault(); e.stopPropagation();
+                    drafts.setText(recalled); setDraft(recalled);
+                    composerRef.current?.recallPrompt(recalled);
+                    return;
+                  }
+                }
+              }
               // Enter sends immediately when idle and queues while a turn runs.
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();

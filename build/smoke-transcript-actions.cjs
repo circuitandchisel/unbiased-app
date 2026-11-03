@@ -22,6 +22,7 @@ const root=createRoot(document.getElementById('root'));
 const render=(reset=main.reset,key='main')=>root.render(<><section id="side"><ChatPane {...side}/></section><section id="main"><ChatPane key={key} {...main} reset={reset}/></section><section id="mosaic"><MultiViewTile key={window.qaMosaicKey??0} {...mosaic}/></section></>);
 window.qaRestoreMain=(seconds,nonce,key='main',compacting=false)=>render({...main.reset,nonce,compacting,resume:seconds===null?null:{running:true},runningTurnStart:0,runningTurnStartedAt:seconds===null?null:Date.now()-seconds*1000},key);
 window.qaRunningCopy=()=>render({...main.reset,nonce:20,entries:[{kind:'user',text:'Earlier question'},{kind:'assistant',text:'Earlier completed answer'},{kind:'user',text:'Current question'},{kind:'assistant',text:'Current streaming answer'}],resume:{running:true,approvals:[],userInputs:[]},runningTurnStart:3,runningTurnStartedAt:Date.now()-1000},'copy-main');
+window.qaPromptHistory=()=>root.render(<><section id="main"><ChatPane key="history-main" {...main} reset={{nonce:40,entries:[{kind:'user',text:'First main prompt'},{kind:'assistant',text:'First answer'},{kind:'user',text:'Second main prompt'}]}}/></section><section id="side"><ChatPane key="history-side" {...side} reset={{nonce:40,entries:[{kind:'user',text:'Side-only prompt'}]}}/></section><section id="mosaic"><ChatPane key="history-mosaic" {...side} paneId="multi:qa-mosaic" reset={{nonce:40,entries:[{kind:'user',text:'Mosaic-only prompt'}]}}/></section></>);
 window.qaReopenMosaic=compacting=>{window.qaMosaicCompacting=compacting;window.qaMosaicKey=(window.qaMosaicKey??0)+1;render()};
 render();
 `},bundle:true,write:false,platform:'browser',format:'iife',jsx:'automatic',define:{'import.meta.glob':'__qaGlob'},banner:{js:'var __qaGlob=()=>({});'},loader:{'.svg':'dataurl','.png':'dataurl','.webp':'dataurl'},plugins:[{name:'qa',setup(build){
@@ -274,5 +275,37 @@ render();
  await focusComposer('mosaic');await insert('/Code');
  await until(()=>exists('#mosaic [role=option]'),'Mosaic command picker mounts');
  assert.ok(await win.webContents.executeJavaScript("window.qaCalls.some(c=>c[0]==='slashCommands'&&c[1]==='multi:qa-mosaic')"),'Mosaic requests its own skill scope');
- console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, side-chat and Mosaic scope.');win.destroy();app.quit();
+ // Prompt recall uses trusted arrows in the same rich-text composer as slash commands.
+ win.showInactive();
+ await win.webContents.executeJavaScript('window.qaPromptHistory()');
+ const contents=id=>win.webContents.executeJavaScript(`document.querySelector('${composer(id)}').textContent`);
+ await focusComposer('main');await insert('Keep my draft');
+ await key('ArrowUp','ArrowUp',38);
+ await until(async()=>await contents('main')==='Second main prompt','Up recalls the most recent prompt');
+ await key('ArrowUp','ArrowUp',38);
+ await until(async()=>await contents('main')==='First main prompt','repeated Up recalls the older prompt');
+ await key('ArrowUp','ArrowUp',38);assert.equal(await contents('main'),'First main prompt');
+ await key('ArrowDown','ArrowDown',40);
+ await until(async()=>await contents('main')==='Second main prompt','Down recalls the newer prompt');
+ await key('ArrowDown','ArrowDown',40);
+ await until(async()=>await contents('main')==='Keep my draft','Down past the latest restores the unsent draft');
+ await key('ArrowUp','ArrowUp',38);await insert(' edited');
+ await key('ArrowDown','ArrowDown',40);
+ assert.equal(await contents('main'),'Second main prompt edited','editing a recalled prompt resets history navigation');
+ await focusComposer('side');await key('ArrowUp','ArrowUp',38);
+ await until(async()=>await contents('side')==='Side-only prompt','side chat recalls only its own prompts');
+ await focusComposer('mosaic');await key('ArrowUp','ArrowUp',38);
+ await until(async()=>await contents('mosaic')==='Mosaic-only prompt','Mosaic recalls only its own prompts');
+ // Native multiline navigation must still work before history browsing begins.
+ await focusComposer('main');await key('a','KeyA',65,4);await insert('First draft line');
+ await key('Enter','Enter',13,8);await insert('Last draft line');
+ const multiline=await contents('main');
+ await key('ArrowUp','ArrowUp',38);
+ await pause(); // Let ProseMirror consume the native selectionchange before the next arrow.
+ assert.equal(await contents('main'),multiline,'Up inside multiline text moves the caret without replacing the draft');
+ await key('ArrowUp','ArrowUp',38);
+ await until(async()=>await contents('main')==='Second main prompt','Up at the first line enters history');
+ await key('ArrowDown','ArrowDown',40);
+ await until(async()=>await contents('main')===multiline,'history restores the whole multiline draft');
+ console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, prompt recall/draft restoration and side-chat/Mosaic scope.');win.destroy();app.quit();
 })().catch(e=>{console.error(e);app.exit(1)});

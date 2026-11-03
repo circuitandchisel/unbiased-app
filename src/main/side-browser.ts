@@ -29,6 +29,16 @@ export const SIDE_BROWSER_TOOLS = [
 type Entry = { id: number; root: string; contents: WebContents; agentOwned: boolean; controlled: boolean; help: SideBrowserHelp | null; requested?: string; connection?: Awaited<ReturnType<typeof connectSidePage>>; queue: Promise<unknown>; cursor: InAppBrowserCursor; workers: Set<string>; lastUsedAt: number; closed: boolean; generation: number; cleanup?: () => void };
 export class SideBrowserController {
   private entries = new Map<number, Entry>();
+  private workerRuns = new Map<string, AbortController>();
+  workerSignal(workerId: string): AbortSignal {
+    let run = this.workerRuns.get(workerId);
+    if (!run) { run = new AbortController(); this.workerRuns.set(workerId, run); }
+    return run.signal;
+  }
+  beginWorker(workerId: string): void {
+    this.finishWorker(workerId);
+    this.workerRuns.set(workerId, new AbortController());
+  }
   constructor(private host: { create: (root: string) => { id: number; contents: WebContents }; update: (root: string, revealId?: number) => void; controlled: (id: number) => void }, private connect = connectSidePage) {}
   register(id: number, root: string, contents: WebContents, agentOwned = false): void {
     if (this.entries.has(id)) return;
@@ -57,20 +67,23 @@ export class SideBrowserController {
   needsBackgroundHost(id: number): boolean { return this.entries.get(id)?.controlled === true; }
   owner(id: number): string | null { return this.entries.get(id)?.root ?? null; }
   grant(root: string, id: number): void { const entry = this.get(root, id); sideBrowserUrl(entry.contents.getURL()); entry.controlled = true; this.host.controlled(id); this.host.update(root); }
-  async use(root: string, id: number, fullAccess: boolean, approve: (tab: { title: string; origin: string }) => Promise<boolean>, workerId = root): Promise<void> {
+  async use(root: string, id: number, fullAccess: boolean, approve: (tab: { title: string; origin: string }) => Promise<boolean>, workerId = root, signal = this.workerSignal(workerId)): Promise<void> {
+    signal.throwIfAborted();
     const entry = this.get(root, id);
     const origin = new URL(sideBrowserUrl(entry.contents.getURL())).origin;
     if (entry.controlled) { if (!entry.help) this.markWorking(entry, workerId); return; }
     if (!fullAccess && !(await approve({ title: entry.contents.getTitle() || "In-app browser", origin }))) {
       throw new Error("The user declined control of this in-app browser tab. Do not retry or use another route to access it.");
     }
+    signal.throwIfAborted();
     if (new URL(this.get(root, id).contents.getURL()).origin !== origin) throw new Error("The tab changed sites while permission was pending. Request control again for its current page.");
     this.grant(root, id); this.markWorking(entry, workerId);
   }
   private markWorking(entry: Entry, workerId: string): void {
     entry.workers.add(workerId); entry.lastUsedAt = Date.now(); this.host.update(entry.root);
   }
-  async open(root: string, rawUrl: unknown, workerId = root): Promise<SideBrowserTab> {
+  async open(root: string, rawUrl: unknown, workerId = root, signal = this.workerSignal(workerId)): Promise<SideBrowserTab> {
+    signal.throwIfAborted();
     const url = sideBrowserUrl(rawUrl);
     const match = this.list(root).find(tab => { try { return sideBrowserUrl(tab.url) === url; } catch { return false; } });
     if (match) {
@@ -84,15 +97,17 @@ export class SideBrowserController {
     this.register(id, root, contents, true);
     const entry = this.get(root, id); entry.requested = url;
     this.host.update(root);
-    try { await this.run(root, id, page => page.goto(url, { waitUntil: "domcontentloaded" }), true, workerId); }
+    try { await this.run(root, id, page => page.goto(url, { waitUntil: "domcontentloaded" }), true, workerId, signal); }
     finally { entry.requested = undefined; this.host.update(root); }
     this.get(root, id);
     return this.list(root).find(tab => tab.id === id)!;
   }
-  async run<T>(root: string, id: number, action: (page: Page, cursor: InAppBrowserCursor) => Promise<T>, navigating = false, workerId = root): Promise<T> {
+  async run<T>(root: string, id: number, action: (page: Page, cursor: InAppBrowserCursor) => Promise<T>, navigating = false, workerId = root, signal = this.workerSignal(workerId)): Promise<T> {
+    signal.throwIfAborted();
     const entry = this.get(root, id);
     const generation = entry.generation;
     const task = entry.queue.catch(() => {}).then(async () => {
+      signal.throwIfAborted();
       this.get(root, id);
       if (entry.generation !== generation) throw new Error("Browser control changed while this action was queued. Inspect the page before retrying.");
       if (!entry.controlled) throw new Error("Call browser_side_use and obtain permission before controlling this tab.");
@@ -102,16 +117,33 @@ export class SideBrowserController {
       if (entry.connection?.page.isClosed()) { await entry.connection.close(); entry.connection = undefined; }
       if (!entry.connection) {
         const connection = await this.connect(entry.contents);
-        if (entry.closed || entry.help || entry.generation !== generation) {
+        if (signal.aborted || entry.closed || entry.help || entry.generation !== generation) {
           await connection.close();
           throw new Error("Browser control was paused or the tab closed while connecting.");
         }
         entry.connection = connection;
       }
-      await entry.cursor.begin();
-      if (entry.closed || entry.help || entry.generation !== generation) { await entry.cursor.hide(); throw new Error("Browser control changed before this action could start."); }
-      try { return await action(entry.connection.page, entry.cursor); }
-      finally { await entry.cursor.end(); }
+      const connection = entry.connection;
+      let closing: Promise<unknown> | undefined;
+      const cancel = () => {
+        if (entry.connection === connection) entry.connection = undefined;
+        // Detach first: Playwright must reject pending clicks before their targets become actionable.
+        closing = Promise.all([connection.close(), entry.cursor.hide()]);
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        signal.throwIfAborted();
+        await entry.cursor.begin();
+        signal.throwIfAborted();
+        if (entry.closed || entry.help || entry.generation !== generation) throw new Error("Browser control changed before this action could start.");
+        const result = await action(connection.page, entry.cursor);
+        signal.throwIfAborted();
+        return result;
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        await closing;
+        if (signal.aborted) await entry.cursor.hide(); else await entry.cursor.end();
+      }
     });
     entry.queue = task;
     return task;
@@ -136,6 +168,12 @@ export class SideBrowserController {
     entry.help = null; this.host.update(root);
   }
   finishWorker(workerId?: string): void {
+    if (workerId === undefined) { for (const run of this.workerRuns.values()) run.abort(); }
+    else {
+      // Keep a stopped token until turn/started replaces it, including for late approvals.
+      this.workerSignal(workerId);
+      this.workerRuns.get(workerId)!.abort();
+    }
     const roots = new Set<string>();
     for (const entry of this.entries.values()) {
       if (workerId === undefined ? entry.workers.size > 0 : entry.workers.has(workerId)) {

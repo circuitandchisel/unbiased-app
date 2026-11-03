@@ -108,6 +108,25 @@ async function main() {
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       assert.equal(await page.locator('h1').innerText(), 'Saved User finished');
     });
+    // Stop must cancel a click that is still waiting for its target to become enabled.
+    controller.beginWorker('cancel-worker');
+    await controller.run('chat-two', other.id, async page => {
+      await page.evaluate(() => { const button = document.createElement('button'); button.id = 'delayed-submit'; button.disabled = true; button.textContent = 'Delayed submit'; button.onclick = () => { document.body.dataset.submitted = 'yes'; }; document.body.prepend(button); });
+    }, false, 'cancel-worker');
+    let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    const pendingClick = controller.run('chat-two', other.id, async page => { entered(); await page.getByRole('button', { name: 'Delayed submit', exact: true }).click(); }, false, 'cancel-worker');
+    const cancelled = assert.rejects(pendingClick);
+    await started;
+    await new Promise(resolve => setTimeout(resolve, 150));
+    controller.finishWorker('cancel-worker');
+    await cancelled;
+    await views.get(other.id).webContents.executeJavaScript('document.querySelector("#delayed-submit").disabled = false');
+    assert.equal(await views.get(other.id).webContents.executeJavaScript('document.body.dataset.submitted'), undefined, 'a stopped pending click must never submit later');
+    assert.equal(views.get(other.id).webContents.debugger.isAttached(), false);
+    controller.beginWorker('cancel-worker');
+    await controller.run('chat-two', other.id, async page => page.getByRole('button', { name: 'Delayed submit', exact: true }).click(), false, 'cancel-worker');
+    assert.equal(await views.get(other.id).webContents.executeJavaScript('document.body.dataset.submitted'), 'yes', 'a fresh turn can control the same page');
     await controller.shutdown();
     assert.equal(await views.get(tab.id).webContents.executeJavaScript('!!document.querySelector("[data-unbiased-agent-cursor]")'), false, 'disconnect removes the cursor');
     assert.equal(views.get(tab.id).webContents.isDestroyed(), false, 'disconnect keeps user tab alive');
@@ -115,8 +134,9 @@ async function main() {
     await assert.rejects(connectSidePage(wc), /already has a debugger/); wc.debugger.detach();
     const reconnect = await connectSidePage(wc); await reconnect.close();
     assert.equal(wc.debugger.isAttached(), false);
+    await require('./check-side-browser-cleanup.cjs')(controller, views, front, background, url);
     assert.equal(front.isVisible(), false); assert.equal(background.isVisible(), false);
-    console.log('PASS: in-app browser cursor coordinates, click-through, navigation, idle fade, handoff cleanup and capture exclusion; background native tabs, isolated sessions, page-only Playwright, screenshot/click/fill/scroll, help pause, same-tab resume and debugger cleanup.');
+    console.log('PASS: in-app browser cursor coordinates, click-through, navigation, idle fade, handoff cleanup and capture exclusion; background native tabs, isolated sessions, page-only Playwright, screenshot/click/fill/scroll, help pause, same-tab resume, stopped pending clicks, parent/side-chat deletion, pruning and debugger cleanup.');
   } finally {
     await controller.shutdown(); for (const view of views.values()) if (!view.webContents.isDestroyed()) view.webContents.close();
     front.destroy(); background.destroy(); await new Promise(resolve => server.close(resolve));

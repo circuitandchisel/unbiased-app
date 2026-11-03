@@ -10,6 +10,8 @@ export type MarkdownComposerHandle = {
   focus: (position?: "end") => void;
   appendText: (text: string) => void;
   replaceSelection: (text: string) => void;
+  recallPrompt: (text: string) => void;
+  canRecallPrompt: (direction: "up" | "down", browsing: boolean) => boolean;
 };
 
 export function looksLikeMarkdown(text: string): boolean {
@@ -76,6 +78,13 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
   }, [editor, paneId, suggestions?.id, suggestions?.activeId]);
 
   useImperativeHandle(ref, () => ({
+    recallPrompt: (text) => {
+      if (!editor) return;
+      editor.commands.setContent(text, { contentType: "markdown", emitUpdate: false });
+      editor.commands.setTextSelection(editor.state.doc.content.size);
+      lastMarkdownRef.current = editor.getMarkdown();
+    },
+    canRecallPrompt: (direction, browsing) => !!editor && editor.state.selection.empty && (browsing || editor.view.endOfTextblock(direction)),
     focus: (position) => { editor?.commands.focus(position); },
     appendText: (text) => { editor?.chain().focus("end").insertContent({ type: "text", text }).run(); },
     replaceSelection: (text) => { editor?.chain().focus().insertContent({ type: "text", text }).run(); },

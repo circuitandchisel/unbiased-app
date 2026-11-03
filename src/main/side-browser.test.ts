@@ -158,6 +158,7 @@ test('browser work stays active between calls and ends per worker, without clear
   assert.equal(f.controller.list('one')[0].working, true);
   f.controller.finishWorker('child');
   assert.equal(f.controller.list('one')[0].working, false);
+  f.controller.beginWorker('child');
   await f.controller.run('one', 7, async () => {}, false, 'child');
   f.controller.finishWorker();
   assert.equal(f.controller.list('one')[0].working, false);
@@ -182,10 +183,58 @@ test('reusing an already-open page starts browser work for the new run without n
   const first = await f.controller.open('one', 'https://example.test/');
   f.controller.finishWorker('one');
   assert.equal(f.controller.list('one')[0].working, false);
+  f.controller.beginWorker('child');
   const reused = await f.controller.open('one', 'https://example.test/', 'child');
   assert.equal(reused.id, first.id); assert.equal(reused.working, true);
   assert.equal(f.connections(), 1);
   f.controller.finishWorker('child');
   assert.equal(f.controller.list('one')[0].working, false);
+  await f.controller.shutdown();
+});
+
+test('stopping rejects queued work, preserves another worker and allows a fresh turn', async () => {
+  const f = fixture();
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents, true);
+  let release!: () => void, entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const active = f.controller.run('one', 7, async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); }, false, 'stopped');
+  await started;
+  const activeRejected = assert.rejects(active, { name: 'AbortError' });
+  const queued = f.controller.run('one', 7, async () => assert.fail('stopped action executed'), false, 'stopped');
+  const rejected = assert.rejects(queued, { name: 'AbortError' });
+  const other = f.controller.run('one', 7, async () => 'other worker', false, 'other');
+  f.controller.finishWorker('stopped');
+  assert.equal(f.controller.list('one')[0].working, false);
+  release(); await activeRejected; await rejected;
+  assert.equal(await other, 'other worker');
+  assert.equal(f.closes(), 1, 'active connection is detached on cancellation');
+  assert.equal(f.connections(), 2, 'unaffected worker reconnects after cancellation');
+  await assert.rejects(f.controller.run('one', 7, async () => {}, false, 'stopped'), { name: 'AbortError' });
+  f.controller.beginWorker('stopped');
+  assert.equal(await f.controller.run('one', 7, async () => 'fresh turn', false, 'stopped'), 'fresh turn');
+  await f.controller.shutdown();
+});
+test('a late approval cannot grant browser control after Stop, even if a new turn has started', async () => {
+  const f = fixture();
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents);
+  let approve!: (value: boolean) => void;
+  const use = f.controller.use('one', 7, false, () => new Promise(resolve => { approve = resolve; }), 'worker');
+  const rejected = assert.rejects(use, { name: 'AbortError' });
+  f.controller.finishWorker('worker'); f.controller.beginWorker('worker');
+  approve(true); await rejected;
+  assert.equal(f.controller.list('one')[0].controlled, false);
+  await f.controller.shutdown();
+});
+test('a connection completing after Stop is closed without executing an action', async () => {
+  let connected!: (value: { page: Page; close: () => Promise<void> }) => void, entered!: () => void;
+  let closes = 0;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const f = fixture(async () => { entered(); return new Promise(resolve => { connected = resolve; }); });
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents, true);
+  const action = f.controller.run('one', 7, async () => assert.fail('late action executed'), false, 'worker');
+  const rejected = assert.rejects(action, /paused or the tab closed/);
+  await started; f.controller.finishWorker('worker');
+  connected({ page: f.page, close: async () => { closes++; } });
+  await rejected; assert.equal(closes, 1); assert.equal(f.controller.list('one')[0].working, false);
   await f.controller.shutdown();
 });

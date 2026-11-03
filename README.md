@@ -51,7 +51,10 @@ default fonts.
 ## Features
 
 - **Streaming chat** with markdown rendering, Prism-highlighted code
-  blocks, elapsed-time "thinking" indicator, and turn interruption.
+  blocks, elapsed-time "thinking" indicator, and turn interruption. Up/Down
+  in the composer recalls earlier/later prompts for that chat and restores
+  your unsent draft. Arrows still move within multiline drafts; slash-command
+  suggestions take priority when open.
 - **Supervised agent loop** — commands the agent wants to run surface as
   cards with Approve/Decline buttons; consecutive steps fold into a
   collapsible group with per-step output. Threads run with an `untrusted`
@@ -97,7 +100,10 @@ The tab stays open afterward. A coral cursor follows agent interactions, matchin
 A cursor icon in the tab marks ongoing agent access; the page cursor disappears
 when the agent requests help. Closing the tab ends agent access. Controlled tabs
 remain with their conversation when the user switches chats; ordinary browser
-tabs retain their existing close-on-switch behavior.
+tabs retain their existing close-on-switch behavior. Stopping a turn cancels
+pending and queued browser actions for that worker, including late approvals.
+Other workers remain independent. Deleting a parent chat also closes its side
+chats' browser tabs; expired side chats release their tabs during cleanup.
 
 Browser screenshots are saved privately with the conversation and automatically
 shown alongside the reply, including when the agent provides text without image
