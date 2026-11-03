@@ -99,6 +99,11 @@ when the agent requests help. Closing the tab ends agent access. Controlled tabs
 remain with their conversation when the user switches chats; ordinary browser
 tabs retain their existing close-on-switch behavior.
 
+Browser screenshots are saved privately with the conversation and automatically
+shown alongside the reply, including when the agent provides text without image
+Markdown. Clicking a screenshot opens the image preview. Captures survive
+browser shutdown and conversation reopening; deleting a chat removes its files.
+
 While the agent is using a tab in the background, a live, draggable preview
 appears at the top right of the chat. Clicking the preview opens the existing
 tab without reloading it. The preview hides while that page is visible and

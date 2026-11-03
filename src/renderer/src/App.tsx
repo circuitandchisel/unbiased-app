@@ -1,3 +1,4 @@
+import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
 import { InAppBrowserPreview } from "./InAppBrowserPreview";
 import type { SideBrowserHelp, SideBrowserTab, SideBrowserUpdate } from "../../shared/side-browser";
 import { AgentMirrorPane } from "./AgentMirrorPane";
@@ -99,6 +100,7 @@ type CommandItem = {
   source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer";
   /** For a computer step: the icon of the app it acted on, as a data URL. */
   appIcon?: string;
+  screenshots?: BrowserCapture[];
 };
 
 type Entry =
@@ -108,6 +110,7 @@ type Entry =
   | {
       kind: "assistant";
       text: string;
+      screenshots?: BrowserCapture[];
       interrupted?: boolean;
       at?: number;
       /** Memory receipts for the turn this answer ended. They ride ON the
@@ -142,6 +145,7 @@ type Entry =
      source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer";
      /** For a computer step: the icon of the app it acted on, as a data URL. */
      appIcon?: string;
+     screenshots?: BrowserCapture[];
      status: string; // inProgress | completed | failed | declined | awaitingApproval | canceled | unconfirmed
      exitCode?: number;
      output?: string;
@@ -8322,6 +8326,22 @@ function TerminalPane() {
 /** Markdown images load through the main process because CSP forbids file://.
  *  File previews resolve relative to their own directory; chat resolves
  *  relative to the selected thread's working directory. */
+function BrowserScreenshotGallery({ captures, markdown = "", onPreviewImage }: {
+  captures: BrowserCapture[];
+  markdown?: string;
+  onPreviewImage?: (image: Attachment) => void;
+}) {
+  const visible = captures.filter(capture => !markdown.includes(`](<${capture.path}>)`) && !markdown.includes(`](${capture.path})`));
+  if (!visible.length) return null;
+  return <div aria-label="Browser screenshots" style={{ display: "flex", flexDirection: "column", gap: 12, margin: "12px 0" }}>
+    {visible.map(capture => <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
+      style={{ display: "block", width: "fit-content", maxWidth: "100%", padding: 8, background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 12, cursor: onPreviewImage ? "zoom-in" : "default", textAlign: "left" }}>
+      <MdImage src={capture.path} alt={capture.name} chat />
+      <span style={{ display: "block", padding: "6px 4px 0", font: "inherit", fontSize: 12, color: colors.dim }}>Browser screenshot{onPreviewImage ? " · Open preview" : ""}</span>
+    </button>)}
+  </div>;
+}
+
 function MdImage({
   src, alt, baseDir, chat = false,
 }: {
@@ -10388,18 +10408,20 @@ function ChatPane({
                 }
               }
               const agents = [...agentsById.values()];
+              const screenshots = collectBrowserCaptures(work);
               // Receipts move ONTO the answer, so they render inside it —
               // under the text, above the copy row. Folded they would vanish;
               // left loose above the answer they duplicated the steps header
               // that already says "Saved memory".
               const answer: Entry | null =
-                finalMsg && (receipts.length > 0 || agents.length > 0)
+                finalMsg && (receipts.length > 0 || agents.length > 0 || screenshots.length > 0)
                   ? {
                       ...finalMsg,
                       ...(receipts.length > 0
                         ? { memories: dedupeReceipts([...(finalMsg.memories ?? []), ...receipts]) }
                         : null),
                       ...(agents.length > 0 ? { agents } : null),
+                      ...(screenshots.length > 0 ? { screenshots: collectBrowserCaptures([finalMsg, { screenshots }]) } : null),
                     }
                   : finalMsg;
               const duration = completedWorkDuration(
@@ -10420,7 +10442,7 @@ function ChatPane({
                     ? []
                     : receipts.map((r) => ({ kind: "memory" as const, ...r }))),
                 ];
-              } else if (answer && (receipts.length > 0 || agents.length > 0)) {
+              } else if (answer && (receipts.length > 0 || agents.length > 0 || screenshots.length > 0)) {
                 next = [...next.slice(0, start), ...foldable, answer];
               }
             }
@@ -10680,6 +10702,7 @@ function ChatPane({
               // desktop step spent the whole turn looking like a shell command.
               source: item.source ?? existing.source,
               appIcon: item.appIcon ?? existing.appIcon,
+              screenshots: item.screenshots ?? existing.screenshots,
             };
           });
           if (found) return mapped;
@@ -10694,6 +10717,7 @@ function ChatPane({
               output: item.aggregatedOutput ?? item.output,
               source: item.source,
               appIcon: item.appIcon,
+              screenshots: item.screenshots,
             },
           ];
         });
@@ -11204,7 +11228,9 @@ function ChatPane({
   ): React.ReactNode => {
     if (block.kind === "steps") {
       return (
-        <StepsGroup key={`s${block.key}`} items={block.items} statusLabel={statusLabel} decide={decide} />
+        <Fragment key={`s${block.key}`}><StepsGroup items={block.items} statusLabel={statusLabel} decide={decide} />
+          {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(block.items)} onPreviewImage={onPreviewImage} />}
+        </Fragment>
       );
     }
     const e = block.entry;
@@ -11406,6 +11432,7 @@ function ChatPane({
               {e.text}
             </Markdown>
           </StreamingVisualContext.Provider>
+          <BrowserScreenshotGallery captures={e.screenshots ?? []} markdown={e.text} onPreviewImage={onPreviewImage} />
           {e.interrupted && <div style={{ color: colors.dim, fontSize: 12, marginTop: 4 }}>— stopped</div>}
           {/* Receipts sit between the answer and its action row: below the
               thing they are about, above the copy button — and outside the
@@ -11444,16 +11471,18 @@ function ChatPane({
       );
     }
     if (e.kind === "work") {
-      return (
+      const next = !nested ? entries[block.key + 1] : null;
+      const carried = next?.kind === "assistant" ? new Set((next.screenshots ?? []).map(capture => capture.path)) : new Set<string>();
+      return <Fragment key={`w${block.key}`}>
         <WorkedGroup
-          key={`w${block.key}`}
           duration={e.duration}
           hasDetails={e.entries.length > 0}
           renderDetails={() => toDisplayBlocks(e.entries).map((b) => renderBlock(b, false, true))}
           initiallyOpen={openWorkEntriesRef.current.has(e)}
           onOpenChange={(open) => { if (open) openWorkEntriesRef.current.add(e); else openWorkEntriesRef.current.delete(e); }}
         />
-      );
+        {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(e.entries).filter(capture => !carried.has(capture.path))} markdown={next?.kind === "assistant" ? next.text : undefined} onPreviewImage={onPreviewImage} />}
+      </Fragment>;
     }
     return null;
   };

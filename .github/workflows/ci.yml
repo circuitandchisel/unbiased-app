@@ -70,6 +70,7 @@ jobs:
         run: |
           npm run smoke:side-browser
           npm run smoke:side-browser-ui
+          npm run smoke:browser-captures
 
   browser-bundle:
     name: Browser bundle

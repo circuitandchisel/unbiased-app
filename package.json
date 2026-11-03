@@ -24,7 +24,8 @@
     "smoke:personalization": "electron build/smoke-personalization.cjs",
     "smoke:agent-instructions": "node build/smoke-agent-instructions.cjs",
     "smoke:side-browser": "electron build/smoke-side-browser.cjs",
-    "smoke:side-browser-ui": "electron build/smoke-side-browser-ui.cjs"
+    "smoke:side-browser-ui": "electron build/smoke-side-browser-ui.cjs",
+    "smoke:browser-captures": "electron build/smoke-browser-captures.cjs"
   },
   "build": {
     "appId": "ai.unbiased.desktop",

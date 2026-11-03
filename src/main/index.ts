@@ -1,3 +1,5 @@
+import { retainBrowserCapture, readBrowserCapture, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
+import { collectBrowserCaptures } from "../shared/browser-capture";
 import { SIDE_BROWSER_TOOLS, SideBrowserController, sideBrowserUrl, sideLocator } from "./side-browser";
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
 import { listSlashCommands, resolveSlashSkill } from "./skill-commands";
@@ -337,6 +339,7 @@ async function pruneSideChatRecents(): Promise<void> {
     if (!record) continue;
     try {
       await engine.request("thread/delete", { threadId: record.threadId });
+      forgetBrowserCaptures(record.threadId);
       sideChatRecents.remove(paneId);
       threadMcp.delete(record.threadId);
       rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -521,6 +524,7 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "approve them. If a browser tool is genuinely absent from your tools, say the Agent browser is",
   "unavailable rather than substituting a shell command for it.",
   "For pages already open in the in-app browser, use browser_side_list and browser_side_use. Full access allows controlling existing tabs without another permission prompt. In other modes, obtain approval before reading or acting through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
+  "Browser screenshots are saved and attached to the chat automatically. Describe the captured page accurately; never claim an attachment exists if saving failed. Do not substitute a description for calling the screenshot tool when the user requests an image.",
   "Keep browser work in the background unless the user asks to watch it. When sign-in, 2FA, CAPTCHA, a decision, or missing information needs the user, call browser_side_request_help with a precise request. That reveals the tab and pauses all agent access. Stop the turn and wait for the user to click Continue agent. Never resume yourself, interact with the app's approval UI, solve CAPTCHA, or request passwords in chat. After the user's continuation message, inspect the current page before continuing, and leave its tab open.",
   // Delegation. The collaboration tools are available on every turn, but models
   // rarely reach for them unprompted — Claude Code and codex get "automatic"
@@ -2520,6 +2524,27 @@ async function runComputerAction(action: ComputerAction, threadId: string | null
   };
 }
 
+const deletedCaptureThreads = new Set<string>();
+function browserCaptureDir(): string { return join(app.getPath("userData"), "browser-captures"); }
+function forgetBrowserCaptures(threadId: string): void {
+  deletedCaptureThreads.add(threadId);
+  try { removeBrowserCaptures(browserCaptureDir(), threadId); } catch { /* best-effort attachment cleanup */ }
+}
+function browserCaptureFields(threadId: string | null, itemId?: string): Record<string, unknown> {
+  if (!threadId || !itemId) return {};
+  const capture = readBrowserCapture(browserCaptureDir(), threadId, itemId);
+  return capture ? { screenshots: [capture] } : {};
+}
+function attachBrowserScreenshot(tool: string, args: unknown, threadId: string | null, itemId: string, turnId: string | null, response: DynamicToolResponse): DynamicToolResponse {
+  if (!["browser_screenshot", "browser_side_screenshot"].includes(tool) || !threadId || deletedCaptureThreads.has(threadId)) return response;
+  const retained = retainBrowserCapture(browserCaptureDir(), threadId, itemId, response, turnId);
+  const paneId = paneForThread(threadId);
+  if (retained.capture && paneId && win && !win.isDestroyed()) send("chat:command", { paneId, phase: "completed", item: {
+    id: itemId, command: dynamicToolCommandText(tool, args), source: dynamicToolSource(tool), status: "completed", screenshots: [retained.capture],
+  } });
+  return retained.response;
+}
+
 async function handleAgentBrowserCall(tool: string, rawArgs: unknown, threadId: string | null): Promise<DynamicToolResponse> {
   const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
   if (tool.startsWith("browser_side_")) return handleSideBrowserCall(tool, a, threadId);
@@ -3329,7 +3354,7 @@ type WireThread = {
   /** Free-form classification the client set at thread/start, handed back
    *  unchanged. Used to keep scheduled runs out of the sidebar. */
   threadSource?: string | null;
-  turns?: { items?: WireItem[]; startedAt?: number; durationMs?: number }[];
+  turns?: { id?: string; items?: WireItem[]; startedAt?: number; durationMs?: number }[];
 };
 
 const threadSearchCache = new Map<string, { updatedAt?: string | number; sourceMtimeMs?: number; cachedAt: number; messages: string[] }>();
@@ -3573,6 +3598,7 @@ function threadToEntries(
 ): { entries: unknown[]; runningTurnStart: number | null; runningTurnStartedAt: number | null } {
   const entries: unknown[] = [];
   const turns = thread.turns ?? [];
+  const captureTurns = readBrowserCaptureTurns(browserCaptureDir(), thread.id);
   // Where the in-flight turn's foldable output begins, and when the turn
   // started. Without these, opening a conversation mid-turn stranded the
   // replayed half of that turn outside the fold forever: the live fold at
@@ -3621,7 +3647,10 @@ function threadToEntries(
       // time twice.
       if (didWork) entries.push({ kind: "work", duration: keepFinalOut ? durationS : null, entries: [...bucket] });
       else entries.push(...bucket);
-      if (finalMsg) entries.push(finalMsg);
+      if (finalMsg) {
+        const screenshots = collectBrowserCaptures([...bucket, { screenshots: keepFinalOut && turn.id ? captureTurns[turn.id] : [] }]);
+        entries.push(screenshots.length ? { ...(finalMsg as object), screenshots } : finalMsg);
+      }
       bucket.length = 0;
     };
     // A turn still running when the conversation reopens stays raw: its
@@ -3706,6 +3735,7 @@ function threadToEntries(
             command: dynamicToolCommandText(d.tool, d.arguments),
             status: d.success === false ? "failed" : (d.status ?? "completed"),
             source: dynamicToolSource(d.tool),
+            ...(["browser_screenshot", "browser_side_screenshot"].includes(d.tool ?? "") ? browserCaptureFields(thread.id, d.id) : {}),
             ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
           });
           break;
@@ -5974,6 +6004,7 @@ function wireNotifications(): void {
               id: d.id,
               command: dynamicToolCommandText(d.tool, d.arguments),
               source: dynamicToolSource(d.tool),
+              ...(["browser_screenshot", "browser_side_screenshot"].includes(d.tool ?? "") ? browserCaptureFields(threadId, d.id) : {}),
               ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
               // A started call is in progress — defaulting to "completed"
               // showed a green "done" for a page still loading.
@@ -6498,6 +6529,8 @@ function wireNotifications(): void {
         // the browser owns every dynamic tool.
         const seq = ++toolSeq;
         const startedAt = Date.now();
+        const captureItemId = typeof params.callId === "string" ? params.callId : typeof params.itemId === "string" ? params.itemId : `capture_${randomUUID()}`;
+        const captureTurnId = typeof params.turnId === "string" ? params.turnId : approvalThread ? runningTurns.get(approvalThread) ?? null : null;
         const shape = payloadOf(tool, args);
         // The whole dispatch runs inside the scope, so every bridge call it
         // makes — one for a press, a dozen for a batch — files itself under
@@ -6533,6 +6566,7 @@ function wireNotifications(): void {
             contentItems: [{ type: "inputText" as const, text: `tool crashed: ${String(err)}` }],
             success: false,
           }))
+          .then(response => attachBrowserScreenshot(tool, args, approvalThread, captureItemId, captureTurnId, response))
           .then((response) => {
             // The first tool result after a compaction carries the checkpoint
             // back: the summary kept the plan and dropped the numbers.
@@ -11782,6 +11816,7 @@ app.whenReady().then(async () => {
       dropSidePane(record.paneId);
       try {
         await engine.request("thread/delete", { threadId: record.threadId });
+        forgetBrowserCaptures(record.threadId);
         sideChatRecents.remove(record.paneId);
         threadMcp.delete(record.threadId);
         rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -11837,6 +11872,7 @@ app.whenReady().then(async () => {
     heldApprovals.delete(id);
     heldErrors.delete(id);
     await engine.request("thread/delete", { threadId: id });
+    forgetBrowserCaptures(id);
     multiMountLeases.delete(id);
     delete panes[`multi:${id}`];
     void releaseConversationTab(id);
