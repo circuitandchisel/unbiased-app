@@ -1,3 +1,4 @@
+import { InAppBrowserPreview } from "./InAppBrowserPreview";
 import type { SideBrowserHelp, SideBrowserTab, SideBrowserUpdate } from "../../shared/side-browser";
 import { AgentMirrorPane } from "./AgentMirrorPane";
 import { useSlashCommands } from "./slash-command-menu";
@@ -932,6 +933,7 @@ declare global {
       setPalVisible: (visible: boolean) => Promise<PalsSettingsState>;
       setPalScale: (scale: PalScale) => Promise<PalsSettingsState>;
       openBrowser: (p: { id: number; url?: string }) => Promise<{ ok: boolean }>;
+      previewSideBrowser: (id: number) => Promise<string | null>;
       captureBrowser: (id: number) => Promise<string | null>;
       setBrowserBounds: (b: { id: number; x: number; y: number; width: number; height: number }) => Promise<void>;
       setBrowserVisible: (p: { id: number; visible: boolean }) => Promise<void>;
@@ -2552,6 +2554,7 @@ export function App() {
   const sideBrowserTabsRef = useRef(sideBrowserTabs);
   sideBrowserTabsRef.current = sideBrowserTabs;
   const browserContinuationRef = useRef<{ ready: () => boolean; send: (text: string) => void } | null>(null);
+  const captureBrowserPreview = useCallback((id: number) => window.unbiased.previewSideBrowser(id), []);
   const registerBrowserContinuation = useCallback((handler: typeof browserContinuationRef.current) => { browserContinuationRef.current = handler; }, []);
   const blankBrowserTabsRef = useRef(new Set<number>());
   const pendingBrowserUrlsRef = useRef(new Map<number, string>());
@@ -3309,6 +3312,8 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || multiOpen || panelMode === "agentmirror");
+  const previewBrowserTab = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0] ?? null;
+  const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj && !(sideVisible && previewBrowserTab && panelMode === `browser:${previewBrowserTab.id}`);
   const visibleThreadIds = authed !== "in" || showSettings || showChangelog ? []
     : multiOpen ? multiIds
       : !pageOpen && activeThreadId ? [activeThreadId] : [];
@@ -4212,6 +4217,7 @@ export function App() {
       <div
         className="u-main-pane"
         style={{
+          position: "relative",
           // sideVisible, not sideOpen: with a flex-grow of 1 - sideFrac and a
           // zero basis, a column whose panel is hidden claims only its old
           // share of the row and leaves the rest of the window empty — the
@@ -5044,6 +5050,12 @@ export function App() {
           </div>
           </>
         )}
+        <InAppBrowserPreview
+          tab={previewBrowserTab ? { ...previewBrowserTab, title: browserStates[previewBrowserTab.id]?.title || previewBrowserTab.title } : null}
+          visible={browserPreviewVisible}
+          capture={captureBrowserPreview}
+          onOpen={id => { setPanelMode(`browser:${id}`); setSideOpenPersisted(true); }}
+        />
       </div>
 
       {!sideOverlayLayout && (

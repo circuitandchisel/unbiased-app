@@ -145,3 +145,47 @@ test('a site change during approval requires a fresh control request', async () 
   assert.equal(f.controller.list('one')[0].controlled, false);
   await f.controller.shutdown();
 });
+
+test('browser work stays active between calls and ends per worker, without clearing another agent', async () => {
+  const f = fixture();
+  f.controller.register(7, 'one', new Contents() as unknown as WebContents, true);
+  assert.equal(f.controller.list('one')[0].working, false);
+  await f.controller.run('one', 7, async () => {}, false, 'parent');
+  await f.controller.run('one', 7, async () => {}, false, 'child');
+  assert.equal(f.controller.list('one')[0].working, true);
+  assert.ok(f.controller.list('one')[0].lastUsedAt > 0);
+  f.controller.finishWorker('parent');
+  assert.equal(f.controller.list('one')[0].working, true);
+  f.controller.finishWorker('child');
+  assert.equal(f.controller.list('one')[0].working, false);
+  await f.controller.run('one', 7, async () => {}, false, 'child');
+  f.controller.finishWorker();
+  assert.equal(f.controller.list('one')[0].working, false);
+  await f.controller.shutdown();
+});
+test('user handoff clears browser work; continuing alone does not claim the agent is working', async () => {
+  const f = fixture();
+  const tab = await f.controller.open('one', 'https://example.test/');
+  assert.equal(tab.working, true);
+  const help = await f.controller.requestHelp('one', tab.id, 'Please sign in');
+  assert.equal(f.controller.list('one')[0].working, false);
+  f.controller.resume('one', tab.id, help.requestId);
+  assert.equal(f.controller.list('one')[0].working, false);
+  await f.controller.run('one', tab.id, async () => {});
+  assert.equal(f.controller.list('one')[0].working, true);
+  await f.controller.shutdown();
+  assert.deepEqual(f.controller.list('one'), []);
+});
+
+test('reusing an already-open page starts browser work for the new run without navigating', async () => {
+  const f = fixture();
+  const first = await f.controller.open('one', 'https://example.test/');
+  f.controller.finishWorker('one');
+  assert.equal(f.controller.list('one')[0].working, false);
+  const reused = await f.controller.open('one', 'https://example.test/', 'child');
+  assert.equal(reused.id, first.id); assert.equal(reused.working, true);
+  assert.equal(f.connections(), 1);
+  f.controller.finishWorker('child');
+  assert.equal(f.controller.list('one')[0].working, false);
+  await f.controller.shutdown();
+});

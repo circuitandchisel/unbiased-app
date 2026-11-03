@@ -3774,6 +3774,7 @@ function pushStatus(status: EngineStatus): void {
   if(status.state === "exited")turnEnvironments.reset();
   lastStatus = status;
   if (status.state === "exited") {
+    sideBrowser.finishWorker();
     for (const threadId of compactingThreads) updateThreadCompaction(threadId, "failed");
     if (petSettleTimer) clearTimeout(petSettleTimer);
     petSettleTimer = null;
@@ -5424,7 +5425,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       if (isStripeOnboardingPage(url, !app.isPackaged)) return text("This sign-in/setup page requires user interaction. Open a regular page and request user help rather than opening an external browser automatically.", false);
       const refusal = await ensureBrowserAllowed(tool, threadId, url);
       if (refusal) return text(refusal, false);
-      return text(JSON.stringify(await sideBrowser.open(root, url)));
+      return text(JSON.stringify(await sideBrowser.open(root, url, threadId)));
     }
     if (typeof a.tabId !== "number" || !Number.isInteger(a.tabId)) return text("Provide a tabId from browser_side_list or browser_side_open.", false);
     const id = a.tabId; sideBrowser.get(root, id);
@@ -5432,7 +5433,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
       await sideBrowser.use(root, id, liveAccessMode(root) === "full", async ({ title, origin }) => {
         const decision = await requestLocalApproval(threadId, `Control in-app browser tab: ${title}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${origin}. The agent cannot access other tabs.`, { allowForSession: false });
         return decision !== "decline";
-      });
+      }, threadId);
       return text(`Tab ${id} is available for this conversation. It stays in the background unless you request user help.`);
     }
     if (tool === "browser_side_request_help") {
@@ -5443,7 +5444,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
     const refusal = await ensureBrowserAllowed(tool, threadId, destination ?? `in-app browser tab ${id}`);
     if (refusal) return text(refusal, false);
     if (tool === "browser_side_screenshot") {
-      const image = await sideBrowser.run(root, id, (page, cursor) => cursor.withoutMarker(() => page.screenshot({ type: "png" })));
+      const image = await sideBrowser.run(root, id, (page, cursor) => cursor.withoutMarker(() => page.screenshot({ type: "png" })), false, threadId);
       return { success: true, contentItems: [{ type: "inputImage", imageUrl: `data:image/png;base64,${image.toString("base64")}` }] };
     }
     const result = await sideBrowser.run(root, id, async (page, cursor) => {
@@ -5472,7 +5473,7 @@ async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, t
         default: throw new Error("Unknown in-app browser tool.");
       }
       return `Completed in tab ${id}. Use browser_side_snapshot to inspect the current page.`;
-    }, tool === "browser_side_navigate");
+    }, tool === "browser_side_navigate", threadId);
     return text(result);
   } catch (error) { return text(error instanceof Error ? error.message : String(error), false); }
 }
@@ -6173,7 +6174,7 @@ function wireNotifications(): void {
       }
       case "turn/completed": {
         if (threadId && compactingThreads.has(threadId)) updateThreadCompaction(threadId, "failed");
-        if (threadId) turnEnvironments.end(threadId);
+        if (threadId) { sideBrowser.finishWorker(threadId); turnEnvironments.end(threadId); }
         const turn = params.turn as
           | { status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
           | undefined;
@@ -11278,6 +11279,24 @@ app.whenReady().then(async () => {
     const view = ensureBrowserView(p.id);
     if (p.url) { if (sideBrowser.needsBackgroundHost(p.id)) sideBrowserUrl(p.url); void view.webContents.loadURL(p.url); }
     return { ok: true };
+  });
+
+  let sidePreviewBusy = false;
+  ipcMain.handle("browser:side-preview", async (event, id: number) => {
+    if (event.sender !== win?.webContents || sidePreviewBusy) return null;
+    const root = rootThreadOf(panes.main.threadId);
+    sidePreviewBusy = true;
+    try {
+      const entry = sideBrowser.get(root, id);
+      if (!entry.controlled || entry.help || !entry.workers.size) return null;
+      const image = await entry.contents.capturePage(undefined, { stayHidden: true });
+      if (rootThreadOf(panes.main.threadId) !== root || !sideBrowser.get(root, id).workers.size || entry.help || image.isEmpty()) return null;
+      const size = image.getSize();
+      const scale = Math.min(560 / Math.max(size.width, 1), 350 / Math.max(size.height, 1), 1);
+      const thumbnail = scale < 1 ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }) : image;
+      return `data:image/jpeg;base64,${thumbnail.toJPEG(65).toString("base64")}`;
+    } catch { return null; }
+    finally { sidePreviewBusy = false; }
   });
 
   ipcMain.handle("browser:capture", async (_e, id: number) => {

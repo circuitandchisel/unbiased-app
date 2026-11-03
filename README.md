@@ -99,6 +99,13 @@ when the agent requests help. Closing the tab ends agent access. Controlled tabs
 remain with their conversation when the user switches chats; ordinary browser
 tabs retain their existing close-on-switch behavior.
 
+While the agent is using a tab in the background, a live, draggable preview
+appears at the top right of the chat. Clicking the preview opens the existing
+tab without reloading it. The preview hides while that page is visible and
+returns when the side panel closes if the agent is still working. It stops
+when browser work ends or the agent requests user help. Preview capture is
+limited to the current conversation and pauses while the app is hidden.
+
 The Playwright adapter attaches only to the selected sandboxed WebContentsView.
 It uses a random, loopback-only transport, rejects browser-origin connections,
 and does not enable Electron's application-wide debugging port. The agent gets

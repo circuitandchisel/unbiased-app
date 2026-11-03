@@ -26,13 +26,13 @@ export const SIDE_BROWSER_TOOLS = [
   { name: "browser_side_request_help", description: "Pause ALL automation of this tab and reveal it with a specific user request (sign-in, 2FA, CAPTCHA or a decision). Stop and wait: only the user can resume via Continue agent. Do not solve CAPTCHA or handle passwords yourself.", properties: { tabId: { type: "number" }, message: { type: "string" } }, required: ["tabId", "message"] },
 ].map(tool => ({ type: "function", name: tool.name, description: tool.description, inputSchema: { type: "object", properties: tool.properties ?? {}, required: tool.required ?? [], additionalProperties: false } }));
 
-type Entry = { id: number; root: string; contents: WebContents; agentOwned: boolean; controlled: boolean; help: SideBrowserHelp | null; requested?: string; connection?: Awaited<ReturnType<typeof connectSidePage>>; queue: Promise<unknown>; cursor: InAppBrowserCursor; closed: boolean; generation: number; cleanup?: () => void };
+type Entry = { id: number; root: string; contents: WebContents; agentOwned: boolean; controlled: boolean; help: SideBrowserHelp | null; requested?: string; connection?: Awaited<ReturnType<typeof connectSidePage>>; queue: Promise<unknown>; cursor: InAppBrowserCursor; workers: Set<string>; lastUsedAt: number; closed: boolean; generation: number; cleanup?: () => void };
 export class SideBrowserController {
   private entries = new Map<number, Entry>();
   constructor(private host: { create: (root: string) => { id: number; contents: WebContents }; update: (root: string, revealId?: number) => void; controlled: (id: number) => void }, private connect = connectSidePage) {}
   register(id: number, root: string, contents: WebContents, agentOwned = false): void {
     if (this.entries.has(id)) return;
-    const entry: Entry = { id, root, contents, agentOwned, controlled: agentOwned, help: null, queue: Promise.resolve(), cursor: new InAppBrowserCursor(contents), closed: false, generation: 0 };
+    const entry: Entry = { id, root, contents, agentOwned, controlled: agentOwned, help: null, queue: Promise.resolve(), cursor: new InAppBrowserCursor(contents), workers: new Set(), lastUsedAt: 0, closed: false, generation: 0 };
     this.entries.set(id, entry);
     const destroyed = () => { if (this.entries.get(id) === entry) void this.dispose(id); };
     contents.once("destroyed", destroyed);
@@ -47,7 +47,7 @@ export class SideBrowserController {
   }
   adoptDraft(root: string): void { for (const entry of this.entries.values()) if (entry.root === "main") entry.root = root; }
   list(root: string): SideBrowserTab[] {
-    return [...this.entries.values()].filter(e => e.root === root && !e.closed && !e.contents.isDestroyed()).map(e => ({ id: e.id, root, url: e.requested ?? e.contents.getURL(), title: e.contents.getTitle() || "In-app browser", agentOwned: e.agentOwned, controlled: e.controlled, help: e.help }));
+    return [...this.entries.values()].filter(e => e.root === root && !e.closed && !e.contents.isDestroyed()).map(e => ({ id: e.id, root, url: e.requested ?? e.contents.getURL(), title: e.contents.getTitle() || "In-app browser", agentOwned: e.agentOwned, controlled: e.controlled, working: e.workers.size > 0, lastUsedAt: e.lastUsedAt, help: e.help }));
   }
   get(root: string, id: number): Entry {
     const entry = this.entries.get(id);
@@ -57,32 +57,39 @@ export class SideBrowserController {
   needsBackgroundHost(id: number): boolean { return this.entries.get(id)?.controlled === true; }
   owner(id: number): string | null { return this.entries.get(id)?.root ?? null; }
   grant(root: string, id: number): void { const entry = this.get(root, id); sideBrowserUrl(entry.contents.getURL()); entry.controlled = true; this.host.controlled(id); this.host.update(root); }
-  async use(root: string, id: number, fullAccess: boolean, approve: (tab: { title: string; origin: string }) => Promise<boolean>): Promise<void> {
+  async use(root: string, id: number, fullAccess: boolean, approve: (tab: { title: string; origin: string }) => Promise<boolean>, workerId = root): Promise<void> {
     const entry = this.get(root, id);
     const origin = new URL(sideBrowserUrl(entry.contents.getURL())).origin;
-    if (entry.controlled) return;
+    if (entry.controlled) { if (!entry.help) this.markWorking(entry, workerId); return; }
     if (!fullAccess && !(await approve({ title: entry.contents.getTitle() || "In-app browser", origin }))) {
       throw new Error("The user declined control of this in-app browser tab. Do not retry or use another route to access it.");
     }
     if (new URL(this.get(root, id).contents.getURL()).origin !== origin) throw new Error("The tab changed sites while permission was pending. Request control again for its current page.");
-    this.grant(root, id);
+    this.grant(root, id); this.markWorking(entry, workerId);
   }
-  async open(root: string, rawUrl: unknown): Promise<SideBrowserTab> {
+  private markWorking(entry: Entry, workerId: string): void {
+    entry.workers.add(workerId); entry.lastUsedAt = Date.now(); this.host.update(entry.root);
+  }
+  async open(root: string, rawUrl: unknown, workerId = root): Promise<SideBrowserTab> {
     const url = sideBrowserUrl(rawUrl);
     const match = this.list(root).find(tab => { try { return sideBrowserUrl(tab.url) === url; } catch { return false; } });
-    if (match) return match;
+    if (match) {
+      const entry = this.get(root, match.id);
+      if (entry.controlled && !entry.help) this.markWorking(entry, workerId);
+      return this.list(root).find(tab => tab.id === match.id)!;
+    }
     if (this.list(root).length >= 5) throw new Error("This conversation already has five browser tabs. Close a tab before opening another.");
     if (this.entries.size >= 20) throw new Error("Twenty in-app browser tabs are already open. Close an unused tab before opening another.");
     const { id, contents } = this.host.create(root);
     this.register(id, root, contents, true);
     const entry = this.get(root, id); entry.requested = url;
     this.host.update(root);
-    try { await this.run(root, id, page => page.goto(url, { waitUntil: "domcontentloaded" }), true); }
+    try { await this.run(root, id, page => page.goto(url, { waitUntil: "domcontentloaded" }), true, workerId); }
     finally { entry.requested = undefined; this.host.update(root); }
     this.get(root, id);
     return this.list(root).find(tab => tab.id === id)!;
   }
-  async run<T>(root: string, id: number, action: (page: Page, cursor: InAppBrowserCursor) => Promise<T>, navigating = false): Promise<T> {
+  async run<T>(root: string, id: number, action: (page: Page, cursor: InAppBrowserCursor) => Promise<T>, navigating = false, workerId = root): Promise<T> {
     const entry = this.get(root, id);
     const generation = entry.generation;
     const task = entry.queue.catch(() => {}).then(async () => {
@@ -91,6 +98,7 @@ export class SideBrowserController {
       if (!entry.controlled) throw new Error("Call browser_side_use and obtain permission before controlling this tab.");
       if (entry.help) throw new Error("This tab is waiting for the user. Only Continue agent in the app can resume automation.");
       if (!navigating) sideBrowserUrl(entry.contents.getURL());
+      this.markWorking(entry, workerId);
       if (entry.connection?.page.isClosed()) { await entry.connection.close(); entry.connection = undefined; }
       if (!entry.connection) {
         const connection = await this.connect(entry.contents);
@@ -113,6 +121,7 @@ export class SideBrowserController {
     if (!entry.controlled) throw new Error("Obtain permission to use this tab first.");
     if (entry.help) return entry.help;
     entry.generation++;
+    entry.workers.clear();
     entry.help = { requestId: randomUUID(), message: text(message, 800) };
     const connection = entry.connection; entry.connection = undefined;
     await Promise.all([entry.cursor.hide(), connection?.close()]);
@@ -125,6 +134,16 @@ export class SideBrowserController {
     if (!entry.help || entry.help.requestId !== requestId) throw new Error("This browser help request has expired.");
     entry.generation++;
     entry.help = null; this.host.update(root);
+  }
+  finishWorker(workerId?: string): void {
+    const roots = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (workerId === undefined ? entry.workers.size > 0 : entry.workers.has(workerId)) {
+        if (workerId === undefined) entry.workers.clear(); else entry.workers.delete(workerId);
+        roots.add(entry.root);
+      }
+    }
+    for (const root of roots) this.host.update(root);
   }
   async dispose(id: number): Promise<void> {
     const entry = this.entries.get(id); if (!entry) return;

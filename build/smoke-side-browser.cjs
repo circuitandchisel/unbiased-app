@@ -39,6 +39,10 @@ async function main() {
   });
   try {
     const tab = await controller.open('chat-one', url);
+    const thumbnail = await views.get(tab.id).webContents.capturePage(undefined, {stayHidden:true});
+    assert.equal(thumbnail.isEmpty(), false, 'hidden native tab can supply a preview without being shown');
+    if (process.env.UNBIASED_PREVIEW_QA_PAGE) fs.writeFileSync(process.env.UNBIASED_PREVIEW_QA_PAGE, thumbnail.toPNG());
+
     assert.equal(background.isVisible(), false); assert.equal(front.isVisible(), false); assert.equal(reveals, 0);
     // A second, stacked native view must not prevent automation of the first.
     const other = await controller.open('chat-two', url);
