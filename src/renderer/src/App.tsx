@@ -1,3 +1,7 @@
+import { PromptHistory } from "./prompt-history";
+import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
+import { InAppBrowserPreview } from "./InAppBrowserPreview";
+import type { SideBrowserHelp, SideBrowserTab, SideBrowserUpdate } from "../../shared/side-browser";
 import { AgentMirrorPane } from "./AgentMirrorPane";
 import { useSlashCommands } from "./slash-command-menu";
 import { commandToken, type SlashCommand } from "../../shared/slash-commands";
@@ -94,9 +98,10 @@ type CommandItem = {
   aggregatedOutput?: string;
   output?: string;
   /** Sent live by the main process, not only on a transcript reload. */
-  source?: "shell" | "browser" | "memory" | "tool" | "approval" | "computer";
+  source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer";
   /** For a computer step: the icon of the app it acted on, as a data URL. */
   appIcon?: string;
+  screenshots?: BrowserCapture[];
 };
 
 type Entry =
@@ -106,6 +111,7 @@ type Entry =
   | {
       kind: "assistant";
       text: string;
+      screenshots?: BrowserCapture[];
       interrupted?: boolean;
       at?: number;
       /** Memory receipts for the turn this answer ended. They ride ON the
@@ -137,9 +143,10 @@ type Entry =
        *  browser | memory | tool) or "approval" for a card the app itself
        *  raised. Absent on entries persisted before this existed, which is
        *  why the readers below still fall back to text sniffing. */
-     source?: "shell" | "browser" | "memory" | "tool" | "approval" | "computer";
+     source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer";
      /** For a computer step: the icon of the app it acted on, as a data URL. */
      appIcon?: string;
+     screenshots?: BrowserCapture[];
      status: string; // inProgress | completed | failed | declined | awaitingApproval | canceled | unconfirmed
      exitCode?: number;
      output?: string;
@@ -931,11 +938,15 @@ declare global {
       setPalVisible: (visible: boolean) => Promise<PalsSettingsState>;
       setPalScale: (scale: PalScale) => Promise<PalsSettingsState>;
       openBrowser: (p: { id: number; url?: string }) => Promise<{ ok: boolean }>;
+      previewSideBrowser: (id: number) => Promise<string | null>;
       captureBrowser: (id: number) => Promise<string | null>;
       setBrowserBounds: (b: { id: number; x: number; y: number; width: number; height: number }) => Promise<void>;
       setBrowserVisible: (p: { id: number; visible: boolean }) => Promise<void>;
       navigateBrowser: (p: { id: number; url?: string; action?: "back" | "forward" | "reload" }) => Promise<void>;
       closeBrowser: (id: number) => Promise<void>;
+      sideBrowserTabs: () => Promise<SideBrowserUpdate>;
+      resumeSideBrowser: (p: { tabId: number; requestId: string }) => Promise<{ ok: boolean; message: string }>;
+      onSideBrowserTabs: (cb: (p: SideBrowserUpdate) => void) => () => void;
       onBrowserState: (cb: (p: BrowserState) => void) => () => void;
       onBrowserOpenLink: (cb: (p: { url: string }) => void) => () => void;
       onBrowserAnnotate: (
@@ -2238,9 +2249,8 @@ export function App() {
     return true;
   }
 
-  /** Live browser, terminal, and side-chat tabs cannot be restored from a
-   *  thread snapshot. Close them on every conversation change so a new chat's
-   *  side panel never appears to belong to the next conversation. */
+  /** Live terminal, side-chat and ordinary browser tabs close on conversation
+   *  changes. Controlled browsers are parked in their owning conversation. */
   function resetSideView() {
     setSideContexts({});
     setSideChatRestores({});
@@ -2252,7 +2262,13 @@ export function App() {
     setTreeFiles({});
     setTerminalTabs([]); // the shells ran in the previous conversation's cwd
     setReviewOpen(false); // the diff reviewed the previous conversation's cwd
-    for (const id of browserTabsRef.current) void window.unbiased.closeBrowser(id);
+    // Controlled tabs keep running in their owning conversation while it is away.
+    for (const id of browserTabsRef.current) {
+      if (sideBrowserTabsRef.current[id]?.controlled) void window.unbiased.setBrowserVisible({ id, visible: false });
+      else void window.unbiased.closeBrowser(id);
+    }
+    sideBrowserTabsRef.current = {};
+    setSideBrowserTabs({});
     browserTabsRef.current = [];
     setBrowserTabs([]);
     blankBrowserTabsRef.current.clear();
@@ -2539,6 +2555,12 @@ export function App() {
   // wrongly open. These refs give it the arrays as they are at call time.
   const browserTabsRef = useRef(browserTabs);
   browserTabsRef.current = browserTabs;
+  const [sideBrowserTabs, setSideBrowserTabs] = useState<Record<number, SideBrowserTab>>({});
+  const sideBrowserTabsRef = useRef(sideBrowserTabs);
+  sideBrowserTabsRef.current = sideBrowserTabs;
+  const browserContinuationRef = useRef<{ ready: () => boolean; send: (text: string) => void } | null>(null);
+  const captureBrowserPreview = useCallback((id: number) => window.unbiased.previewSideBrowser(id), []);
+  const registerBrowserContinuation = useCallback((handler: typeof browserContinuationRef.current) => { browserContinuationRef.current = handler; }, []);
   const blankBrowserTabsRef = useRef(new Set<number>());
   const pendingBrowserUrlsRef = useRef(new Map<number, string>());
   const sideChatsRef = useRef(sideChats);
@@ -2571,6 +2593,57 @@ export function App() {
       }),
     [],
   );
+
+  function syncSideBrowserTabs(update: SideBrowserUpdate) {
+    if (!Array.isArray(update.tabs) || update.root !== (activeThreadIdRef.current ?? "main")) return;
+    sideBrowserTabsRef.current = Object.fromEntries(update.tabs.map(tab => [tab.id, tab]));
+    setSideBrowserTabs(sideBrowserTabsRef.current);
+    browserTabsRef.current = [...new Set([...browserTabsRef.current.filter(id => id >= 0 || update.tabs.some(tab => tab.id === id)), ...update.tabs.map(tab => tab.id)])];
+    setBrowserTabs(browserTabsRef.current);
+    for (const tab of update.tabs) {
+      const previous = browserStatesRef.current[tab.id];
+      browserStatesRef.current = { ...browserStatesRef.current, [tab.id]: { id: tab.id, url: tab.url, title: tab.title, canGoBack: previous?.canGoBack ?? false, canGoForward: previous?.canGoForward ?? false, loading: previous?.loading ?? false } };
+    }
+    setBrowserStates(browserStatesRef.current);
+  }
+  const pendingBrowserRevealRef = useRef<{ root: string; id: number } | null>(null);
+  function applySideBrowserUpdate(update: SideBrowserUpdate) {
+    syncSideBrowserTabs(update);
+    const pending = pendingBrowserRevealRef.current;
+    if (!pending || update.root !== pending.root || update.root !== (activeThreadIdRef.current ?? "main")) return;
+    if (!update.tabs.some(tab => tab.id === pending.id && tab.help)) return;
+    pendingBrowserRevealRef.current = null;
+    setShowSettings(false); setShowChangelog(false); setScheduledOpen(false); setConnectorsOpen(false); setMultiOpen(false);
+    setPanelMode(`browser:${pending.id}`);
+    setSideOpenPersisted(true);
+  }
+  const applySideBrowserUpdateRef = useRef(applySideBrowserUpdate);
+  applySideBrowserUpdateRef.current = applySideBrowserUpdate;
+  useEffect(() => {
+    let cancelled = false;
+    void window.unbiased.sideBrowserTabs().then(update => { if (!cancelled) applySideBrowserUpdateRef.current(update); });
+    return () => { cancelled = true; };
+  }, [activeThreadId]);
+  useEffect(() => window.unbiased.onSideBrowserTabs(update => {
+    if (update.revealId === undefined) { applySideBrowserUpdateRef.current(update); return; }
+    pendingBrowserRevealRef.current = { root: update.root, id: update.revealId };
+    if (update.root === (activeThreadIdRef.current ?? "main")) applySideBrowserUpdateRef.current(update);
+    else {
+      const expectedSequence = openSeqRef.current + 1;
+      // The active-thread effect adopts/reveals only after React commits the new chat.
+      void openThreadRef.current(update.root).then(() => {
+        if (openSeqRef.current !== expectedSequence) pendingBrowserRevealRef.current = null;
+      }).catch(() => { pendingBrowserRevealRef.current = null; });
+    }
+  }), []);
+  async function continueSideBrowser(tabId: number, requestId: string) {
+    const handler = browserContinuationRef.current;
+    if (!handler?.ready()) throw new Error("Wait for the conversation to connect, then try again.");
+    const root = activeThreadIdRef.current;
+    const result = await window.unbiased.resumeSideBrowser({ tabId, requestId });
+    if (root !== activeThreadIdRef.current) throw new Error("Return to this conversation to continue the agent.");
+    if (result.ok) handler.send(result.message);
+  }
 
   // ── Tab order + close fallback ──────────────────────────────────────
   // The strip renders tabs in the order they were OPENED (new ones append
@@ -3244,6 +3317,8 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || multiOpen || panelMode === "agentmirror");
+  const previewBrowserTabs = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
   const visibleThreadIds = authed !== "in" || showSettings || showChangelog ? []
     : multiOpen ? multiIds
       : !pageOpen && activeThreadId ? [activeThreadId] : [];
@@ -4147,6 +4222,7 @@ export function App() {
       <div
         className="u-main-pane"
         style={{
+          position: "relative",
           // sideVisible, not sideOpen: with a flex-grow of 1 - sideFrac and a
           // zero basis, a column whose panel is hidden claims only its old
           // share of the row and leaves the rest of the window empty — the
@@ -4584,6 +4660,7 @@ export function App() {
           )}
         <ChatPane
           paneId="main"
+          onRegisterBrowserContinuation={registerBrowserContinuation}
           canTypeToFocus={() => composerTypingAvailable &&
             (typingPaneRef.current === "main" || !sideVisible || !sideChats.includes(typingPaneRef.current))}
           connected={connected}
@@ -4978,6 +5055,13 @@ export function App() {
           </div>
           </>
         )}
+        <InAppBrowserPreview
+          tabs={previewBrowserTabs.map(tab => ({ ...tab, title: browserStates[tab.id]?.title || tab.title }))}
+          visible={browserPreviewVisible}
+          hiddenTabId={sideVisible && panelMode.startsWith("browser:") ? Number(panelMode.slice(8)) : null}
+          capture={captureBrowserPreview}
+          onOpen={id => { setPanelMode(`browser:${id}`); setSideOpenPersisted(true); }}
+        />
       </div>
 
       {!sideOverlayLayout && (
@@ -5092,10 +5176,12 @@ export function App() {
                         ? { icon: <ReviewIcon />, label: "Review", close: closeReviewTab, aria: "Close review" }
                         : t.startsWith("browser:")
                           ? {
-                              icon: <GlobeIcon size={13} />,
-                              label: browserStates[Number(t.slice(8))]?.title || "Browser",
+                              icon: sideBrowserTabs[Number(t.slice(8))]?.controlled && !sideBrowserTabs[Number(t.slice(8))]?.help
+                                ? <span role="img" aria-label="Agent has access to this in-app browser tab" title="Agent has access to this in-app browser tab" style={{ display: "flex", color: "#FF7764", filter: "drop-shadow(0 0 4px #F8573B88)" }}><svg width="16" height="16" viewBox="-2 -2 22 22" fill="none" aria-hidden="true"><path d="M0 0L17.5 7L8 8L7 17.5Z" stroke="currentColor" strokeWidth="2.1" strokeLinejoin="round" /></svg></span>
+                                : <GlobeIcon size={13} />,
+                              label: browserStates[Number(t.slice(8))]?.title || "In-app browser",
                               close: () => closeTab(t),
-                              aria: "Close browser",
+                              aria: "Close in-app browser",
                             }
                           : agent
                             ? {
@@ -5169,7 +5255,7 @@ export function App() {
             })}
             </div>
             <span style={{ display: "flex", flexShrink: 0 }}>
-              <IconButton title="New browser tab" onClick={openBrowserTab}>
+              <IconButton title="New in-app browser tab" onClick={openBrowserTab}>
                 <PlusIcon />
               </IconButton>
             </span>
@@ -5215,7 +5301,7 @@ export function App() {
                 <LauncherRow icon={<FolderOutlineIcon size={15} />} label="Files" onClick={openFilesTab} />
               )}
               <LauncherRow icon={<TerminalIcon />} label="Terminal" onClick={openTerminalTab} />
-              <LauncherRow icon={<GlobeIcon />} label="Browser" onClick={openBrowserTab} />
+              <LauncherRow icon={<GlobeIcon />} label="In-app browser" onClick={openBrowserTab} />
               {inProject && <LauncherRow icon={<ReviewIcon />} label="Review" onClick={openReviewTab} />}
             </div>
           )}
@@ -5338,6 +5424,8 @@ export function App() {
             >
               <BrowserPane
                 browserId={id}
+                help={sideBrowserTabs[id]?.help ?? null}
+                onContinue={requestId => continueSideBrowser(id, requestId)}
                 browserState={browserStates[id]}
                 autoFocusAddress={blankBrowserTabsRef.current.has(id)}
                 startPage={
@@ -7328,12 +7416,17 @@ function ReviewPane({ gitPath }: { gitPath: string | null }) {
 
 /** Browser toolbar and start page share a host with the native WebContentsView.
  *  The native layer is parked offscreen while the tab has no page to show. */
-function BrowserPane({ browserId, browserState, autoFocusAddress, startPage }: {
+function BrowserPane({ browserId, browserState, autoFocusAddress, startPage, help, onContinue }: {
   browserId: number;
+  help: SideBrowserHelp | null;
+  onContinue: (requestId: string) => Promise<void>;
   browserState?: BrowserState;
   autoFocusAddress: boolean;
   startPage: React.ReactNode;
 }) {
+  const [continuing, setContinuing] = useState(false);
+  const [helpError, setHelpError] = useState<string | null>(null);
+  useEffect(() => { setHelpError(null); setContinuing(false); }, [help?.requestId]);
   const holdRef = useRef<HTMLDivElement>(null);
   const [urlDraft, setUrlDraft] = useState("");
   const state = browserState ?? {
@@ -7401,6 +7494,16 @@ function BrowserPane({ browserId, browserState, autoFocusAddress, startPage }: {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {help && <div role="status" data-browser-help={browserId} style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", background: colors.panel, color: colors.fg, fontSize: 13, maxHeight: 220, overflowY: "auto", flexShrink: 0 }}>
+        <strong>Your help is needed</strong>
+        <div style={{ margin: "6px 0", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{help.message}</div>
+        <div style={{ color: colors.dim, marginBottom: 8 }}>The agent is paused. Complete this step in the page, then continue.</div>
+        <button disabled={continuing} style={{ padding: "7px 12px", border: 0, borderRadius: 8, background: colors.accent, color: "var(--accent-fg)", font: "inherit", fontWeight: 600, cursor: continuing ? "wait" : "pointer", opacity: continuing ? 0.6 : 1 }} onClick={() => {
+          setContinuing(true); setHelpError(null);
+          void onContinue(help.requestId).catch(error => setHelpError(String(error))).finally(() => setContinuing(false));
+        }}>{continuing ? "Continuing…" : "Continue agent"}</button>
+        {helpError && <div role="alert" style={{ marginTop: 6, color: colors.err }}>{helpError}</div>}
+      </div>}
       <div
         style={{
           display: "flex",
@@ -7575,7 +7678,7 @@ function BrowserStartPage({
             </button>
             {moreOpen && (
               <>
-                {tool("New browser tab", <GlobeIcon />, onNewBrowser)}
+                {tool("New in-app browser tab", <GlobeIcon />, onNewBrowser)}
               </>
             )}
           </div>
@@ -8225,6 +8328,22 @@ function TerminalPane() {
 /** Markdown images load through the main process because CSP forbids file://.
  *  File previews resolve relative to their own directory; chat resolves
  *  relative to the selected thread's working directory. */
+function BrowserScreenshotGallery({ captures, markdown = "", onPreviewImage }: {
+  captures: BrowserCapture[];
+  markdown?: string;
+  onPreviewImage?: (image: Attachment) => void;
+}) {
+  const visible = captures.filter(capture => !markdown.includes(`](<${capture.path}>)`) && !markdown.includes(`](${capture.path})`));
+  if (!visible.length) return null;
+  return <div aria-label="Browser screenshots" style={{ display: "flex", flexDirection: "column", gap: 12, margin: "12px 0" }}>
+    {visible.map(capture => <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
+      style={{ display: "block", width: "fit-content", maxWidth: "100%", padding: 8, background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 12, cursor: onPreviewImage ? "zoom-in" : "default", textAlign: "left" }}>
+      <MdImage src={capture.path} alt={capture.name} chat />
+      <span style={{ display: "block", padding: "6px 4px 0", font: "inherit", fontSize: 12, color: colors.dim }}>Browser screenshot{onPreviewImage ? " · Open preview" : ""}</span>
+    </button>)}
+  </div>;
+}
+
 function MdImage({
   src, alt, baseDir, chat = false,
 }: {
@@ -9476,7 +9595,9 @@ function ChatPane({
   onOpenMcp,
   onOpenConnectors,
   onOpenSkills,
+  onRegisterBrowserContinuation,
 }: {
+  onRegisterBrowserContinuation?: (handler: { ready: () => boolean; send: (text: string) => void } | null) => void;
   paneId: PaneId;
   canTypeToFocus: () => boolean;
   connected: boolean;
@@ -9556,7 +9677,9 @@ function ChatPane({
   const composerRef = useRef<MarkdownComposerHandle | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const promptHistory = useRef(new PromptHistory());
   const changeDraft = (text: string) => {
+    promptHistory.current.reset();
     drafts.setText(text);
     setDraft(text);
   };
@@ -9586,6 +9709,7 @@ function ChatPane({
     if (next) setAttachments(next);
   };
   useLayoutEffect(() => {
+    promptHistory.current.reset();
     const saved = drafts.transition(threadId ?? null, reset.nonce);
     if (!saved) return;
     setDraft(saved.text);
@@ -10289,18 +10413,20 @@ function ChatPane({
                 }
               }
               const agents = [...agentsById.values()];
+              const screenshots = collectBrowserCaptures(work);
               // Receipts move ONTO the answer, so they render inside it —
               // under the text, above the copy row. Folded they would vanish;
               // left loose above the answer they duplicated the steps header
               // that already says "Saved memory".
               const answer: Entry | null =
-                finalMsg && (receipts.length > 0 || agents.length > 0)
+                finalMsg && (receipts.length > 0 || agents.length > 0 || screenshots.length > 0)
                   ? {
                       ...finalMsg,
                       ...(receipts.length > 0
                         ? { memories: dedupeReceipts([...(finalMsg.memories ?? []), ...receipts]) }
                         : null),
                       ...(agents.length > 0 ? { agents } : null),
+                      ...(screenshots.length > 0 ? { screenshots: collectBrowserCaptures([finalMsg, { screenshots }]) } : null),
                     }
                   : finalMsg;
               const duration = completedWorkDuration(
@@ -10321,7 +10447,7 @@ function ChatPane({
                     ? []
                     : receipts.map((r) => ({ kind: "memory" as const, ...r }))),
                 ];
-              } else if (answer && (receipts.length > 0 || agents.length > 0)) {
+              } else if (answer && (receipts.length > 0 || agents.length > 0 || screenshots.length > 0)) {
                 next = [...next.slice(0, start), ...foldable, answer];
               }
             }
@@ -10581,6 +10707,7 @@ function ChatPane({
               // desktop step spent the whole turn looking like a shell command.
               source: item.source ?? existing.source,
               appIcon: item.appIcon ?? existing.appIcon,
+              screenshots: item.screenshots ?? existing.screenshots,
             };
           });
           if (found) return mapped;
@@ -10595,6 +10722,7 @@ function ChatPane({
               output: item.aggregatedOutput ?? item.output,
               source: item.source,
               appIcon: item.appIcon,
+              screenshots: item.screenshots,
             },
           ];
         });
@@ -10711,6 +10839,20 @@ function ChatPane({
       setEntries((es) => [...es, { kind: "assistant", text: `Something went wrong: ${String(err)}` }]);
     }
   }
+
+  const browserContinuationHandlerRef = useRef<{ ready: () => boolean; send: (text: string) => void }>({ ready: () => false, send: () => {} });
+  browserContinuationHandlerRef.current = {
+    ready: () => connected,
+    send: text => {
+      const msg: QueuedMsg = { id: nextQueueIdRef.current++, text, wire: text, attachments: [] };
+      if (busy || compacting) setQueue(list => [...list, msg]);
+      else void sendNow(msg);
+    },
+  };
+  useEffect(() => {
+    onRegisterBrowserContinuation?.({ ready: () => browserContinuationHandlerRef.current.ready(), send: text => browserContinuationHandlerRef.current.send(text) });
+    return () => onRegisterBrowserContinuation?.(null);
+  }, [onRegisterBrowserContinuation]);
 
   async function submit() {
     const text = draft.trim();
@@ -11091,7 +11233,9 @@ function ChatPane({
   ): React.ReactNode => {
     if (block.kind === "steps") {
       return (
-        <StepsGroup key={`s${block.key}`} items={block.items} statusLabel={statusLabel} decide={decide} />
+        <Fragment key={`s${block.key}`}><StepsGroup items={block.items} statusLabel={statusLabel} decide={decide} />
+          {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(block.items)} onPreviewImage={onPreviewImage} />}
+        </Fragment>
       );
     }
     const e = block.entry;
@@ -11293,6 +11437,7 @@ function ChatPane({
               {e.text}
             </Markdown>
           </StreamingVisualContext.Provider>
+          <BrowserScreenshotGallery captures={e.screenshots ?? []} markdown={e.text} onPreviewImage={onPreviewImage} />
           {e.interrupted && <div style={{ color: colors.dim, fontSize: 12, marginTop: 4 }}>— stopped</div>}
           {/* Receipts sit between the answer and its action row: below the
               thing they are about, above the copy button — and outside the
@@ -11331,16 +11476,18 @@ function ChatPane({
       );
     }
     if (e.kind === "work") {
-      return (
+      const next = !nested ? entries[block.key + 1] : null;
+      const carried = next?.kind === "assistant" ? new Set((next.screenshots ?? []).map(capture => capture.path)) : new Set<string>();
+      return <Fragment key={`w${block.key}`}>
         <WorkedGroup
-          key={`w${block.key}`}
           duration={e.duration}
           hasDetails={e.entries.length > 0}
           renderDetails={() => toDisplayBlocks(e.entries).map((b) => renderBlock(b, false, true))}
           initiallyOpen={openWorkEntriesRef.current.has(e)}
           onOpenChange={(open) => { if (open) openWorkEntriesRef.current.add(e); else openWorkEntriesRef.current.delete(e); }}
         />
-      );
+        {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(e.entries).filter(capture => !carried.has(capture.path))} markdown={next?.kind === "assistant" ? next.text : undefined} onPreviewImage={onPreviewImage} />}
+      </Fragment>;
     }
     return null;
   };
@@ -12037,6 +12184,19 @@ function ChatPane({
             onChange={changeDraft}
             onKeyDown={(e) => {
               if (slash.keyDown(e)) return;
+              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) {
+                const direction = e.key === "ArrowUp" ? "up" : "down";
+                if (composerRef.current?.canRecallPrompt(direction, promptHistory.current.active)) {
+                  const prompts = entries.flatMap(entry => entry.kind === "user" && entry.text.trim() ? [entry.text] : []);
+                  const recalled = promptHistory.current.navigate(direction, prompts, draft);
+                  if (recalled !== null) {
+                    e.preventDefault(); e.stopPropagation();
+                    drafts.setText(recalled); setDraft(recalled);
+                    composerRef.current?.recallPrompt(recalled);
+                    return;
+                  }
+                }
+              }
               // Enter sends immediately when idle and queues while a turn runs.
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -20549,9 +20709,13 @@ const closeAgentMirrorRef: { current: (() => void) | null } = { current: null };
 
 /** A step driven by the agent browser. Keyed on the tool name rather than the
  *  human label, which is localised prose and changes. */
+function isSideBrowserStep(e: CommandEntry): boolean {
+  return e.source === "side-browser" || (!e.source && e.command.startsWith("browser_side_"));
+}
 function isBrowserStep(e: CommandEntry): boolean {
   if (e.source) return e.source === "browser";
   const c = e.command ?? "";
+  if (isSideBrowserStep(e)) return false;
   return c.startsWith("browser_") || c.startsWith("Browse the web") || c.startsWith("Use a signed-in browser session");
 }
 
@@ -20681,7 +20845,7 @@ const isComputerStep = (e: CommandEntry): boolean => {
  *  fabricated `$ Schedule "Daily digest"` claims a shell ran a sentence.
  *  Entries persisted before `source` existed keep the old guess. */
 const isShellStep = (e: CommandEntry): boolean =>
-  e.source ? e.source === "shell" : !isBrowserStep(e) && !isMemoryStep(e) && !isComputerStep(e);
+  e.source ? e.source === "shell" : !isBrowserStep(e) && !isSideBrowserStep(e) && !isMemoryStep(e) && !isComputerStep(e);
 
 function stepIcon(e: CommandEntry): React.ReactNode {
   // A desktop step shows the icon of the app it touched: "press #643 in Brave"
@@ -20697,7 +20861,7 @@ function stepIcon(e: CommandEntry): React.ReactNode {
       />
     );
   }
-  if (isBrowserStep(e)) return <GlobeIcon size={14} />;
+  if (isBrowserStep(e) || isSideBrowserStep(e)) return <GlobeIcon size={14} />;
   if (isMemoryStep(e)) return <LightbulbIcon />;
   if (isComputerStep(e)) return <DesktopIcon size={14} />;
   return <TerminalIcon size={14} />;
@@ -20855,6 +21019,7 @@ function StepsGroup({
 
   // Browser work says so, and says it about a thing the user can go look at.
   const browsing = items.some(isBrowserStep);
+  const sideBrowsing = items.some(isSideBrowserStep);
   // Desktop control steps get their own label too.
   const computing = items.some(isComputerStep);
   // Same courtesy for memory-only groups: name the action, not the count.
@@ -20863,12 +21028,14 @@ function StepsGroup({
     ? { text: "Needs your approval", color: colors.fg, verb: null as string | null }
     : running
       ? {
-          text: browsing ? "Using" : memoryLabel ? "Updating memory…" : computing ? "Controlling desktop…" : "Working…",
+          text: browsing ? "Using" : sideBrowsing ? "Using in-app browser…" : memoryLabel ? "Updating memory…" : computing ? "Controlling desktop…" : "Working…",
           color: colors.amber,
           verb: browsing ? "Using" : null,
         }
       : browsing
         ? { text: `Used${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: "Used" }
+        : sideBrowsing
+          ? { text: `Used in-app browser${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
         : computing
           ? { text: `Controlled desktop${issueSuffix}`, color: failed ? colors.err : colors.dim, verb: null }
         : memoryLabel

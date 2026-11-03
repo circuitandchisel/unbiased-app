@@ -66,6 +66,12 @@ jobs:
       - name: Smoke test side browser tab reuse
         run: npm run smoke:browser-tabs
 
+      - name: Smoke test embedded browser automation and user handoff
+        run: |
+          npm run smoke:side-browser
+          npm run smoke:side-browser-ui
+          npm run smoke:browser-captures
+
   browser-bundle:
     name: Browser bundle
     runs-on: macos-15

@@ -1,3 +1,6 @@
+import { retainBrowserCapture, readBrowserCapture, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
+import { collectBrowserCaptures } from "../shared/browser-capture";
+import { SIDE_BROWSER_TOOLS, SideBrowserController, sideBrowserUrl, sideLocator } from "./side-browser";
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
 import { listSlashCommands, resolveSlashSkill } from "./skill-commands";
 import { builtInAgentInstructions, connectAgentInstructions, registerAgentInstructionsIpc } from "./agent-instructions";
@@ -335,7 +338,10 @@ async function pruneSideChatRecents(): Promise<void> {
     const record = sideChatRecents.get(paneId);
     if (!record) continue;
     try {
+      sideBrowser.finishWorker(record.threadId);
       await engine.request("thread/delete", { threadId: record.threadId });
+      forgetBrowserCaptures(record.threadId);
+      void releaseConversationTab(record.threadId);
       sideChatRecents.remove(paneId);
       threadMcp.delete(record.threadId);
       rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -380,6 +386,7 @@ function dropSidePane(paneId: string): void {
   settleLocalApprovals(threadId);
   settleLocalUserInputs(threadId);
   if (threadId) {
+    sideBrowser.finishWorker(threadId);
     const turnId = pane.turnId ?? runningTurns.get(threadId) ?? null;
     if (turnId) {
       const interrupt = engine.request("turn/interrupt", { threadId, turnId }).catch(() => {
@@ -519,6 +526,9 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "command to browse: those run outside the app's permission and mirroring, so the user cannot see or",
   "approve them. If a browser tool is genuinely absent from your tools, say the Agent browser is",
   "unavailable rather than substituting a shell command for it.",
+  "For pages already open in the in-app browser, use browser_side_list and browser_side_use. Full access allows controlling existing tabs without another permission prompt. In other modes, obtain approval before reading or acting through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
+  "Browser screenshots are saved and attached to the chat automatically. Describe the captured page accurately; never claim an attachment exists if saving failed. Do not substitute a description for calling the screenshot tool when the user requests an image.",
+  "Keep browser work in the background unless the user asks to watch it. When sign-in, 2FA, CAPTCHA, a decision, or missing information needs the user, call browser_side_request_help with a precise request. That reveals the tab and pauses all agent access. Stop the turn and wait for the user to click Continue agent. Never resume yourself, interact with the app's approval UI, solve CAPTCHA, or request passwords in chat. After the user's continuation message, inspect the current page before continuing, and leave its tab open.",
   // Delegation. The collaboration tools are available on every turn, but models
   // rarely reach for them unprompted — Claude Code and codex get "automatic"
   // sub-agents purely by saying when to delegate, so this does the same. The
@@ -621,13 +631,13 @@ function configuredProjectContext(cwd: string | null, threadId: string | null = 
   return project ? projectContextForDirectory({ cwd, projects: [project], worktrees: loadWorktrees(), assignedProject: project.primary }) : null;
 }
 
-async function agentBrowserTools() {
+async function agentBrowserTools(includeSide = true) {
   try {
     const tools = await browserRuntime.discoverTools();
-    return tools.length ? tools : undefined;
+    return [...(includeSide ? SIDE_BROWSER_TOOLS : []), ...tools];
   } catch (error) {
     console.warn("[browser-runtime] Tool discovery failed", error);
-    return undefined;
+    return includeSide ? SIDE_BROWSER_TOOLS : undefined;
   }
 }
 
@@ -1226,10 +1236,11 @@ const SPAWN_GRACE_SECONDS = 2;
  *  only this says which is which. Without it the renderer classified by
  *  string prefix and dressed a scheduling card as a shell command, complete
  *  with a fabricated `$` prompt. */
-type StepSource = "shell" | "browser" | "computer" | "memory" | "tool";
+type StepSource = "shell" | "browser" | "side-browser" | "computer" | "memory" | "tool";
 
 function dynamicToolSource(tool: string | undefined): StepSource {
   const t = tool ?? "";
+  if (t.startsWith("browser_side_")) return "side-browser";
   if (t.startsWith("browser_")) return "browser";
   if (t.startsWith("computer_")) return "computer";
   if (t.startsWith("memory_")) return "memory";
@@ -1249,6 +1260,12 @@ function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown): str
   if (t === "memory_save" || t === "memory_forget") {
     const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "memory";
     return `${t === "memory_save" ? "save memory" : "forget memory"} · ${name}`;
+  }
+  if (t.startsWith("browser_side_")) {
+    const action = t.slice("browser_side_".length).replaceAll("_", " ");
+    const target = typeof args.tabId === "number" ? ` tab ${args.tabId}` : "";
+    const destination = typeof args.url === "string" ? ` · ${args.url}` : "";
+    return `${action} in-app browser${target}${destination}`;
   }
   if (t === "computer_apps") return "list apps";
   if (t === "computer_raise") return `raise ${String(args.app)}`;
@@ -2510,8 +2527,30 @@ async function runComputerAction(action: ComputerAction, threadId: string | null
   };
 }
 
+const deletedCaptureThreads = new Set<string>();
+function browserCaptureDir(): string { return join(app.getPath("userData"), "browser-captures"); }
+function forgetBrowserCaptures(threadId: string): void {
+  deletedCaptureThreads.add(threadId);
+  try { removeBrowserCaptures(browserCaptureDir(), threadId); } catch { /* best-effort attachment cleanup */ }
+}
+function browserCaptureFields(threadId: string | null, itemId?: string): Record<string, unknown> {
+  if (!threadId || !itemId) return {};
+  const capture = readBrowserCapture(browserCaptureDir(), threadId, itemId);
+  return capture ? { screenshots: [capture] } : {};
+}
+function attachBrowserScreenshot(tool: string, args: unknown, threadId: string | null, itemId: string, turnId: string | null, response: DynamicToolResponse): DynamicToolResponse {
+  if (!["browser_screenshot", "browser_side_screenshot"].includes(tool) || !threadId || deletedCaptureThreads.has(threadId)) return response;
+  const retained = retainBrowserCapture(browserCaptureDir(), threadId, itemId, response, turnId);
+  const paneId = paneForThread(threadId);
+  if (retained.capture && paneId && win && !win.isDestroyed()) send("chat:command", { paneId, phase: "completed", item: {
+    id: itemId, command: dynamicToolCommandText(tool, args), source: dynamicToolSource(tool), status: "completed", screenshots: [retained.capture],
+  } });
+  return retained.response;
+}
+
 async function handleAgentBrowserCall(tool: string, rawArgs: unknown, threadId: string | null): Promise<DynamicToolResponse> {
   const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
+  if (tool.startsWith("browser_side_")) return handleSideBrowserCall(tool, a, threadId);
   const detail = typeof a.url === "string" ? a.url : typeof a.query === "string" ? `search: ${a.query}` : typeof a.port === "string" ? a.port : tool;
   const refusal = await ensureBrowserAllowed(tool, threadId, detail);
   if (refusal || browserShuttingDown) return { success:false, contentItems:[{type:"inputText",text:refusal ?? "Unbiased is shutting down its browser."}] };
@@ -3318,7 +3357,7 @@ type WireThread = {
   /** Free-form classification the client set at thread/start, handed back
    *  unchanged. Used to keep scheduled runs out of the sidebar. */
   threadSource?: string | null;
-  turns?: { items?: WireItem[]; startedAt?: number; durationMs?: number }[];
+  turns?: { id?: string; items?: WireItem[]; startedAt?: number; durationMs?: number }[];
 };
 
 const threadSearchCache = new Map<string, { updatedAt?: string | number; sourceMtimeMs?: number; cachedAt: number; messages: string[] }>();
@@ -3562,6 +3601,7 @@ function threadToEntries(
 ): { entries: unknown[]; runningTurnStart: number | null; runningTurnStartedAt: number | null } {
   const entries: unknown[] = [];
   const turns = thread.turns ?? [];
+  const captureTurns = readBrowserCaptureTurns(browserCaptureDir(), thread.id);
   // Where the in-flight turn's foldable output begins, and when the turn
   // started. Without these, opening a conversation mid-turn stranded the
   // replayed half of that turn outside the fold forever: the live fold at
@@ -3610,7 +3650,10 @@ function threadToEntries(
       // time twice.
       if (didWork) entries.push({ kind: "work", duration: keepFinalOut ? durationS : null, entries: [...bucket] });
       else entries.push(...bucket);
-      if (finalMsg) entries.push(finalMsg);
+      if (finalMsg) {
+        const screenshots = collectBrowserCaptures([...bucket, { screenshots: keepFinalOut && turn.id ? captureTurns[turn.id] : [] }]);
+        entries.push(screenshots.length ? { ...(finalMsg as object), screenshots } : finalMsg);
+      }
       bucket.length = 0;
     };
     // A turn still running when the conversation reopens stays raw: its
@@ -3695,6 +3738,7 @@ function threadToEntries(
             command: dynamicToolCommandText(d.tool, d.arguments),
             status: d.success === false ? "failed" : (d.status ?? "completed"),
             source: dynamicToolSource(d.tool),
+            ...(["browser_screenshot", "browser_side_screenshot"].includes(d.tool ?? "") ? browserCaptureFields(thread.id, d.id) : {}),
             ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
           });
           break;
@@ -3763,6 +3807,7 @@ function pushStatus(status: EngineStatus): void {
   if(status.state === "exited")turnEnvironments.reset();
   lastStatus = status;
   if (status.state === "exited") {
+    sideBrowser.finishWorker();
     for (const threadId of compactingThreads) updateThreadCompaction(threadId, "failed");
     if (petSettleTimer) clearTimeout(petSettleTimer);
     petSettleTimer = null;
@@ -4996,6 +5041,7 @@ function createWindow(): void {
     webPreferences: { preload: join(__dirname, "../preload/index.js") },
   });
   win.on("closed", () => {
+    clearBrowserViews();
     if (petSaveTimer) clearTimeout(petSaveTimer);
     petSaveTimer = null;
     savePetPreferences();
@@ -5367,6 +5413,106 @@ async function startAnnotatePicker(id: number): Promise<void> {
 // owns the toolbars and reports each placeholder's bounds; this side owns
 // navigation and pushes state back tagged with the id.
 const browserViews = new Map<number, WebContentsView>();
+let backgroundBrowserHost: BrowserWindow | null = null;
+let nextAgentSideBrowserId = -1;
+function parkControlledBrowser(id: number, view: WebContentsView): void {
+  if (!backgroundBrowserHost || backgroundBrowserHost.isDestroyed()) {
+    backgroundBrowserHost = new BrowserWindow({ show: false, skipTaskbar: true, width: 1280, height: 800, webPreferences: { sandbox: true } });
+    backgroundBrowserHost.on("closed", () => { backgroundBrowserHost = null; });
+  }
+  const bounds = browserViewBounds.get(id) ?? { width: 1280, height: 800 };
+  const [width, height] = backgroundBrowserHost.getContentSize();
+  backgroundBrowserHost.setContentSize(Math.max(width, bounds.width), Math.max(height, bounds.height));
+  backgroundBrowserHost.contentView.addChildView(view);
+  view.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
+  view.setVisible(true);
+}
+const sideBrowser = new SideBrowserController({
+  create: root => {
+    const id = nextAgentSideBrowserId--;
+    const view = ensureBrowserView(id, root, true);
+    browserViewBounds.set(id, { x: 0, y: 0, width: 1280, height: 800 });
+    parkControlledBrowser(id, view);
+    return { id, contents: view.webContents };
+  },
+  controlled: id => {
+    const view = browserViews.get(id);
+    if (!view) return;
+    view.webContents.setBackgroundThrottling(false);
+    if (!browserVisibility.get(id)) parkControlledBrowser(id, view);
+  },
+  update: (root, revealId) => {
+    send("browser:side-tabs", { root, tabs: sideBrowser.list(root), ...(revealId !== undefined ? { revealId } : {}) });
+    if (revealId !== undefined && win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  },
+});
+async function handleSideBrowserCall(tool: string, a: Record<string, unknown>, threadId: string | null): Promise<DynamicToolResponse> {
+  const text = (message: string, success = true): DynamicToolResponse => ({ success, contentItems: [{ type: "inputText", text: message }] });
+  if (!threadId || browserShuttingDown) return text("No active local conversation is available.", false);
+  const root = rootThreadOf(threadId);
+  const signal = sideBrowser.workerSignal(threadId);
+  if (panes.main.threadId === root) sideBrowser.adoptDraft(root);
+  try {
+    signal.throwIfAborted();
+    if (tool === "browser_side_list") return text(JSON.stringify(sideBrowser.list(root)));
+    if (tool === "browser_side_open") {
+      const url = sideBrowserUrl(a.url);
+      if (isStripeOnboardingPage(url, !app.isPackaged)) return text("This sign-in/setup page requires user interaction. Open a regular page and request user help rather than opening an external browser automatically.", false);
+      const refusal = await ensureBrowserAllowed(tool, threadId, url);
+      if (refusal) return text(refusal, false);
+      return text(JSON.stringify(await sideBrowser.open(root, url, threadId, signal)));
+    }
+    if (typeof a.tabId !== "number" || !Number.isInteger(a.tabId)) return text("Provide a tabId from browser_side_list or browser_side_open.", false);
+    const id = a.tabId; sideBrowser.get(root, id);
+    if (tool === "browser_side_use") {
+      await sideBrowser.use(root, id, liveAccessMode(root) === "full", async ({ title, origin }) => {
+        const decision = await requestLocalApproval(threadId, `Control in-app browser tab: ${title}`, `Allow the agent to read and operate this tab for this conversation, including any signed-in account at ${origin}. The agent cannot access other tabs.`, { allowForSession: false });
+        return decision !== "decline";
+      }, threadId, signal);
+      return text(`Tab ${id} is available for this conversation. It stays in the background unless you request user help.`);
+    }
+    if (tool === "browser_side_request_help") {
+      const help = await sideBrowser.requestHelp(root, id, a.message);
+      return text(`Waiting for the user in tab ${id}: ${help.message}. Stop automation. The user must click Continue agent before you can proceed.`);
+    }
+    const destination = tool === "browser_side_navigate" ? sideBrowserUrl(a.url) : null;
+    const refusal = await ensureBrowserAllowed(tool, threadId, destination ?? `in-app browser tab ${id}`);
+    if (refusal) return text(refusal, false);
+    if (tool === "browser_side_screenshot") {
+      const image = await sideBrowser.run(root, id, (page, cursor) => cursor.withoutMarker(() => page.screenshot({ type: "png" })), false, threadId, signal);
+      return { success: true, contentItems: [{ type: "inputImage", imageUrl: `data:image/png;base64,${image.toString("base64")}` }] };
+    }
+    const result = await sideBrowser.run(root, id, async (page, cursor) => {
+      switch (tool) {
+        case "browser_side_navigate": await page.goto(destination!, { waitUntil: "domcontentloaded" }); break;
+        case "browser_side_snapshot": return (await page.locator("body").ariaSnapshot()).slice(0, 24000);
+        case "browser_side_click": { const target = sideLocator(page, a); await cursor.pointAt(target); await target.click(); break; }
+        case "browser_side_fill":
+          if (typeof a.text !== "string" || a.text.length > 10000) throw new Error("Provide input text of at most 10000 characters.");
+          {
+            const input = sideLocator(page, a);
+            if ((await input.getAttribute("type"))?.toLowerCase() === "password") throw new Error("Request user help so the user can enter their password directly in the page.");
+            await cursor.pointAt(input);
+            await input.fill(a.text);
+          }
+          break;
+        case "browser_side_press": {
+          const keys = ["Enter", "Tab", "Shift+Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "Space", "ControlOrMeta+A"];
+          if (typeof a.key !== "string" || !keys.includes(a.key)) throw new Error("Unsupported page key.");
+          await page.keyboard.press(a.key); break;
+        }
+        case "browser_side_scroll":
+          if (typeof a.pixels !== "number" || !Number.isFinite(a.pixels) || Math.abs(a.pixels) > 10000) throw new Error("Provide a scroll distance between -10000 and 10000 pixels.");
+          await cursor.move(100, 100);
+          await page.mouse.move(100, 100); await page.mouse.wheel(0, a.pixels); break;
+        default: throw new Error("Unknown in-app browser tool.");
+      }
+      return `Completed in tab ${id}. Use browser_side_snapshot to inspect the current page.`;
+    }, tool === "browser_side_navigate", threadId, signal);
+    return text(result);
+  } catch (error) { return text(error instanceof Error ? error.message : String(error), false); }
+}
+
 const browserVisibility = new Map<number, boolean>();
 const browserViewBounds = new Map<number, { x: number; y: number; width: number; height: number }>();
 
@@ -5384,6 +5530,7 @@ function setBrowserViewVisible(id: number, view: WebContentsView, visible: boole
     if (bounds) view.setBounds(bounds);
     view.setVisible(true);
   } else {
+    if (sideBrowser.needsBackgroundHost(id)) { parkControlledBrowser(id, view); return; }
     view.setVisible(false);
     // Keep the native layer mounted to avoid a flash on return, but move its
     // hit area away from renderer menus while preserving its page viewport.
@@ -5393,22 +5540,46 @@ function setBrowserViewVisible(id: number, view: WebContentsView, visible: boole
 
 function clearBrowserViews(): void {
   for (const view of browserViews.values()) {
-    win?.contentView.removeChildView(view);
+    if (win && !win.isDestroyed() && win.contentView.children.includes(view)) win.contentView.removeChildView(view);
     if (!view.webContents.isDestroyed()) view.webContents.close();
   }
   browserViews.clear();
   browserVisibility.clear();
   browserViewBounds.clear();
+  void sideBrowser.shutdown();
+  backgroundBrowserHost?.destroy();
+  backgroundBrowserHost = null;
 }
 
-function ensureBrowserView(id: number): WebContentsView {
+function closeSideBrowserView(id: number): void {
+  void sideBrowser.dispose(id);
+  browserVisibility.delete(id);
+  browserViewBounds.delete(id);
+  const view = browserViews.get(id);
+  if (view) {
+    browserViews.delete(id);
+    if (win && !win.isDestroyed() && win.contentView.children.includes(view)) win.contentView.removeChildView(view);
+    if (backgroundBrowserHost && !backgroundBrowserHost.isDestroyed() && backgroundBrowserHost.contentView.children.includes(view)) backgroundBrowserHost.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
+  }
+}
+
+/** Release all native and managed browser pages when their owning thread is deleted. */
+async function releaseConversationTab(rootId: string): Promise<void> {
+  sideBrowser.finishWorker(rootId);
+  for (const tab of sideBrowser.list(rootId)) closeSideBrowserView(tab.id);
+  await browserRuntime.request("session.release", { sessionId: rootId }).catch(() => undefined);
+}
+
+function ensureBrowserView(id: number, owner = rootThreadOf(panes.main.threadId), isolated = false): WebContentsView {
   const existing = browserViews.get(id);
   if (existing) return existing;
-  const view = new WebContentsView({ webPreferences: { sandbox: true } });
+  const view = new WebContentsView({ webPreferences: { sandbox: true, backgroundThrottling: !isolated, ...(isolated ? { partition: `side-agent-${createHash("sha256").update(owner).digest("hex")}` } : {}) } });
   view.setVisible(false);
   view.setBounds(offscreenBrowserBounds(browserViewBounds.get(id) ?? { width: 1, height: 1 }));
   win?.contentView.addChildView(view);
   browserViews.set(id, view);
+  sideBrowser.register(id, owner, view.webContents, isolated);
   if (browserVisibility.get(id)) setBrowserViewVisible(id, view, true);
   const wc = view.webContents;
   const pushState = () => {
@@ -5428,11 +5599,22 @@ function ensureBrowserView(id: number): WebContentsView {
   wc.on("did-start-loading", pushState);
   wc.on("did-stop-loading", pushState);
   wc.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) send("browser:open-link", { url });
+    if (/^https?:\/\//i.test(url)) {
+      const owner = sideBrowser.owner(id);
+      // Keep popups in the same controlled tab/session, including sign-in redirects.
+      if (owner && sideBrowser.needsBackgroundHost(id)) void wc.loadURL(sideBrowserUrl(url)).catch(() => {});
+      else send("browser:open-link", { url });
+    }
     return { action: "deny" };
   });
   const handOffStripeOnboarding = (event: Electron.Event, url: string) => {
     if (!isStripeOnboardingPage(url, !app.isPackaged)) return;
+    const owner = sideBrowser.owner(id);
+    if (owner && sideBrowser.needsBackgroundHost(id)) {
+      // Let this tab reach the sign-in page, but stop agent access and ask the user.
+      if (!sideBrowser.get(owner, id).help) void sideBrowser.requestHelp(owner, id, "This page needs you to continue sign-in or account setup. Complete that action, then click Continue agent.").catch(() => {});
+      return;
+    }
     event.preventDefault();
     void shell.openExternal(url);
   };
@@ -5626,6 +5808,7 @@ function wireNotifications(): void {
           // background judging can never compete with this turn for the
           // gateway's per-org concurrency.
           learning?.setIdle(false);
+          sideBrowser.beginWorker(threadId);
           runningTurns.set(threadId, turn.id);
           petReplies.set(threadId, { stream: "", last: "", final: "" });
           const petKey = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
@@ -5834,6 +6017,7 @@ function wireNotifications(): void {
               id: d.id,
               command: dynamicToolCommandText(d.tool, d.arguments),
               source: dynamicToolSource(d.tool),
+              ...(["browser_screenshot", "browser_side_screenshot"].includes(d.tool ?? "") ? browserCaptureFields(threadId, d.id) : {}),
               ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
               // A started call is in progress — defaulting to "completed"
               // showed a green "done" for a page still loading.
@@ -6034,7 +6218,7 @@ function wireNotifications(): void {
       }
       case "turn/completed": {
         if (threadId && compactingThreads.has(threadId)) updateThreadCompaction(threadId, "failed");
-        if (threadId) turnEnvironments.end(threadId);
+        if (threadId) { sideBrowser.finishWorker(threadId); turnEnvironments.end(threadId); }
         const turn = params.turn as
           | { status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
           | undefined;
@@ -6358,6 +6542,8 @@ function wireNotifications(): void {
         // the browser owns every dynamic tool.
         const seq = ++toolSeq;
         const startedAt = Date.now();
+        const captureItemId = typeof params.callId === "string" ? params.callId : typeof params.itemId === "string" ? params.itemId : `capture_${randomUUID()}`;
+        const captureTurnId = typeof params.turnId === "string" ? params.turnId : approvalThread ? runningTurns.get(approvalThread) ?? null : null;
         const shape = payloadOf(tool, args);
         // The whole dispatch runs inside the scope, so every bridge call it
         // makes — one for a press, a dozen for a batch — files itself under
@@ -6393,6 +6579,7 @@ function wireNotifications(): void {
             contentItems: [{ type: "inputText" as const, text: `tool crashed: ${String(err)}` }],
             success: false,
           }))
+          .then(response => attachBrowserScreenshot(tool, args, approvalThread, captureItemId, captureTurnId, response))
           .then((response) => {
             // The first tool result after a compaction carries the checkpoint
             // back: the summary kept the plan and dropped the numbers.
@@ -6999,7 +7186,7 @@ async function runScheduledTask(
       // project. That is durable prompt injection, and no amount of
       // after-the-fact visibility fixes it: there is no one there to see it.
       developerInstructions: developerInstructionsFor(cwd),
-      dynamicTools: await agentBrowserTools(),
+      dynamicTools: await agentBrowserTools(false),
       // Tag it so the sidebar can leave it out. threadSource is a free-form
       // client string the engine hands straight back in thread/list, which
       // beats keeping our own ledger of run ids: the answer travels with the
@@ -8511,6 +8698,8 @@ app.whenReady().then(async () => {
     // where the pane's own turnId may not have been set by turn/started.
     const turnId = pane.turnId ?? (pane.threadId ? runningTurns.get(pane.threadId) : null);
     if (!pane.threadId || !turnId) return { interrupted: false };
+    sideBrowser.finishWorker(pane.threadId);
+    for (const [subId, info] of subAgents) if (info.parent === pane.threadId) sideBrowser.finishWorker(subId);
     await engine.request("turn/interrupt", { threadId: pane.threadId, turnId });
     // Stop means stop: sub-agents run in their own sessions, so without a
     // cascade they keep working (and a sub blocked on an approval would
@@ -11118,14 +11307,45 @@ app.whenReady().then(async () => {
     return attachablePaths(real);
   });
 
+  ipcMain.handle("browser:side-list", () => {
+    const root = rootThreadOf(panes.main.threadId);
+    if (root !== "main") sideBrowser.adoptDraft(root);
+    return { root, tabs: sideBrowser.list(root) };
+  });
+  ipcMain.handle("browser:side-resume", (event, p: { tabId: number; requestId: string }) => {
+    if (event.sender !== win?.webContents) throw new Error("Only the app can resume browser control.");
+    const root = rootThreadOf(panes.main.threadId);
+    sideBrowser.resume(root, p.tabId, p.requestId);
+    return { ok: true, message: `I have completed the requested browser step in tab ${p.tabId}. Continue the task using that tab, and inspect its current state first.` };
+  });
+
   ipcMain.handle("browser:open", (_e, p: { id: number; url?: string }) => {
+    if (p.id < 0 && !browserViews.has(p.id)) return { ok: false };
     if (p.url && isStripeOnboardingPage(p.url, !app.isPackaged)) {
       void shell.openExternal(p.url);
       return { ok: true };
     }
     const view = ensureBrowserView(p.id);
-    if (p.url) void view.webContents.loadURL(p.url);
+    if (p.url) { if (sideBrowser.needsBackgroundHost(p.id)) sideBrowserUrl(p.url); void view.webContents.loadURL(p.url); }
     return { ok: true };
+  });
+
+  let sidePreviewBusy = false;
+  ipcMain.handle("browser:side-preview", async (event, id: number) => {
+    if (event.sender !== win?.webContents || sidePreviewBusy) return null;
+    const root = rootThreadOf(panes.main.threadId);
+    sidePreviewBusy = true;
+    try {
+      const entry = sideBrowser.get(root, id);
+      if (!entry.controlled || entry.help || !entry.workers.size) return null;
+      const image = await entry.contents.capturePage(undefined, { stayHidden: true });
+      if (rootThreadOf(panes.main.threadId) !== root || !sideBrowser.get(root, id).workers.size || entry.help || image.isEmpty()) return null;
+      const size = image.getSize();
+      const scale = Math.min(560 / Math.max(size.width, 1), 350 / Math.max(size.height, 1), 1);
+      const thumbnail = scale < 1 ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }) : image;
+      return `data:image/jpeg;base64,${thumbnail.toJPEG(65).toString("base64")}`;
+    } catch { return null; }
+    finally { sidePreviewBusy = false; }
   });
 
   ipcMain.handle("browser:capture", async (_e, id: number) => {
@@ -11156,7 +11376,11 @@ app.whenReady().then(async () => {
     if (!bounds.width || !bounds.height) return;
     browserViewBounds.set(p.id, bounds);
     const view = browserViews.get(p.id);
-    if (view) view.setBounds(browserVisibility.get(p.id) ? bounds : offscreenBrowserBounds(bounds));
+    if (view) {
+      if (browserVisibility.get(p.id)) view.setBounds(bounds);
+      else if (sideBrowser.needsBackgroundHost(p.id)) parkControlledBrowser(p.id, view);
+      else view.setBounds(offscreenBrowserBounds(bounds));
+    }
   });
 
   ipcMain.handle("browser:visible", (_e, p: { id: number; visible: boolean }) => {
@@ -11174,6 +11398,7 @@ app.whenReady().then(async () => {
         void shell.openExternal(url);
         return;
       }
+      if (sideBrowser.needsBackgroundHost(p.id)) sideBrowserUrl(url);
       void wc.loadURL(url);
     } else if (p.action === "back") {
       wc.navigationHistory.goBack();
@@ -11189,16 +11414,7 @@ app.whenReady().then(async () => {
     return { ok: true };
   });
 
-  ipcMain.handle("browser:close", (_e, id: number) => {
-    browserVisibility.delete(id);
-    browserViewBounds.delete(id);
-    const view = browserViews.get(id);
-    if (view) {
-      browserViews.delete(id);
-      win?.contentView.removeChildView(view);
-      view.webContents.close();
-    }
-  });
+  ipcMain.handle("browser:close", (_e, id: number) => closeSideBrowserView(id));
 
   // Integrated terminal: a real PTY running the user's shell, rooted at
   // the active conversation's cwd (the Codex/Claude-desktop contract —
@@ -11603,17 +11819,16 @@ app.whenReady().then(async () => {
     return { attachment: { name, path, kind: "image", thumb: thumbDataUrl(image) } };
   });
 
-  /** Close a deleted conversation's browser tab. Best-effort: the browser may
-   *  not be running, and a failure here must never block the delete. */
-  async function releaseConversationTab(rootId: string): Promise<void> {
-    await browserRuntime.request("session.release", {sessionId:rootId}).catch(() => undefined);
-  }
-
   ipcMain.handle("threads:delete", async (_e, id: string) => {
+    sideBrowser.finishWorker(id);
+    for (const [subId, info] of subAgents) if (info.parent === id) sideBrowser.finishWorker(subId);
     for (const record of sideChatRecents.recordsForParent(id)) {
       dropSidePane(record.paneId);
       try {
+        sideBrowser.finishWorker(record.threadId);
         await engine.request("thread/delete", { threadId: record.threadId });
+        forgetBrowserCaptures(record.threadId);
+        void releaseConversationTab(record.threadId);
         sideChatRecents.remove(record.paneId);
         threadMcp.delete(record.threadId);
         rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -11669,6 +11884,7 @@ app.whenReady().then(async () => {
     heldApprovals.delete(id);
     heldErrors.delete(id);
     await engine.request("thread/delete", { threadId: id });
+    forgetBrowserCaptures(id);
     multiMountLeases.delete(id);
     delete panes[`multi:${id}`];
     void releaseConversationTab(id);
@@ -11709,9 +11925,9 @@ app.whenReady().then(async () => {
 let browserQuitReady = false;
 app.on("before-quit", (event) => {
   browserShuttingDown = true;
-  if (browserQuitReady || !browserRuntime.running) return;
+  if (browserQuitReady) return;
   event.preventDefault();
-  void browserRuntime.shutdown().finally(() => { browserQuitReady = true; app.quit(); });
+  void Promise.all([sideBrowser.shutdown(), browserRuntime.shutdown()]).finally(() => { browserQuitReady = true; app.quit(); });
 });
 
 app.on("window-all-closed", () => {

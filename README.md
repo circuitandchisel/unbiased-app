@@ -51,7 +51,10 @@ default fonts.
 ## Features
 
 - **Streaming chat** with markdown rendering, Prism-highlighted code
-  blocks, elapsed-time "thinking" indicator, and turn interruption.
+  blocks, elapsed-time "thinking" indicator, and turn interruption. Up/Down
+  in the composer recalls earlier/later prompts for that chat and restores
+  your unsent draft. Arrows still move within multiline drafts; slash-command
+  suggestions take priority when open.
 - **Supervised agent loop** — commands the agent wants to run surface as
   cards with Approve/Decline buttons; consecutive steps fold into a
   collapsible group with per-step output. Threads run with an `untrusted`
@@ -75,6 +78,63 @@ default fonts.
 - **Theming** — every chrome shade derives from surface + ink + accent +
   contrast. Settings → Appearance edits them live; `codex-theme-v1:{…}`
   exports import directly.
+
+## Agent control of in-app browser tabs
+
+The app includes a pinned `playwright-core` library. It controls Electron's
+embedded browser pages; it does not download another browser or require
+Playwright in the user's project. Project test suites still use their own tools.
+
+The agent can list tabs for the current conversation, request control of an
+existing signed-in tab, or open a new page quietly in the background. Existing
+tabs follow the selected access mode: Full access grants control without a
+prompt; other modes ask before first use. New agent tabs
+use an isolated session for that conversation, retained only until the app exits.
+Ask-for-approval mode still gates browser network access.
+
+When the agent needs sign-in, 2FA, CAPTCHA, or a decision, it can reveal the
+same tab with a **Your help is needed** banner. Automation of that tab is blocked
+until the user clicks **Continue agent**. This sends a continuation message
+without replacing the composer's draft; it queues if a turn is still running.
+The tab stays open afterward. A coral cursor follows agent interactions, matching the computer-use cursor.
+A cursor icon in the tab marks ongoing agent access; the page cursor disappears
+when the agent requests help. Closing the tab ends agent access. Controlled tabs
+remain with their conversation when the user switches chats; ordinary browser
+tabs retain their existing close-on-switch behavior. Stopping a turn cancels
+pending and queued browser actions for that worker, including late approvals.
+Other workers remain independent. Deleting a parent chat also closes its side
+chats' browser tabs; expired side chats release their tabs during cleanup.
+
+Browser screenshots are saved privately with the conversation and automatically
+shown alongside the reply, including when the agent provides text without image
+Markdown. Clicking a screenshot opens the image preview. Captures survive
+browser shutdown and conversation reopening; deleting a chat removes its files.
+
+While the agent uses tabs in the background, up to three live previews form a
+draggable diagonal stack at the top right of the chat, with the most recently
+used tab in front. Exposed title strips identify the rear cards; a count badge
+opens a list of additional tabs. Clicking a rear title or list entry brings
+that preview to the front without opening the side panel; this selection stays
+in front while it remains active. Clicking the front preview opens its existing
+tab without reloading it. Only that page's card hides while visible;
+it returns when the side panel closes if work continues. Dragging any card moves
+the whole stack, which stays within the chat as the window resizes. Finished or
+paused tabs leave the stack. Only the three exposed cards capture frames, scoped
+to the current conversation, and capture pauses while the app is hidden.
+
+The Playwright adapter attaches only to the selected sandboxed WebContentsView.
+It uses a random, loopback-only transport, rejects browser-origin connections,
+and does not enable Electron's application-wide debugging port. The agent gets
+structured page tools, not arbitrary JavaScript or raw CDP access. Browser-wide
+commands, app UI and other conversations' tabs are outside the connection.
+Agent-created tabs stop at five tabs in their conversation or twenty native
+tabs overall; users can close unused tabs before requesting another.
+Popups in a controlled tab navigate that same tab so its session is preserved.
+These tools are desktop-only and are not offered to scheduled tasks.
+
+Run `npm run smoke:side-browser` for real Electron/Playwright checks and
+`npm run smoke:side-browser-ui` for the app's background/handoff behavior. Both
+use temporary profiles and local fixtures, without model calls or user cookies.
 
 ## Architecture
 
