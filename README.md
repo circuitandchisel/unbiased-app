@@ -124,6 +124,20 @@ comments. Its upstream source and license are recorded alongside the bundled
 skill. The picker uses each chat's skill scope; disabled or unavailable skills
 cannot be explicitly invoked through their commands.
 
+## Frontend previews
+
+Ask the agent to run the changed frontend locally and show the exact page.
+The built-in workflow guides it to use the project's server and existing test
+fixtures, open the requested URL in Agent browser, inspect the page, and capture
+a screenshot. Mocked data and test sign-in should be clearly identified; passing
+tests alone do not complete a requested visual preview.
+
+Successful browser screenshots are retained as private, conversation-scoped PNG
+attachments. Expand the screenshot's tool result to open its image, or view it
+inline when the agent includes the supplied image link in its reply. Captures
+survive browser shutdown and app restart and are removed when their chat is
+deleted. Browser access still uses the existing permission controls.
+
 ## Custom agent instructions
 
 Settings → Personalization → Custom agent instructions edits

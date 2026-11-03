@@ -1,10 +1,10 @@
 type CommandPhase = "started" | "completed";
 
 export function showsCommandOutputPanel(
-  entry: { status: string; output?: string },
+  entry: { status: string; output?: string; screenshots?: readonly unknown[] },
   isShell: boolean,
 ): boolean {
-  return Boolean(entry.output) || (isShell && entry.status === "inProgress");
+  return Boolean(entry.output) || Boolean(entry.screenshots?.length) || (isShell && entry.status === "inProgress");
 }
 
 export function closeFinishedAutoOpenedPanels<T extends { itemId: string; status: string }>(

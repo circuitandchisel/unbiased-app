@@ -1,3 +1,5 @@
+import { retainBrowserCapture, readBrowserCapture, removeBrowserCaptures } from "./browser-captures";
+import { FRONTEND_PREVIEW_INSTRUCTIONS } from "./frontend-preview-instructions";
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
 import { listSlashCommands, resolveSlashSkill } from "./skill-commands";
 import { builtInAgentInstructions, connectAgentInstructions, registerAgentInstructionsIpc } from "./agent-instructions";
@@ -336,6 +338,7 @@ async function pruneSideChatRecents(): Promise<void> {
     if (!record) continue;
     try {
       await engine.request("thread/delete", { threadId: record.threadId });
+      forgetBrowserCaptures(record.threadId);
       sideChatRecents.remove(paneId);
       threadMcp.delete(record.threadId);
       rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -485,6 +488,7 @@ function saveAgentStylePrefs(value: unknown): { ok: boolean; prefs: AgentStylePr
 // "shall I?" instead of calling the tool that triggers the real prompt.
 const APP_DEVELOPER_INSTRUCTIONS = [
   ...OPENUI_VISUAL_INSTRUCTIONS,
+  ...FRONTEND_PREVIEW_INSTRUCTIONS,
   "Use the app's permission controls for tool access. When a tool needs network access or a signed-in",
   "browser session, call it to show the permission card instead of adding a duplicate chat approval",
   "request for that same tool permission. This applies to private-data access too. A permission card",
@@ -515,10 +519,13 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   "You have a real browser: the browser_* tools drive a Chrome this app manages, and the user watches it",
   "in the app's Agent browser tab. Reach for it on your own initiative whenever a task involves the web —",
   "browser_search for anything public, and browser_connect FIRST for anything behind the user's own login",
-  "(their Slack, email, dashboards, admin panels). Never shell out to `agent-browser`, curl, or any other",
-  "command to browse: those run outside the app's permission and mirroring, so the user cannot see or",
-  "approve them. If a browser tool is genuinely absent from your tools, say the Agent browser is",
-  "unavailable rather than substituting a shell command for it.",
+  "(their Slack, email, dashboards, admin panels). Never shell out to `agent-browser`, curl, or another",
+  "command as a substitute for browsing external sites or accessing signed-in sessions: those run",
+  "outside the app's browser permission and mirroring. Existing project browser tests and local preview",
+  "fixtures may run through the project's test runner under the shell's permissions and sandbox; they",
+  "must not bypass a denied permission or be used to browse unrelated external sites. If a browser tool",
+  "is genuinely absent, say the Agent browser is unavailable and distinguish any local test-runner",
+  "preview from an Agent browser preview.",
   // Delegation. The collaboration tools are available on every turn, but models
   // rarely reach for them unprompted — Claude Code and codex get "automatic"
   // sub-agents purely by saying when to delegate, so this does the same. The
@@ -624,7 +631,9 @@ function configuredProjectContext(cwd: string | null, threadId: string | null = 
 async function agentBrowserTools() {
   try {
     const tools = await browserRuntime.discoverTools();
-    return tools.length ? tools : undefined;
+    return tools.length ? tools.map(tool => tool.name === "browser_screenshot" ? { ...tool,
+      description: "Capture the current page as an image and save a persistent chat attachment. The result provides Markdown to display the screenshot in your reply. Open and inspect the requested page before capturing it.",
+    } : tool) : undefined;
   } catch (error) {
     console.warn("[browser-runtime] Tool discovery failed", error);
     return undefined;
@@ -2510,13 +2519,32 @@ async function runComputerAction(action: ComputerAction, threadId: string | null
   };
 }
 
-async function handleAgentBrowserCall(tool: string, rawArgs: unknown, threadId: string | null): Promise<DynamicToolResponse> {
+const deletedCaptureThreads = new Set<string>();
+function browserCaptureDir(): string { return join(app.getPath("userData"), "browser-captures"); }
+function forgetBrowserCaptures(threadId: string): void {
+  deletedCaptureThreads.add(threadId);
+  try { removeBrowserCaptures(browserCaptureDir(), threadId); } catch { /* best-effort attachment cleanup */ }
+}
+function browserCaptureFields(threadId: string | null, itemId: string | undefined): Record<string, unknown> {
+  if (!threadId || !itemId) return {};
+  const capture = readBrowserCapture(browserCaptureDir(), threadId, itemId);
+  return capture ? { screenshots: [capture] } : {};
+}
+
+async function handleAgentBrowserCall(tool: string, rawArgs: unknown, threadId: string | null, itemId?: string): Promise<DynamicToolResponse> {
   const a = (rawArgs && typeof rawArgs === "object" ? rawArgs : {}) as Record<string, unknown>;
   const detail = typeof a.url === "string" ? a.url : typeof a.query === "string" ? `search: ${a.query}` : typeof a.port === "string" ? a.port : tool;
   const refusal = await ensureBrowserAllowed(tool, threadId, detail);
   if (refusal || browserShuttingDown) return { success:false, contentItems:[{type:"inputText",text:refusal ?? "Unbiased is shutting down its browser."}] };
   try {
-    return await browserRuntime.request("tool.execute", {tool,args:a,sessionId:rootThreadOf(threadId)}) as DynamicToolResponse;
+    const response = await browserRuntime.request("tool.execute", {tool,args:a,sessionId:rootThreadOf(threadId)}) as DynamicToolResponse;
+    if (tool !== "browser_screenshot" || !threadId || !itemId || deletedCaptureThreads.has(threadId)) return response;
+    const retained = retainBrowserCapture(browserCaptureDir(), threadId, itemId, response);
+    const paneId = paneForThread(threadId);
+    if (retained.capture && paneId) send("chat:command", { paneId, phase: "completed", item: {
+      id: itemId, command: "browser_screenshot", source: "browser", status: "completed", screenshots: [retained.capture],
+    } });
+    return retained.response;
   } catch(error) {
     return {success:false,contentItems:[{type:"inputText",text:`Browser runtime error: ${String(error)}. If an action was interrupted, inspect the current page before repeating it.`}]};
   }
@@ -3695,6 +3723,7 @@ function threadToEntries(
             command: dynamicToolCommandText(d.tool, d.arguments),
             status: d.success === false ? "failed" : (d.status ?? "completed"),
             source: dynamicToolSource(d.tool),
+            ...(d.tool === "browser_screenshot" ? browserCaptureFields(thread.id, d.id) : {}),
             ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
           });
           break;
@@ -5834,6 +5863,7 @@ function wireNotifications(): void {
               id: d.id,
               command: dynamicToolCommandText(d.tool, d.arguments),
               source: dynamicToolSource(d.tool),
+              ...(d.tool === "browser_screenshot" ? browserCaptureFields(threadId, d.id) : {}),
               ...(axStepIcon(d.tool, d.arguments) ? { appIcon: axStepIcon(d.tool, d.arguments) } : {}),
               // A started call is in progress — defaulting to "completed"
               // showed a green "done" for a page still loading.
@@ -6379,7 +6409,7 @@ function wireNotifications(): void {
               ? handleAxCall(tool, args, approvalThread)
             : tool.startsWith("computer_")
               ? handleComputerUseCall(tool, args, approvalThread)
-              : handleAgentBrowserCall(tool, args, approvalThread),
+              : handleAgentBrowserCall(tool, args, approvalThread, typeof params.callId === "string" ? params.callId : typeof params.itemId === "string" ? params.itemId : undefined),
         );
         // The first desktop call of a conversation carries the computer-use
         // skill. See skillPreamble: the model does open it on its own, but
@@ -11614,6 +11644,7 @@ app.whenReady().then(async () => {
       dropSidePane(record.paneId);
       try {
         await engine.request("thread/delete", { threadId: record.threadId });
+        forgetBrowserCaptures(record.threadId);
         sideChatRecents.remove(record.paneId);
         threadMcp.delete(record.threadId);
         rmSync(sideChatTranscriptFile(record.threadId), { force: true });
@@ -11669,6 +11700,7 @@ app.whenReady().then(async () => {
     heldApprovals.delete(id);
     heldErrors.delete(id);
     await engine.request("thread/delete", { threadId: id });
+    forgetBrowserCaptures(id);
     multiMountLeases.delete(id);
     delete panes[`multi:${id}`];
     void releaseConversationTab(id);

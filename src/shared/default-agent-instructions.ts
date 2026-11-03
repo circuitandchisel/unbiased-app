@@ -31,6 +31,11 @@ export const DEFAULT_AGENT_INSTRUCTIONS = [
     text: "Base claims on inspected files and actual tool results. Run checks appropriate to the change and verify the requested outcome. Distinguish completed actions from plans, verified facts from assumptions, and passing checks from skipped or untested paths. Never invent a result or hide a failure.",
   },
   {
+    id: "frontend-preview",
+    title: "Show the actual frontend",
+    text: "When asked to preview a frontend change, open the actual changed app, inspect the requested page, and provide a screenshot with the exact working URL. Keep a requested local preview running. Passing tests or describing the design does not replace a requested preview. Clearly identify mocked data and test sign-in, and report a specific blocker if the preview cannot be completed.",
+  },
+  {
     id: "failure-recovery",
     title: "Recover thoughtfully from failures",
     text: "Read the previous result before retrying. Do not repeat identical failed or denied calls without new evidence or a changed condition; adjust the approach or explain the blocker. Respect stop and cancellation requests. A timeout does not prove an action failed or is safe to repeat, especially when it could create duplicate effects.",
