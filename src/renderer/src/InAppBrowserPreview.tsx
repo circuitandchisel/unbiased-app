@@ -6,10 +6,11 @@ const STEP = 16;
 const documentVisible = () => document.visibilityState !== "hidden";
 const tabKey = (tab: SideBrowserTab) => `${tab.root}:${tab.id}`;
 
-/** One movable stack; each card focuses its existing native tab without navigation. */
-export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
+/** Rear titles select a preview; the front card opens its existing native tab. */
+export function InAppBrowserPreview({ tabs, visible, hiddenTabId = null, capture, onOpen }: {
   tabs: SideBrowserTab[];
   visible: boolean;
+  hiddenTabId?: number | null;
   capture: (id: number) => Promise<string | null>;
   onOpen: (id: number) => void;
 }) {
@@ -18,14 +19,20 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
   const [position, setPosition] = useState<Point | null>(null);
   const [frames, setFrames] = useState<Record<string, string>>({});
   const [moreOpen, setMoreOpen] = useState(false);
+  const [frontKey, setFrontKey] = useState<string | null>(null);
+  const clickIntent = useRef<{ key: string; front: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{ pointer: number; element: HTMLElement; start: Point; origin: Point; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
   // Keep hit targets steady while a pointer is dragging the stack.
   const heldOrder = useRef<string[]>([]);
-  const available = visible ? tabs.filter(tab => tab.working && tab.controlled && !tab.help) : [];
+  const liveTabs = tabs.filter(tab => tab.working && tab.controlled && !tab.help);
+  const liveKeys = liveTabs.map(tabKey).join("|");
+  const available = visible ? liveTabs.filter(tab => tab.id !== hiddenTabId) : [];
+  const selected = available.find(tab => tabKey(tab) === frontKey);
+  const ordered = selected ? [selected, ...available.filter(tab => tab !== selected)] : available;
   const rank = (tab: SideBrowserTab) => { const index = heldOrder.current.indexOf(tabKey(tab)); return index < 0 ? Number.MAX_SAFE_INTEGER : index; };
-  const working = dragging ? [...available].sort((a, b) => rank(a) - rank(b)) : available;
+  const working = dragging ? [...ordered].sort((a, b) => rank(a) - rank(b)) : ordered;
   const cards = working.slice(0, 3), overflow = working.slice(3);
   const active = cards.length > 0;
   const key = cards.map(tabKey).join("|");
@@ -47,6 +54,9 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
     const observer = new ResizeObserver(resize); observer.observe(parent); observer.observe(stack);
     return () => observer.disconnect();
   }, [active]);
+  useEffect(() => {
+    setFrontKey(current => current && !liveTabs.some(tab => tabKey(tab) === current) ? null : current);
+  }, [liveKeys]);
   useEffect(() => {
     if (!active) { drag.current = null; setDragging(false); }
     if (!active || overflow.length === 0) setMoreOpen(false);
@@ -87,6 +97,7 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
   }, [active, key, capture]);
   if (!active) return null;
   const open = (id: number) => { setMoreOpen(false); onOpen(id); };
+  const promote = (tab: SideBrowserTab) => { setMoreOpen(false); setFrontKey(tabKey(tab)); };
   return <div
     ref={stackRef}
     data-browser-preview-stack
@@ -97,6 +108,8 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
       const element = (event.target as Element).closest<HTMLElement>("[data-browser-preview]");
       if (!element) return;
       const stack = event.currentTarget;
+      const pressed = working.find(tab => tab.id === Number(element.dataset.browserPreview));
+      clickIntent.current = pressed ? { key: tabKey(pressed), front: element.dataset.previewFront === "true" } : null;
       drag.current = { pointer: event.pointerId, element, start: { x: event.clientX, y: event.clientY }, origin: { x: stack.offsetLeft, y: stack.offsetTop }, moved: false };
       heldOrder.current = working.map(tabKey);
       suppressClick.current = false; setDragging(true);
@@ -116,7 +129,7 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
       if (current.element.hasPointerCapture(event.pointerId)) current.element.releasePointerCapture(event.pointerId);
     }}
     onLostPointerCapture={() => { drag.current = null; setDragging(false); }}
-    onPointerCancel={() => { drag.current = null; suppressClick.current = true; setDragging(false); }}
+    onPointerCancel={() => { clickIntent.current = null; drag.current = null; suppressClick.current = true; setDragging(false); }}
     onKeyDown={event => {
       if (event.key === "Escape" && moreOpen) { event.preventDefault(); event.stopPropagation(); setMoreOpen(false); return; }
       if (!position || event.metaKey || event.ctrlKey || event.altKey || (event.target as Element).closest("[data-preview-control]")) return;
@@ -132,11 +145,13 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
       type="button"
       data-browser-preview={tab.id}
       data-preview-front={index === 0 ? "true" : undefined}
-      aria-label={`Open ${tab.title || "page"} in in-app browser`}
-      title={`${tab.title || "In-app browser"} · click to open, drag to move stack`}
+      aria-label={index === 0 ? `Open ${tab.title || "page"} in in-app browser` : `Bring ${tab.title || "page"} preview to front`}
+      title={`${tab.title || "In-app browser"} · ${index === 0 ? "click to open" : "click to bring to front"}, drag to move stack`}
       onClick={event => {
-        if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; return; }
-        open(tab.id);
+        if (suppressClick.current && event.detail !== 0) { suppressClick.current = false; clickIntent.current = null; return; }
+        const intent = event.detail !== 0 && clickIntent.current?.key === tabKey(tab) ? clickIntent.current.front : index === 0;
+        clickIntent.current = null;
+        if (intent) open(tab.id); else promote(tab);
       }}
       style={{ position: "absolute", left: index * STEP, top: offset - index * STEP, zIndex: cards.length - index, width: `calc(100% - ${offset}px)`, aspectRatio: "16 / 10", boxSizing: "border-box", padding: 0, border: `1px solid ${index === 0 ? "#FF776470" : "#ffffff30"}`, borderRadius: 16, overflow: "hidden", isolation: "isolate", background: "var(--panel)", color: "#fff", boxShadow: "0 10px 32px #0007, 0 2px 8px #0005", textAlign: "left", font: "inherit", cursor: "inherit", touchAction: "none" }}
     >
@@ -155,7 +170,7 @@ export function InAppBrowserPreview({ tabs, visible, capture, onOpen }: {
     {overflow.length > 0 && <button data-preview-control type="button" aria-label={`Show ${overflow.length} more browser tabs`} aria-expanded={moreOpen} onClick={() => setMoreOpen(value => !value)} style={{ position: "absolute", right: offset + 10, bottom: 10, zIndex: 4, padding: "4px 7px", borderRadius: 8, border: "1px solid #ffffff40", color: "#fff", background: "#ffffff24", font: "inherit", fontSize: 11, cursor: "pointer" }}>+{overflow.length} tabs</button>}
     {moreOpen && <div data-preview-control role="group" aria-label="More background browser tabs" style={{ position: "absolute", inset: 0, zIndex: 5, padding: 10, boxSizing: "border-box", overflowY: "auto", borderRadius: 16, border: "1px solid var(--border)", background: "var(--panel)", color: "var(--fg)", boxShadow: "0 8px 28px #0006", cursor: "default" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 6 }}><span style={{ fontSize: 12, fontWeight: 600 }}>More browser tabs</span><button type="button" aria-label="Close tab list" onClick={() => setMoreOpen(false)} style={{ border: 0, background: "transparent", color: "var(--dim)", fontSize: 18, cursor: "pointer" }}>×</button></div>
-      {overflow.map(tab => <button key={tabKey(tab)} type="button" data-preview-overflow={tab.id} onClick={() => open(tab.id)} style={{ display: "block", width: "100%", padding: "10px 8px", border: 0, borderRadius: 8, background: "transparent", color: "inherit", textAlign: "left", font: "inherit", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}>{tab.title || "In-app browser"}</button>)}
+      {overflow.map(tab => <button key={tabKey(tab)} type="button" data-preview-overflow={tab.id} onClick={() => promote(tab)} style={{ display: "block", width: "100%", padding: "10px 8px", border: 0, borderRadius: 8, background: "transparent", color: "inherit", textAlign: "left", font: "inherit", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}>{tab.title || "In-app browser"}</button>)}
     </div>}
   </div>;
 }

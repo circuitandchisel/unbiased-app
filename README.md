@@ -107,8 +107,10 @@ browser shutdown and conversation reopening; deleting a chat removes its files.
 While the agent uses tabs in the background, up to three live previews form a
 draggable diagonal stack at the top right of the chat, with the most recently
 used tab in front. Exposed title strips identify the rear cards; a count badge
-opens a list of additional tabs. Clicking any card or list entry opens that
-existing tab without reloading it. Only that page's card hides while visible;
+opens a list of additional tabs. Clicking a rear title or list entry brings
+that preview to the front without opening the side panel; this selection stays
+in front while it remains active. Clicking the front preview opens its existing
+tab without reloading it. Only that page's card hides while visible;
 it returns when the side panel closes if work continues. Dragging any card moves
 the whole stack, which stays within the chat as the window resizes. Finished or
 paused tabs leave the stack. Only the three exposed cards capture frames, scoped

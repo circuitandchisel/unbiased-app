@@ -3316,7 +3316,7 @@ export function App() {
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && (!pageOpen || multiOpen || panelMode === "agentmirror");
-  const previewBrowserTabs = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help && !(sideVisible && panelMode === `browser:${tab.id}`)).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  const previewBrowserTabs = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
   const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
   const visibleThreadIds = authed !== "in" || showSettings || showChangelog ? []
     : multiOpen ? multiIds
@@ -5057,6 +5057,7 @@ export function App() {
         <InAppBrowserPreview
           tabs={previewBrowserTabs.map(tab => ({ ...tab, title: browserStates[tab.id]?.title || tab.title }))}
           visible={browserPreviewVisible}
+          hiddenTabId={sideVisible && panelMode.startsWith("browser:") ? Number(panelMode.slice(8)) : null}
           capture={captureBrowserPreview}
           onOpen={id => { setPanelMode(`browser:${id}`); setSideOpenPersisted(true); }}
         />
