@@ -16,6 +16,14 @@ JavaScript dependencies retain their package metadata and license files in
 the packaged application. See `package-lock.json` for the exact dependency
 versions used by a release.
 
+## Playwright
+
+The application includes `playwright-core` from
+[Microsoft Playwright](https://github.com/microsoft/playwright), licensed under
+Apache-2.0, for controlling embedded Electron browser tabs. Its license and
+NOTICE are retained in the packaged npm dependency. No Playwright browser
+binary is downloaded or bundled for this integration.
+
 ## Agent Browser
 
 The packaged application includes the `agent-browser` CLI from

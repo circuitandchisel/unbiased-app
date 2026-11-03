@@ -76,6 +76,40 @@ default fonts.
   contrast. Settings → Appearance edits them live; `codex-theme-v1:{…}`
   exports import directly.
 
+## Agent control of side-browser tabs
+
+The app includes a pinned `playwright-core` library. It controls Electron's
+embedded browser pages; it does not download another browser or require
+Playwright in the user's project. Project test suites still use their own tools.
+
+The agent can list tabs for the current conversation, request control of an
+existing signed-in tab, or open a new page quietly in the background. Existing
+tabs require explicit control approval, including in Full access. New agent tabs
+use an isolated session for that conversation, retained only until the app exits.
+Ask-for-approval mode still gates browser network access.
+
+When the agent needs sign-in, 2FA, CAPTCHA, or a decision, it can reveal the
+same tab with a **Your help is needed** banner. Automation of that tab is blocked
+until the user clicks **Continue agent**. This sends a continuation message
+without replacing the composer's draft; it queues if a turn is still running.
+The tab stays open afterward. Closing it ends agent access. Controlled tabs
+remain with their conversation when the user switches chats; ordinary browser
+tabs retain their existing close-on-switch behavior.
+
+The Playwright adapter attaches only to the selected sandboxed WebContentsView.
+It uses a random, loopback-only transport, rejects browser-origin connections,
+and does not enable Electron's application-wide debugging port. The agent gets
+structured page tools, not arbitrary JavaScript or raw CDP access. Browser-wide
+commands, app UI and other conversations' tabs are outside the connection.
+Agent-created tabs stop at five tabs in their conversation or twenty native
+tabs overall; users can close unused tabs before requesting another.
+Popups in a controlled tab navigate that same tab so its session is preserved.
+These tools are desktop-only and are not offered to scheduled tasks.
+
+Run `npm run smoke:side-browser` for real Electron/Playwright checks and
+`npm run smoke:side-browser-ui` for the app's background/handoff behavior. Both
+use temporary profiles and local fixtures, without model calls or user cookies.
+
 ## Architecture
 
 ```

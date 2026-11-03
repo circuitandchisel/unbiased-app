@@ -1,0 +1,88 @@
+// Real Electron embedded tabs + app-owned Playwright. No engine, external traffic or user's profile.
+const { app, BrowserWindow, WebContentsView } = require('electron');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const fs = require('node:fs');
+const { join } = require('node:path');
+const { tmpdir } = require('node:os');
+require('tsx/cjs');
+const { SideBrowserController } = require('../src/main/side-browser.ts');
+const { connectSidePage } = require('../src/main/side-browser-cdp.ts');
+const fixture = fs.mkdtempSync(join(tmpdir(), 'unbiased-side-control-'));
+app.setPath('userData', join(fixture, 'profile'));
+const deadline = setTimeout(() => { console.error('Side-browser regression timed out'); app.exit(1); }, 60000); deadline.unref();
+async function main() {
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'text/html');
+    response.end(`<title>Side browser test</title><h1>Account page</h1><label>Name<input id="name"></label><button onclick="document.querySelector('h1').textContent='Saved '+document.querySelector('input').value">Save</button><div style="height:1600px">Scroll content</div>`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  await app.whenReady();
+  const front = new BrowserWindow({ show: false, width: 1100, height: 750 });
+  const background = new BrowserWindow({ show: false, width: 1100, height: 750 });
+  let next = -1; let reveals = 0; const views = new Map();
+  const controller = new SideBrowserController({
+    create: root => {
+      const id = next--;
+      const view = new WebContentsView({ webPreferences: { sandbox: true, backgroundThrottling: false, partition: `test-${root}` } });
+      background.contentView.addChildView(view); view.setBounds({ x: 0, y: 0, width: 900, height: 600 });
+      views.set(id, view); return { id, contents: view.webContents };
+    },
+    controlled: () => {},
+    update: (_root, revealId) => {
+      if (revealId === undefined) return;
+      reveals++;
+      const view = views.get(revealId); front.contentView.addChildView(view); view.setBounds({ x: 0, y: 100, width: 900, height: 550 });
+    },
+  });
+  try {
+    const tab = await controller.open('chat-one', url);
+    assert.equal(background.isVisible(), false); assert.equal(front.isVisible(), false); assert.equal(reveals, 0);
+    // A second, stacked native view must not prevent automation of the first.
+    const other = await controller.open('chat-two', url);
+    await controller.run('chat-one', tab.id, async page => {
+      assert.match(await page.locator('body').ariaSnapshot(), /Account page/);
+      await page.getByRole('textbox', { name: 'Name' }).fill('Background');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      assert.equal(await page.locator('h1').innerText(), 'Saved Background');
+      await page.mouse.move(100, 100); await page.mouse.wheel(0, 400);
+      await page.waitForFunction(() => scrollY > 0);
+      const image = await page.screenshot(); assert.ok(image.length > 1000);
+      assert.equal(image.subarray(1, 4).toString(), 'PNG');
+      assert.equal(page.context().pages().length, 1, 'only the selected tab is exposed');
+      await assert.rejects(page.context().newCDPSession(page), /Browser-wide command is unavailable/);
+      await assert.rejects(page.context().newPage(), /Browser-wide command is unavailable/);
+      await page.bringToFront(); assert.equal(front.isVisible(), false);
+    });
+    assert.equal(await views.get(other.id).webContents.executeJavaScript('document.querySelector("h1").textContent'), 'Account page');
+    // No session/cookie sharing between conversations.
+    await views.get(tab.id).webContents.session.cookies.set({ url, name: 'session', value: 'signed-in' });
+    assert.equal((await views.get(other.id).webContents.session.cookies.get({ url })).length, 0);
+    const help = await controller.requestHelp('chat-one', tab.id, 'Sign in, then continue.');
+    assert.equal(reveals, 1); assert.equal(views.get(tab.id).webContents.debugger.isAttached(), false);
+    await assert.rejects(controller.run('chat-one', tab.id, async () => {}), /waiting for the user/);
+    // Simulate the user's work in the same native tab; cookie and form state survive reparenting.
+    await views.get(tab.id).webContents.executeJavaScript('document.querySelector("input").value="User finished"');
+    controller.resume('chat-one', tab.id, help.requestId);
+    await controller.run('chat-one', tab.id, async page => {
+      assert.equal(await page.getByRole('textbox').inputValue(), 'User finished');
+      assert.equal((await views.get(tab.id).webContents.session.cookies.get({ url })).find(cookie => cookie.name === 'session')?.value, 'signed-in');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      assert.equal(await page.locator('h1').innerText(), 'Saved User finished');
+    });
+    await controller.shutdown();
+    assert.equal(views.get(tab.id).webContents.isDestroyed(), false, 'disconnect keeps user tab alive');
+    const wc = views.get(other.id).webContents; wc.debugger.attach('1.3');
+    await assert.rejects(connectSidePage(wc), /already has a debugger/); wc.debugger.detach();
+    const reconnect = await connectSidePage(wc); await reconnect.close();
+    assert.equal(wc.debugger.isAttached(), false);
+    assert.equal(front.isVisible(), false); assert.equal(background.isVisible(), false);
+    console.log('PASS: background native tabs, isolated sessions, page-only Playwright, screenshot/click/fill/scroll, help pause, same-tab resume and debugger cleanup.');
+  } finally {
+    await controller.shutdown(); for (const view of views.values()) if (!view.webContents.isDestroyed()) view.webContents.close();
+    front.destroy(); background.destroy(); await new Promise(resolve => server.close(resolve));
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+}
+main().then(() => app.exit(0), error => { console.error(error); app.exit(1); });
