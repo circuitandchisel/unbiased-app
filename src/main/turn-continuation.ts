@@ -14,7 +14,7 @@ export function promisesFurtherAction(text: string): boolean {
   if (!text.trim() || text.length > 3000) return false;
   const prose = text.replace(/```[\s\S]*?```/g, "").split("\n").filter(line => !/^\s*>/.test(line)).join("\n");
   if (/[?？]/.test(prose) || /\b(?:awaiting|waiting for|blocked|need (?:you|your)|require (?:your|user)|approv(?:al|e|ed)|permission|confirm(?:ation)?|clarif\w*|sign[ -]?in|log[ -]?in|captcha|2fa|password|merge|deploy|publish|purchase|payment|if you|when you|once you|after you|with you|your (?:input|answer|decision|choice)|optional|tomorrow|later|next time|do not proceed)\b/i.test(prose)) return false;
-  return /(?:^|[.!]\s+|\n)(?:now\s+|next,?\s+)?(?:i['’]ll|i will|let me|i (?:just )?need to|i am going to)\s*(?::\s*(?:\d+[.)]\s*)?)?(?:run|build|rebuild|test|fix|implement|update|add|remove|resolve|check|verify|inspect|read|find|trace|locate|diagnose|investigate|debug|commit|push|raise|create|stage|finish|complete|continue)\b/i.test(prose);
+  return /(?:^|[.!]\s+|\n)(?:now\s+|next,?\s+)?(?:i['’]ll|i will|let me|i (?:just )?need to|i am going to)\s*(?::\s*(?:\d+[.)]\s*)?)?(?:run|build|rebuild|test|fix|implement|update|add|remove|resolve|check|verify|inspect|read|find|trace|locate|diagnose|investigate|debug|look\s+(?:at|into|for)|commit|push|raise|create|stage|finish|complete|continue)\b/i.test(prose);
 }
 
 type Task = { authorized: boolean; readOnly: boolean; attempts: number; blocked: boolean; text: string; offer?: ContinuationOffer; controller?: AbortController; starting: boolean; continuing: boolean; offeredAt?: number };

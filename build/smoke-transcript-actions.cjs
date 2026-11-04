@@ -361,6 +361,7 @@ render();
  await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuation:{...continuation,attempt:2}});
  await until(()=>win.webContents.executeJavaScript(`window.qaCalls.filter(c=>c[0]==='sendMessage').length===${sendsBefore+1}`),'queued user input takes priority over automatic continuation');
  assert.equal(await continuationCalls(),1,'a queued prompt never starts a competing automatic turn');
+ await emit('onDelta',{paneId:'main',delta:'Let me look at what proxy image is actually running on EC2 and verify it has the Keep-Alive fix.'});
  await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuationExhausted:true});
  await until(()=>win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('Stopped to avoid a retry loop')"),'retry exhaustion is explicit');
  assert.equal(await continuationCalls(),1,'an exhausted budget cannot start another automatic turn');

@@ -39,6 +39,22 @@ test("budgets follow the real user task across automatic turns, then visibly exh
   guard.startTask("chat", "Proceed", false); guard.assistant("chat", promise);
   assert.equal(guard.completed("chat", "completed", true).offer?.attempt, 1);
 });
+test("each generated reply is checked, and the reported look-at reply reports exhaustion after two retries", () => {
+  const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false);
+  for (const [index, reply] of ["Let me fix both problems.", "Let me verify which proxy image is actually running in the EC2 sandbox."].entries()) {
+    guard.turnStarted("chat"); guard.assistant("chat", reply);
+    const offer = guard.completed("chat", "completed", true).offer!;
+    assert.equal(offer.attempt, index + 1);
+    const claim = guard.claim("chat", offer.token)!;
+    guard.started("chat", claim.signal);
+  }
+  guard.turnStarted("chat");
+  guard.assistant("chat", "The sandbox container has no stdout/stderr logs at all — the bridge sends everything to the JSONL log file, not to stdout. The actual error is already captured in the rollout log. Let me look at what proxy image is actually running on EC2 and verify it has the Keep-Alive fix.");
+  assert.deepEqual(guard.completed("chat", "completed", true), { exhausted: true });
+  assert.equal(guard.claim("chat", "third-retry"), null, "exhaustion cannot authorize a third automatic run");
+  for (const text of ["Let me look into the failure.", "I'll look for the relevant configuration."]) assert.equal(promisesFurtherAction(text), true);
+  for (const text of ["I look forward to your feedback.", "Let me look at this after you approve."]) assert.equal(promisesFurtherAction(text), false);
+});
 test("Stop, user input, approval, shutdown and a new prompt invalidate pending/in-flight continuations", () => {
   for (const boundary of ["stop", "input", "shutdown", "new prompt"]) {
     const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false); guard.assistant("chat", promise);
