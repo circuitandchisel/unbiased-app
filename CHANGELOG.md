@@ -6,6 +6,16 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.29 — November 3, 2026
+
+### Improved
+
+- **Keep work moving after an early stop.** When an agent ends with an explicit promise to take another step, the app can continue the task automatically up to twice. Earlier messages and your unsent draft stay in place, and queued prompts take priority.
+
+### Fixed
+
+- **Automatic continuations keep their live output.** Command output, work timers and empty-response warnings stay accurate, including in Mosaic and when updates arrive together. Approval requests wait for your answer, and Stop cancels pending retries.
+
 ## 1.13.28 — November 3, 2026
 
 ### Added
