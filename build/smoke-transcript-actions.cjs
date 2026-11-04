@@ -233,7 +233,14 @@ render();
  await until(async()=>await copyCount()===2,'the new answer must gain its copy action when the turn finishes');
  // Slash commands use the real rich-text composer and trusted keyboard input.
  const composer=id=>`#${id} [role="textbox"][contenteditable="true"]`;
- const focusComposer=async id=>{await until(()=>exists(composer(id)),'composer mounts');await win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(composer(id))}).focus()`)};
+ const focusComposer=async id=>{
+   await until(()=>exists(composer(id)),'composer mounts');
+   // Selecting a slash command schedules focus for the next animation frame.
+   // Let the preceding pane finish that work before targeting another pane.
+   await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+   await win.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(composer(id))}).focus()`);
+   assert.ok(await win.webContents.executeJavaScript(`document.activeElement===document.querySelector(${JSON.stringify(composer(id))})`),'keyboard input targets the requested composer');
+ };
  const key=async(key,code,windowsVirtualKeyCode,modifiers=0)=>{await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,modifiers});await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers})};
  const insert=text=>win.webContents.debugger.sendCommand('Input.insertText',{text});
  await focusComposer('main');await insert('/cOd');
