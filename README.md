@@ -85,6 +85,8 @@ When an interactive agent ends with a short, explicit promise to take another
 action, Unbiased can continue the already-authorized task automatically, up to
 two times. The chat shows each automatic continuation and explains when the
 limit is reached. Your queued messages take priority, and your draft stays intact.
+Your typed prompt and annotation comments express the request; quoted excerpts
+remain reference context and do not authorize continuation on their own.
 
 This is a conservative check for progress-only replies, not proof that every task
 is complete. It does not retry failed or interrupted turns, Plan mode, scheduled

@@ -14,16 +14,17 @@ export function promisesFurtherAction(text: string): boolean {
   if (!text.trim() || text.length > 3000) return false;
   const prose = text.replace(/```[\s\S]*?```/g, "").split("\n").filter(line => !/^\s*>/.test(line)).join("\n");
   if (/[?？]/.test(prose) || /\b(?:awaiting|waiting for|blocked|need (?:you|your)|require (?:your|user)|approv(?:al|e|ed)|permission|confirm(?:ation)?|clarif\w*|sign[ -]?in|log[ -]?in|captcha|2fa|password|merge|deploy|publish|purchase|payment|if you|when you|once you|after you|with you|your (?:input|answer|decision|choice)|optional|tomorrow|later|next time|do not proceed)\b/i.test(prose)) return false;
-  return /(?:^|[.!]\s+|\n)(?:now\s+|next,?\s+)?(?:i['’]ll|i will|let me|i (?:just )?need to|i am going to)\s*(?::\s*(?:\d+[.)]\s*)?)?(?:run|build|rebuild|test|fix|implement|update|add|remove|resolve|check|verify|inspect|read|commit|push|raise|create|stage|finish|complete|continue)\b/i.test(prose);
+  return /(?:^|[.!]\s+|\n)(?:now\s+|next,?\s+)?(?:i['’]ll|i will|let me|i (?:just )?need to|i am going to)\s*(?::\s*(?:\d+[.)]\s*)?)?(?:run|build|rebuild|test|fix|implement|update|add|remove|resolve|check|verify|inspect|read|find|trace|locate|diagnose|investigate|debug|look\s+(?:at|into|for)|commit|push|raise|create|stage|finish|complete|continue)\b/i.test(prose);
 }
 
 type Task = { authorized: boolean; readOnly: boolean; attempts: number; blocked: boolean; text: string; offer?: ContinuationOffer; controller?: AbortController; starting: boolean; continuing: boolean; offeredAt?: number };
 /** Owns retry budget and one-use tickets in the host; the renderer cannot manufacture authorization. */
 export class TurnContinuation {
   private tasks = new Map<string, Task>();
-  startTask(thread: string, request: string, planMode: boolean): void {
+  startTask(thread: string, request: string | readonly string[], planMode: boolean): void {
     this.cancel(thread);
-    this.tasks.set(thread, { authorized: !planMode && requestsAction(request), readOnly: /^(?:(?:please\s+)?|(?:can|could|would|will) you (?:please )?)(?:review|check|inspect|investigate|explain)\b/i.test(request.trim()), attempts: 0, blocked: false, text: "", starting: false, continuing: false });
+    const actions = (typeof request === "string" ? [request] : request).filter(requestsAction);
+    this.tasks.set(thread, { authorized: !planMode && actions.length > 0, readOnly: actions.every(text => /^(?:(?:please\s+)?|(?:can|could|would|will) you (?:please )?)(?:review|check|inspect|investigate|explain)\b/i.test(text.trim())), attempts: 0, blocked: false, text: "", starting: false, continuing: false });
   }
   turnStarted(thread: string): boolean { const task = this.tasks.get(thread); if (task) task.text = ""; return task?.continuing ?? false; }
   assistant(thread: string, text: string): void { const task = this.tasks.get(thread); if (task && text.trim()) task.text = text; }
@@ -36,7 +37,7 @@ export class TurnContinuation {
     const task = this.tasks.get(thread);
     if (task) task.continuing = false;
     if (!task || !eligible || status !== "completed" || !task.authorized || task.blocked || !promisesFurtherAction(task.text)) return {};
-    if (task.readOnly && /\b(?:fix|implement|update|add|remove|resolve|commit|push|raise|create|stage|deploy|publish|merge)\b/i.test(task.text)) return {};
+    if (task.readOnly && /\b(?:fix|implement|update|add|remove|resolve|change|edit|delete|write|replace|increase|decrease|commit|push|raise|create|stage|deploy|publish|merge)\b/i.test(task.text)) return {};
     if (task.attempts >= CONTINUATION_LIMIT) return { exhausted: true };
     task.offeredAt = Date.now();
     task.offer = { token: randomUUID(), attempt: task.attempts + 1, limit: CONTINUATION_LIMIT };

@@ -7925,8 +7925,10 @@ app.whenReady().then(async () => {
     visualize?: boolean;
     skillPath?: string;
     commandText?: string;
+    userRequests?: string[];
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
+    if (payload.userRequests !== undefined && (!Array.isArray(payload.userRequests) || !payload.userRequests.every(part => typeof part === "string"))) throw new Error("Invalid user request.");
     const previousThread = panes[paneId]?.threadId;
     if (previousThread) {
       turnContinuation.cancel(previousThread);
@@ -8111,7 +8113,7 @@ app.whenReady().then(async () => {
     if (planMode) input.unshift({ type: "text", text: PLAN_DIRECTIVE });
     pinTurnEnvironment(pane.threadId!);
     let turnAccepted = false;
-    turnContinuation.startTask(pane.threadId!, text, planMode);
+    turnContinuation.startTask(pane.threadId!, payload.userRequests ?? text, planMode);
     try {
     const result = (await engine.request("turn/start", {
       threadId: pane.threadId,
