@@ -363,7 +363,7 @@ function ensurePane(paneId: string): { threadId: string | null; turnId: string |
  *  torn-down pane would otherwise wedge the turn forever. */
 function settleLocalApprovals(threadId: string | null | undefined): void {
   if (!threadId) return;
-  blockTurnContinuation(threadId);
+  cancelTurnContinuation(threadId);
   for (const [reqId, pending] of pendingApprovals) {
     if (pending.kind !== "local" || pending.threadId !== threadId) continue;
     pendingApprovals.delete(reqId);
@@ -385,7 +385,7 @@ function dropSidePane(paneId: string): void {
   const pane = panes[paneId];
   if (!pane) return;
   const threadId = pane.threadId;
-  blockTurnContinuation(threadId);
+  cancelTurnContinuation(threadId);
   settleLocalApprovals(threadId);
   settleLocalUserInputs(threadId);
   if (threadId) {
@@ -2580,6 +2580,10 @@ const automaticTurnStarts = new Map<string, Promise<{ ok: boolean }>>();
 function blockTurnContinuation(threadId: string | null | undefined): void {
   if (!threadId) return;
   turnContinuation.block(threadId); turnContinuation.block(rootThreadOf(threadId));
+}
+function cancelTurnContinuation(threadId: string | null | undefined): void {
+  if (!threadId) return;
+  turnContinuation.cancel(threadId); turnContinuation.cancel(rootThreadOf(threadId));
 }
 const runningTurns = new Map<string, string>(); // threadId → turnId
 // Compaction outlives whichever normal/Mosaic pane requested it.
@@ -5816,12 +5820,13 @@ function wireNotifications(): void {
       }
       case "turn/started": {
         const turn = params.turn as { id?: string } | undefined;
+        let automaticContinuation = false;
         if (threadId && turn?.id) {
           // The judge governor treats "unknown" as busy; say so honestly, so
           // background judging can never compete with this turn for the
           // gateway's per-org concurrency.
           learning?.setIdle(false);
-          turnContinuation.turnStarted(threadId);
+          automaticContinuation = turnContinuation.turnStarted(threadId);
           if (turnContinuation.startingCanceled(threadId)) {
             void engine.request("turn/interrupt", { threadId, turnId: turn.id }).catch(() => {});
             sideBrowser.finishWorker(threadId);
@@ -5842,7 +5847,7 @@ function wireNotifications(): void {
         }
         if (!paneId) break;
         if (turn?.id) panes[paneId].turnId = turn.id;
-        send("chat:turn-started", { paneId, turnId: panes[paneId].turnId });
+        send("chat:turn-started", { paneId, turnId: panes[paneId].turnId, automaticContinuation });
         break;
       }
       case "item/agentMessage/delta": {
@@ -8139,8 +8144,9 @@ app.whenReady().then(async () => {
     const claim = turnContinuation.claim(p.threadId, p.token);
     if (!claim) return { ok: false };
     const start = async (): Promise<{ ok: boolean }> => {
-      pinTurnEnvironment(p.threadId);
+      let accepted = false;
       try {
+        pinTurnEnvironment(p.threadId);
         claim.signal.throwIfAborted();
         const cwd = threadCwds.get(p.threadId) ?? null;
         const result = await engine.request("turn/start", { threadId: p.threadId,
@@ -8153,12 +8159,13 @@ app.whenReady().then(async () => {
         }
         if (!result.turn?.id) throw new Error("The engine did not start an automatic continuation.");
         pane.turnId = result.turn.id;
+        accepted = true;
         return { ok: true };
       } catch (error) {
         turnEnvironments.end(p.threadId);
         if (claim.signal.aborted) return { ok: false };
         throw error;
-      } finally { turnContinuation.started(p.threadId, claim.signal); }
+      } finally { turnContinuation.started(p.threadId, claim.signal, accepted); }
     };
     const pending = start(); automaticTurnStarts.set(p.threadId, pending);
     try { return await pending; }
@@ -8762,7 +8769,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("chat:interrupt", async (_e, paneId: PaneId) => {
     const pane = ensurePane(paneId);
-    blockTurnContinuation(pane.threadId);
+    cancelTurnContinuation(pane.threadId);
     // The per-thread record covers a conversation reopened mid-turn,
     // where the pane's own turnId may not have been set by turn/started.
     const turnId = pane.turnId ?? (pane.threadId ? runningTurns.get(pane.threadId) : null);
@@ -8793,7 +8800,7 @@ app.whenReady().then(async () => {
   // the gateway's cascade. Emits a contextCompaction item on completion,
   // which the renderer already renders as a divider.
   ipcMain.handle("chat:compact", async (_e, paneId: PaneId) => {
-    blockTurnContinuation(panes[paneId]?.threadId);
+    cancelTurnContinuation(panes[paneId]?.threadId);
     const pane = ensurePane(paneId);
     if (!pane.threadId) return { ok: false, error: "no conversation" };
     const threadId = pane.threadId;
@@ -11890,7 +11897,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("threads:delete", async (_e, id: string) => {
-    blockTurnContinuation(id);
+    cancelTurnContinuation(id);
     sideBrowser.finishWorker(id);
     for (const [subId, info] of subAgents) if (info.parent === id) sideBrowser.finishWorker(subId);
     for (const record of sideChatRecents.recordsForParent(id)) {

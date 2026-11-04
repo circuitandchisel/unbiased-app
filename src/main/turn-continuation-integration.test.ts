@@ -49,6 +49,32 @@ test("Stop while automatic turn/start is in flight interrupts the returned turn"
   assert.equal(f.pane.turnId, null);
   assert.equal(f.context.automaticTurnStarts.has("chat"), false);
 });
+test("approval, input and browser handoffs during startup wait without interrupting the accepted turn", async () => {
+  for (const boundary of ["approval", "input", "browser handoff"]) {
+    let finish!: (value: unknown) => void;
+    const f = fixture(() => new Promise(resolve => { finish = resolve; }));
+    const pending = f.invoke();
+    f.guard.turnStarted("chat");
+    f.context.runningTurns.set("chat", "awaiting-user");
+    // These production request paths inhibit retries; unlike Stop, they
+    // must keep the current turn alive for the user's response.
+    f.guard.block("chat");
+    assert.equal(f.guard.startingCanceled("chat"), false, boundary);
+    finish({ turn: { id: "awaiting-user" } });
+    assert.equal((await pending).ok, true, boundary);
+    assert.equal(f.pane.turnId, "awaiting-user", boundary);
+    assert.deepEqual(f.calls.map(c => c.method), ["turn/start"], boundary);
+    f.guard.assistant("chat", "Now I'll run the next test.");
+    assert.deepEqual(f.guard.completed("chat", "completed", true), {}, boundary);
+    assert.equal(f.context.automaticTurnStarts.has("chat"), false);
+  }
+});
+test("rejected automatic startup clears the live-turn marker", async () => {
+  const f = fixture(async () => { throw new Error("startup failed"); });
+  await assert.rejects(f.invoke(), /startup failed/);
+  assert.equal(f.guard.turnStarted("chat"), false);
+  assert.equal(f.context.automaticTurnStarts.has("chat"), false);
+});
 test("navigation, plan mode, disconnect and a newer active turn prevent automatic starts", async () => {
   for (const block of ["navigation", "plan", "disconnect", "running"]) {
     const f = fixture();

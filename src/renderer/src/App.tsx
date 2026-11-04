@@ -655,7 +655,7 @@ declare global {
       clipboardImage: () => Promise<{ attachment: Attachment | null; error?: string }>;
       interrupt: (paneId: PaneId) => Promise<{ interrupted: boolean }>;
       compact: (paneId: PaneId) => Promise<{ ok: boolean; error?: string }>;
-      onTurnStarted: (cb: (p: { paneId: PaneId; turnId: string | null }) => void) => () => void;
+      onTurnStarted: (cb: (p: { paneId: PaneId; turnId: string | null; automaticContinuation?: boolean }) => void) => () => void;
       onDelta: (cb: (p: { paneId: PaneId; delta: string }) => void) => () => void;
       onTurnCompleted: (
         cb: (p: { paneId: PaneId; status: string; error?: string | null; narrated?: boolean; continuation?: { token: string; threadId: string; originPane: string; attempt: number; limit: number }; continuationExhausted?: boolean }) => void,
@@ -10329,6 +10329,16 @@ function ChatPane({
     const offs = [
       window.unbiased.onTurnStarted((p) => {
         if (p.paneId !== paneId) return;
+        // Host-started continuations (and their Mosaic mirrors) do not go
+        // through sendNow. Give them the same live-output scope and clock.
+        if (p.automaticContinuation && turnStartIndexRef.current === null) {
+          prepareTurnOutput();
+          turnStartIndexRef.current = latestEntriesRef.current.length;
+          setEntries(es => {
+            turnStartIndexRef.current = es.length;
+            return es;
+          });
+        }
         resetTurnPerf(false);
       }),
       window.unbiased.onDelta((p) => {
@@ -10833,15 +10843,20 @@ function ChatPane({
     }
   }
 
-  /** Send a prepared message right now (fresh sends and queue flushes). */
-  async function sendNow(q: QueuedMsg) {
-    updateTranscriptScroll({ type: "follow" });
+  function prepareTurnOutput() {
     setBusy(true);
     producedRef.current = false;
+    messageBoundaryRef.current = true;
     turnStartedAtRef.current = Date.now();
     elapsedBaseRef.current = 0;
     elapsedActiveSinceRef.current = turnStartedAtRef.current;
     setElapsed(0);
+  }
+
+  /** Send a prepared message right now (fresh sends and queue flushes). */
+  async function sendNow(q: QueuedMsg) {
+    updateTranscriptScroll({ type: "follow" });
+    prepareTurnOutput();
     setEntries((es) => {
       const next: Entry[] = [...es, { kind: "user", text: q.text, at: Date.now(), annotations: q.annotations, attachments: q.attachments }];
       turnStartIndexRef.current = next.length;

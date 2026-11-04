@@ -12,12 +12,12 @@ import {ChatPane,MultiViewTile} from './src/renderer/src/App';
 window.qaCopied=[];Object.defineProperty(navigator,"clipboard",{value:{writeText:async text=>window.qaCopied.push(text)}});window.qaCalls=[];window.qaListeners=new Map();window.qaEmit=(name,payload)=>{for(const cb of window.qaListeners.get(name)??[])cb(payload)};window.qaKeyEvents=[];document.addEventListener('keydown',e=>window.qaKeyEvents.push({key:e.key,code:e.code,keyCode:e.keyCode,trusted:e.isTrusted,target:e.target.outerHTML?.slice(0,150)}),true);
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const listeners=window.qaListeners.get(key)??new Set();listeners.add(cb);window.qaListeners.set(key,listeners);return ()=>listeners.delete(cb)};
- return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='continueUnfinished'){window.qaEmit('onTurnStarted',{paneId:args[0].paneId,turnId:'auto-turn'});return {ok:true}};if(key==='slashCommands')return {commands:[{id:'review',command:'CodeReview',label:'Code Review',description:'Review standards and spec',source:args[0]==='main'?'Unbiased':'This project',skill:{name:'code-review',path:'/qa/'+args[0]+'/code-review/SKILL.md'}},{id:'style',command:'CodeStyle',label:'Code Style',description:'Check style',source:'Shared',skill:{name:'code-style',path:'/qa/style/SKILL.md'}}],error:null};if(key==='mountThread')return {lease:'qa-lease',entries,running:!!window.qaMosaicCompacting,compacting:!!window.qaMosaicCompacting};if(key==='contextUsage')return null;if(key==='mcpThreadGet')return {enabled:[]};if(key==='liveApprovals'||key==='liveUserInputs')return [];if(key==='fileExists')return {exists:false};if(key==='favicon')return {dataUrl:null};return {};};
+ return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='sendMessage')return {threadId:args[0]==='main'?'chat-one':args[0],turnId:'qa-user-turn',created:false};if(key==='continueUnfinished'){window.qaEmit('onTurnStarted',{paneId:args[0].paneId,turnId:'auto-turn',automaticContinuation:true});return {ok:true}};if(key==='slashCommands')return {commands:[{id:'review',command:'CodeReview',label:'Code Review',description:'Review standards and spec',source:args[0]==='main'?'Unbiased':'This project',skill:{name:'code-review',path:'/qa/'+args[0]+'/code-review/SKILL.md'}},{id:'style',command:'CodeStyle',label:'Code Style',description:'Check style',source:'Shared',skill:{name:'code-style',path:'/qa/style/SKILL.md'}}],error:null};if(key==='mountThread')return {lease:'qa-lease',entries,running:!!window.qaMosaicCompacting,compacting:!!window.qaMosaicCompacting};if(key==='contextUsage')return null;if(key==='mcpThreadGet')return {enabled:[]};if(key==='liveApprovals'||key==='liveUserInputs')return [];if(key==='fileExists')return {exists:false};if(key==='favicon')return {dataUrl:null};return {};};
 }});
 const entries=[{kind:'assistant',text:'Select this side chat excerpt.\\n\\nSee [example link](https://example.com/side-chat).'}];
 const side={paneId:'side:qa',connected:true,canTypeToFocus:()=>false,reset:{entries,nonce:0},emptyState:null,accessMode:'untrusted',onAccessModeChange:()=>{},planMode:false,onTogglePlanMode:()=>{}};
 const mosaic={...side,id:'qa-mosaic',columnSpan:1,fresh:false,project:null,projects:[],title:'Mosaic QA',onSelectEnvironment:async()=>{},onCreateProject:()=>{},onOpenChat:()=>{},onRemove:()=>{},onTurnLanded:()=>{}};
-const main={...side,paneId:'main',onAskSideChat:text=>window.qaCalls.push(['askSide',text])};
+const main={...side,persistTranscript:true,paneId:'main',onAskSideChat:text=>window.qaCalls.push(['askSide',text])};
 const root=createRoot(document.getElementById('root'));
 const render=(reset=main.reset,key='main')=>root.render(<><section id="side"><ChatPane {...side}/></section><section id="main"><ChatPane key={key} {...main} reset={reset}/></section><section id="mosaic"><MultiViewTile key={window.qaMosaicKey??0} {...mosaic}/></section></>);
 window.qaRestoreMain=(seconds,nonce,key='main',compacting=false)=>render({...main.reset,nonce,compacting,resume:seconds===null?null:{running:true},runningTurnStart:0,runningTurnStartedAt:seconds===null?null:Date.now()-seconds*1000},key);
@@ -345,6 +345,12 @@ render();
  await until(async()=>await continuationCalls()===1,'the host ticket starts exactly one automatic continuation');
  assert.deepEqual((await richState()).doc,savedDraft,'automatic continuation preserves the unsent rich-text draft');
  assert.ok(await win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('Continuing unfinished work automatically (1/2)')"));
+ // A continuation has a fresh live scope, not the completed turn's refs.
+ const savedCommand=()=>win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='saveTranscript'&&c[1]==='chat-one').at(-1)?.[2]?.find(e=>e.kind==='command'&&e.itemId==='automatic-command')");
+ await emit('onCommand',{paneId:'main',phase:'started',item:{id:'automatic-command',command:'run test suite',status:'inProgress'}});
+ await emit('onCommandOutput',{paneId:'main',itemId:'automatic-command',delta:'streamed test output'});
+ await until(async()=>{const c=await savedCommand();return c?.status==='inProgress'&&c?.output==='streamed test output'},'automatic continuation commands stay live and retain streaming output');
+ await emit('onCommand',{paneId:'main',phase:'completed',item:{id:'automatic-command',command:'run test suite',status:'completed',exitCode:0}});
  await focusComposer('main');await key('a','KeyA',65,4);await insert('Run the queued user request');await key('Enter','Enter',13);
  await pause();
  const sendsBefore=await win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='sendMessage').length");
@@ -355,5 +361,17 @@ render();
  await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuationExhausted:true});
  await until(()=>win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('Stopped to avoid a retry loop')"),'retry exhaustion is explicit');
  assert.equal(await continuationCalls(),1,'an exhausted budget cannot start another automatic turn');
+ // An empty retry must warn instead of inheriting produced=true from its predecessor.
+ await emit('onTurnStarted',{paneId:'main',turnId:'empty-retry-predecessor'});
+ await emit('onDelta',{paneId:'main',delta:"Now I'll run the remaining tests."});
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuation:{...continuation,token:'next-task-ticket'}});
+ await until(async()=>await continuationCalls()===2,'a new task accepts its own continuation');
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false});
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('The model returned an empty response')"),'an empty automatic continuation reports its missing output');
+ // Mirrored host-started turns initialize a live scope without sending a user prompt.
+ await emit('onTurnStarted',{paneId:'multi:qa-mosaic',turnId:'mirrored-continuation',automaticContinuation:true});
+ await emit('onCommand',{paneId:'multi:qa-mosaic',phase:'started',item:{id:'mirrored-command',command:'mirrored test command',status:'inProgress'}});
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#mosaic').innerText.includes('running')"),'Mosaic mirrors show host-started commands as running');
+ assert.equal(await continuationCalls(),2,'mirrors do not start an extra automatic turn');
  console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, prompt recall/draft restoration and side-chat/Mosaic scope.');win.destroy();app.quit();
 })().catch(e=>{console.error(e);app.exit(1)});

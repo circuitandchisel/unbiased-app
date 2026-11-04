@@ -17,21 +17,24 @@ export function promisesFurtherAction(text: string): boolean {
   return /(?:^|[.!]\s+|\n)(?:now\s+|next,?\s+)?(?:i['’]ll|i will|let me|i (?:just )?need to|i am going to)\s*(?::\s*(?:\d+[.)]\s*)?)?(?:run|build|rebuild|test|fix|implement|update|add|remove|resolve|check|verify|inspect|read|commit|push|raise|create|stage|finish|complete|continue)\b/i.test(prose);
 }
 
-type Task = { authorized: boolean; readOnly: boolean; attempts: number; blocked: boolean; text: string; offer?: ContinuationOffer; controller?: AbortController; starting: boolean; offeredAt?: number };
+type Task = { authorized: boolean; readOnly: boolean; attempts: number; blocked: boolean; text: string; offer?: ContinuationOffer; controller?: AbortController; starting: boolean; continuing: boolean; offeredAt?: number };
 /** Owns retry budget and one-use tickets in the host; the renderer cannot manufacture authorization. */
 export class TurnContinuation {
   private tasks = new Map<string, Task>();
   startTask(thread: string, request: string, planMode: boolean): void {
     this.cancel(thread);
-    this.tasks.set(thread, { authorized: !planMode && requestsAction(request), readOnly: /^(?:(?:please\s+)?|(?:can|could|would|will) you (?:please )?)(?:review|check|inspect|investigate|explain)\b/i.test(request.trim()), attempts: 0, blocked: false, text: "", starting: false });
+    this.tasks.set(thread, { authorized: !planMode && requestsAction(request), readOnly: /^(?:(?:please\s+)?|(?:can|could|would|will) you (?:please )?)(?:review|check|inspect|investigate|explain)\b/i.test(request.trim()), attempts: 0, blocked: false, text: "", starting: false, continuing: false });
   }
-  turnStarted(thread: string): void { const task = this.tasks.get(thread); if (task) task.text = ""; }
+  turnStarted(thread: string): boolean { const task = this.tasks.get(thread); if (task) task.text = ""; return task?.continuing ?? false; }
   assistant(thread: string, text: string): void { const task = this.tasks.get(thread); if (task && text.trim()) task.text = text; }
-  block(thread: string): void { const task = this.tasks.get(thread); if (task) { task.blocked = true; task.offer = undefined; task.controller?.abort(); } }
-  cancel(thread: string): void { this.block(thread); }
+  // Asking the user disables future retries, but the accepted turn must stay alive
+  // to receive their answer, even if its turn/start RPC has not returned yet.
+  block(thread: string): void { const task = this.tasks.get(thread); if (task) { task.blocked = true; task.offer = undefined; } }
+  cancel(thread: string): void { this.block(thread); const task = this.tasks.get(thread); if (task) { task.continuing = false; task.controller?.abort(); } }
   reset(): void { for (const thread of this.tasks.keys()) this.cancel(thread); this.tasks.clear(); }
   completed(thread: string, status: string, eligible: boolean): CompletionCheck {
     const task = this.tasks.get(thread);
+    if (task) task.continuing = false;
     if (!task || !eligible || status !== "completed" || !task.authorized || task.blocked || !promisesFurtherAction(task.text)) return {};
     if (task.readOnly && /\b(?:fix|implement|update|add|remove|resolve|commit|push|raise|create|stage|deploy|publish|merge)\b/i.test(task.text)) return {};
     if (task.attempts >= CONTINUATION_LIMIT) return { exhausted: true };
@@ -42,10 +45,10 @@ export class TurnContinuation {
   claim(thread: string, token: string): { signal: AbortSignal; attempt: number } | null {
     const task = this.tasks.get(thread);
     if (!task || task.blocked || !task.offer || task.offer.token !== token || Date.now() - (task.offeredAt ?? 0) > 30_000) return null;
-    task.attempts++; task.offer = undefined; task.starting = true;
+    task.attempts++; task.offer = undefined; task.starting = true; task.continuing = true;
     task.controller = new AbortController();
     return { signal: task.controller.signal, attempt: task.attempts };
   }
   startingCanceled(thread: string): boolean { const task = this.tasks.get(thread); return !!task?.starting && !!task.controller?.signal.aborted; }
-  started(thread: string, signal: AbortSignal): void { const task = this.tasks.get(thread); if (task?.controller?.signal === signal) task.starting = false; }
+  started(thread: string, signal: AbortSignal, accepted = true): void { const task = this.tasks.get(thread); if (task?.controller?.signal === signal) { task.starting = false; if (!accepted) task.continuing = false; } }
 }

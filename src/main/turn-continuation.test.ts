@@ -60,3 +60,24 @@ test("stale tickets expire, and an actual final answer does not reuse an older p
   guard.turnStarted("chat"); guard.assistant("chat", promise); guard.assistant("chat", "Done. Tests passed and the PR is open.");
   assert.deepEqual(guard.completed("chat", "completed", true), {});
 });
+
+test("only automatic turns are marked for fresh renderer setup, regardless of startup event ordering", () => {
+  for (const eventFirst of [true, false]) {
+    const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false);
+    assert.equal(guard.turnStarted("chat"), false);
+    guard.assistant("chat", promise);
+    const claim = guard.claim("chat", guard.completed("chat", "completed", true).offer!.token)!;
+    if (!eventFirst) guard.started("chat", claim.signal);
+    assert.equal(guard.turnStarted("chat"), true);
+    if (eventFirst) guard.started("chat", claim.signal);
+    guard.block("chat");
+    assert.equal(claim.signal.aborted, false, "an input request must not interrupt the active turn");
+    guard.assistant("chat", "Done. Tests passed.");
+    guard.completed("chat", "completed", true);
+    assert.equal(guard.turnStarted("chat"), false, "later compaction is not an automatic retry");
+  }
+  const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false); guard.assistant("chat", promise);
+  const claim = guard.claim("chat", guard.completed("chat", "completed", true).offer!.token)!;
+  guard.started("chat", claim.signal, false);
+  assert.equal(guard.turnStarted("chat"), false, "failed startup must not label the next turn");
+});

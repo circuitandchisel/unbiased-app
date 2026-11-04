@@ -14,7 +14,7 @@ module.exports=async function checkCleanup(controller,views,front,background,url
  const context={console,sideBrowser:controller,browserViews:views,browserVisibility:new Map(),browserViewBounds:new Map(),win:front,backgroundBrowserHost:background,
   ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},engine:{request:async()=>({})},browserRuntime:{request:async(_method,{sessionId})=>{released.push(sessionId)}},
   sideChatRecents:{recordsForParent:()=>[...records.values()],expired:()=>[...records.keys()],get:id=>records.get(id),remove:id=>records.delete(id)},
-  blockTurnContinuation:()=>{},dropSidePane:()=>{},forgetBrowserCaptures:()=>{},saveSideChatRecents:()=>{},saveThreadMcp:()=>{},sideChatTranscriptFile:id=>id,transcriptFile:id=>id,rmSync:()=>{},
+  cancelTurnContinuation:()=>{},dropSidePane:()=>{},forgetBrowserCaptures:()=>{},saveSideChatRecents:()=>{},saveThreadMcp:()=>{},sideChatTranscriptFile:id=>id,transcriptFile:id=>id,rmSync:()=>{},
   petFinished:()=>{},settleLocalApprovals:()=>{},settleLocalUserInputs:()=>{},resetSidePanes:()=>{},panes:{main:{threadId:'unrelated'}},
  };
  for(const key of ['threadMcp','runningTurns','subAgents','subAgentMail','heldApprovals','bgStream','mcpApplyPending','threadAccessModes','heldErrors','multiMountLeases'])context[key]=new Map();
