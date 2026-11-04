@@ -6,10 +6,11 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
-## 1.13.30 — November 3, 2026
+## 1.13.31 — November 3, 2026
 
 ### Fixed
 
+- **Browser shutdown waits for cleanup.** The app allows the browser’s bounded cleanup steps to finish before treating shutdown as a failure.
 - **“Proceed” works from annotations.** Comments entered through Add to chat are recognized as your instructions for automatic continuation, while quoted excerpts remain reference context.
 - **More unfinished replies are recognized.** Promises to find, trace or look into a problem can trigger continuation when allowed. A limit warning explains when the two automatic retries are exhausted.
 
