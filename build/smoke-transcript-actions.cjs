@@ -373,5 +373,24 @@ render();
  await emit('onCommand',{paneId:'multi:qa-mosaic',phase:'started',item:{id:'mirrored-command',command:'mirrored test command',status:'inProgress'}});
  await until(()=>win.webContents.executeJavaScript("document.querySelector('#mosaic').innerText.includes('running')"),'Mosaic mirrors show host-started commands as running');
  assert.equal(await continuationCalls(),2,'mirrors do not start an extra automatic turn');
+ // Electron may deliver a burst before React commits the start updater.
+ // Settling that updater later must not revive a completed turn's scope.
+ const savedMainEntries=()=>win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='saveTranscript'&&c[1]==='chat-one').at(-1)?.[2]??[]");
+ const flatten=es=>es.flatMap(e=>[e,...(e.entries?flatten(e.entries):[])]);
+ await win.webContents.executeJavaScript(`
+   window.qaEmit('onTurnStarted',{paneId:'main',turnId:'burst-one',automaticContinuation:true});
+   window.qaEmit('onDelta',{paneId:'main',delta:'The first burst turn completed.'});
+   window.qaEmit('onMessageBoundary',{paneId:'main'});
+   window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false});
+ `);
+ await until(async()=>flatten(await savedMainEntries()).some(e=>e.text==='The first burst turn completed.'),'the first burst turn is persisted');
+ const emptyWarnings=es=>flatten(es).filter(e=>e.text?.includes('The model returned an empty response')).length;
+ const warningsBefore=emptyWarnings(await savedMainEntries());
+ await win.webContents.executeJavaScript(`
+   window.qaEmit('onTurnStarted',{paneId:'main',turnId:'burst-two',automaticContinuation:true});
+   window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false});
+ `);
+ await until(async()=>emptyWarnings(await savedMainEntries())===warningsBefore+1,'the next burst-delivered retry starts fresh and reports empty output');
+ assert.ok(flatten(await savedMainEntries()).filter(e=>e.kind==='work').every(e=>Number.isFinite(e.duration)),'batched folds retain finite durations');
  console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, prompt recall/draft restoration and side-chat/Mosaic scope.');win.destroy();app.quit();
 })().catch(e=>{console.error(e);app.exit(1)});

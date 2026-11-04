@@ -10162,6 +10162,7 @@ function ChatPane({
     // A reopened conversation may still be mid-turn: restore its busy
     // state and any approval requests the agent is blocked on.
     setBusy(!!reset.resume?.running);
+    pendingTurnScopeRef.current = null;
     // A conversation opened mid-turn: the fold at completion must reach back
     // over the REPLAYED half of the running turn, not just what streams after
     // this moment — otherwise its narration-so-far is stranded above the fold
@@ -10282,6 +10283,7 @@ function ChatPane({
   // consumed on completion to fold the work into a "Worked for Ns" group.
   const turnStartIndexRef = useRef<number | null>(null);
   const turnStartedAtRef = useRef<number | null>(null);
+  const pendingTurnScopeRef = useRef<{ start: number } | null>(null);
 
   // An undecided approval means the agent is waiting on the human — the
   // thinking clock pauses rather than blaming the model for our latency.
@@ -10332,10 +10334,9 @@ function ChatPane({
         // Host-started continuations (and their Mosaic mirrors) do not go
         // through sendNow. Give them the same live-output scope and clock.
         if (p.automaticContinuation && turnStartIndexRef.current === null) {
-          prepareTurnOutput();
-          turnStartIndexRef.current = latestEntriesRef.current.length;
+          const scope = prepareTurnOutput();
           setEntries(es => {
-            turnStartIndexRef.current = es.length;
+            resolveTurnOutputScope(scope, es.length);
             return es;
           });
         }
@@ -10379,6 +10380,8 @@ function ChatPane({
         // pass would silently skip the work fold.
         const workStart = turnStartIndexRef.current;
         const workStartedAt = turnStartedAtRef.current;
+        const pendingScope = pendingTurnScopeRef.current;
+        pendingTurnScopeRef.current = null;
         turnStartIndexRef.current = null;
         turnStartedAtRef.current = null;
         setEntries((es) => {
@@ -10390,7 +10393,9 @@ function ChatPane({
             }
           }
           next = withoutTrailingPlaceholder(next);
-          const start = workStart;
+          // A batched start updater resolves this captured scope before this
+          // updater runs, without restoring the completed turn's active refs.
+          const start = pendingScope?.start ?? workStart;
           next = settleTurnSteps(next, start);
           // Keep completed-turn duration beside the final answer. Intermediate
           // narration, agent rows, and commands fold under that header; a
@@ -10843,7 +10848,10 @@ function ChatPane({
     }
   }
 
-  function prepareTurnOutput() {
+  function prepareTurnOutput(start = latestEntriesRef.current.length) {
+    const scope = { start };
+    pendingTurnScopeRef.current = scope;
+    turnStartIndexRef.current = start;
     setBusy(true);
     producedRef.current = false;
     messageBoundaryRef.current = true;
@@ -10851,15 +10859,26 @@ function ChatPane({
     elapsedBaseRef.current = 0;
     elapsedActiveSinceRef.current = turnStartedAtRef.current;
     setElapsed(0);
+    return scope;
+  }
+
+  function resolveTurnOutputScope(scope: { start: number }, start: number) {
+    scope.start = start;
+    // React may defer or replay this updater past completion, navigation or
+    // another start. Resolve its fold boundary, but never revive old live state.
+    if (pendingTurnScopeRef.current === scope) {
+      turnStartIndexRef.current = start;
+      pendingTurnScopeRef.current = null;
+    }
   }
 
   /** Send a prepared message right now (fresh sends and queue flushes). */
   async function sendNow(q: QueuedMsg) {
     updateTranscriptScroll({ type: "follow" });
-    prepareTurnOutput();
+    const scope = prepareTurnOutput(latestEntriesRef.current.length + 1);
     setEntries((es) => {
       const next: Entry[] = [...es, { kind: "user", text: q.text, at: Date.now(), annotations: q.annotations, attachments: q.attachments }];
-      turnStartIndexRef.current = next.length;
+      resolveTurnOutputScope(scope, next.length);
       return next;
     });
     try {
