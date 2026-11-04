@@ -12,17 +12,17 @@ import {ChatPane,MultiViewTile} from './src/renderer/src/App';
 window.qaCopied=[];Object.defineProperty(navigator,"clipboard",{value:{writeText:async text=>window.qaCopied.push(text)}});window.qaCalls=[];window.qaListeners=new Map();window.qaEmit=(name,payload)=>{for(const cb of window.qaListeners.get(name)??[])cb(payload)};window.qaKeyEvents=[];document.addEventListener('keydown',e=>window.qaKeyEvents.push({key:e.key,code:e.code,keyCode:e.keyCode,trusted:e.isTrusted,target:e.target.outerHTML?.slice(0,150)}),true);
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const listeners=window.qaListeners.get(key)??new Set();listeners.add(cb);window.qaListeners.set(key,listeners);return ()=>listeners.delete(cb)};
- return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='slashCommands')return {commands:[{id:'review',command:'CodeReview',label:'Code Review',description:'Review standards and spec',source:args[0]==='main'?'Unbiased':'This project',skill:{name:'code-review',path:'/qa/'+args[0]+'/code-review/SKILL.md'}},{id:'style',command:'CodeStyle',label:'Code Style',description:'Check style',source:'Shared',skill:{name:'code-style',path:'/qa/style/SKILL.md'}}],error:null};if(key==='mountThread')return {lease:'qa-lease',entries,running:!!window.qaMosaicCompacting,compacting:!!window.qaMosaicCompacting};if(key==='contextUsage')return null;if(key==='mcpThreadGet')return {enabled:[]};if(key==='liveApprovals'||key==='liveUserInputs')return [];if(key==='fileExists')return {exists:false};if(key==='favicon')return {dataUrl:null};return {};};
+ return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='sendMessage')return {threadId:args[0]==='main'?'chat-one':args[0],turnId:'qa-user-turn',created:false};if(key==='continueUnfinished'){window.qaEmit('onTurnStarted',{paneId:args[0].paneId,turnId:'auto-turn',automaticContinuation:true});return {ok:true}};if(key==='slashCommands')return {commands:[{id:'review',command:'CodeReview',label:'Code Review',description:'Review standards and spec',source:args[0]==='main'?'Unbiased':'This project',skill:{name:'code-review',path:'/qa/'+args[0]+'/code-review/SKILL.md'}},{id:'style',command:'CodeStyle',label:'Code Style',description:'Check style',source:'Shared',skill:{name:'code-style',path:'/qa/style/SKILL.md'}}],error:null};if(key==='mountThread')return {lease:'qa-lease',entries,running:!!window.qaMosaicCompacting,compacting:!!window.qaMosaicCompacting};if(key==='contextUsage')return null;if(key==='mcpThreadGet')return {enabled:[]};if(key==='liveApprovals'||key==='liveUserInputs')return [];if(key==='fileExists')return {exists:false};if(key==='favicon')return {dataUrl:null};return {};};
 }});
 const entries=[{kind:'assistant',text:'Select this side chat excerpt.\\n\\nSee [example link](https://example.com/side-chat).'}];
 const side={paneId:'side:qa',connected:true,canTypeToFocus:()=>false,reset:{entries,nonce:0},emptyState:null,accessMode:'untrusted',onAccessModeChange:()=>{},planMode:false,onTogglePlanMode:()=>{}};
 const mosaic={...side,id:'qa-mosaic',columnSpan:1,fresh:false,project:null,projects:[],title:'Mosaic QA',onSelectEnvironment:async()=>{},onCreateProject:()=>{},onOpenChat:()=>{},onRemove:()=>{},onTurnLanded:()=>{}};
-const main={...side,paneId:'main',onAskSideChat:text=>window.qaCalls.push(['askSide',text])};
+const main={...side,persistTranscript:true,paneId:'main',onAskSideChat:text=>window.qaCalls.push(['askSide',text])};
 const root=createRoot(document.getElementById('root'));
 const render=(reset=main.reset,key='main')=>root.render(<><section id="side"><ChatPane {...side}/></section><section id="main"><ChatPane key={key} {...main} reset={reset}/></section><section id="mosaic"><MultiViewTile key={window.qaMosaicKey??0} {...mosaic}/></section></>);
 window.qaRestoreMain=(seconds,nonce,key='main',compacting=false)=>render({...main.reset,nonce,compacting,resume:seconds===null?null:{running:true},runningTurnStart:0,runningTurnStartedAt:seconds===null?null:Date.now()-seconds*1000},key);
 window.qaRunningCopy=()=>render({...main.reset,nonce:20,entries:[{kind:'user',text:'Earlier question'},{kind:'assistant',text:'Earlier completed answer'},{kind:'user',text:'Current question'},{kind:'assistant',text:'Current streaming answer'}],resume:{running:true,approvals:[],userInputs:[]},runningTurnStart:3,runningTurnStartedAt:Date.now()-1000},'copy-main');
-window.qaPromptHistory=()=>root.render(<><section id="main"><ChatPane key="history-main" {...main} reset={{nonce:40,entries:[{kind:'user',text:'First main prompt'},{kind:'assistant',text:'First answer'},{kind:'user',text:'Second main prompt'}]}}/></section><section id="side"><ChatPane key="history-side" {...side} reset={{nonce:40,entries:[{kind:'user',text:'Side-only prompt'}]}}/></section><section id="mosaic"><ChatPane key="history-mosaic" {...side} paneId="multi:qa-mosaic" reset={{nonce:40,entries:[{kind:'user',text:'Mosaic-only prompt'}]}}/></section></>);
+window.qaPromptHistory=()=>root.render(<><section id="main"><ChatPane key="history-main" threadId="chat-one" {...main} reset={{nonce:40,entries:[{kind:'user',text:'First main prompt'},{kind:'assistant',text:'First answer'},{kind:'user',text:'Second main prompt'}]}}/></section><section id="side"><ChatPane key="history-side" {...side} reset={{nonce:40,entries:[{kind:'user',text:'Side-only prompt'}]}}/></section><section id="mosaic"><ChatPane key="history-mosaic" {...side} paneId="multi:qa-mosaic" reset={{nonce:40,entries:[{kind:'user',text:'Mosaic-only prompt'}]}}/></section></>);
 window.qaReopenMosaic=compacting=>{window.qaMosaicCompacting=compacting;window.qaMosaicKey=(window.qaMosaicKey??0)+1;render()};
 render();
 `},bundle:true,write:false,platform:'browser',format:'iife',jsx:'automatic',define:{'import.meta.glob':'__qaGlob'},banner:{js:'var __qaGlob=()=>({});'},loader:{'.svg':'dataurl','.png':'dataurl','.webp':'dataurl'},plugins:[{name:'qa',setup(build){
@@ -334,5 +334,63 @@ render();
  assert.equal((await richState()).paragraph,'First list item','Up moves into the preceding list item');
  await key('ArrowDown','ArrowDown',40);await pause();
  assert.equal((await richState()).paragraph,'Last list item','Down moves into the next list item');
+ // The real ChatPane accepts a host continuation, keeps the draft and gives queued input priority.
+ const emit=(name,payload)=>win.webContents.executeJavaScript(`window.qaEmit(${JSON.stringify(name)},${JSON.stringify(payload)})`);
+ const continuationCalls=()=>win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='continueUnfinished').length");
+ const continuation={token:'host-issued-ticket',threadId:'chat-one',originPane:'main',attempt:1,limit:2};
+ const savedDraft=(await richState()).doc;
+ await emit('onTurnStarted',{paneId:'main',turnId:'premature'});
+ await emit('onDelta',{paneId:'main',delta:"Now I'll run the full test suite."});
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuation});
+ await until(async()=>await continuationCalls()===1,'the host ticket starts exactly one automatic continuation');
+ assert.deepEqual((await richState()).doc,savedDraft,'automatic continuation preserves the unsent rich-text draft');
+ assert.ok(await win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('Continuing unfinished work automatically (1/2)')"));
+ // A continuation has a fresh live scope, not the completed turn's refs.
+ const savedCommand=()=>win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='saveTranscript'&&c[1]==='chat-one').at(-1)?.[2]?.find(e=>e.kind==='command'&&e.itemId==='automatic-command')");
+ await emit('onCommand',{paneId:'main',phase:'started',item:{id:'automatic-command',command:'run test suite',status:'inProgress'}});
+ await emit('onCommandOutput',{paneId:'main',itemId:'automatic-command',delta:'streamed test output'});
+ await until(async()=>{const c=await savedCommand();return c?.status==='inProgress'&&c?.output==='streamed test output'},'automatic continuation commands stay live and retain streaming output');
+ await emit('onCommand',{paneId:'main',phase:'completed',item:{id:'automatic-command',command:'run test suite',status:'completed',exitCode:0}});
+ await focusComposer('main');await key('a','KeyA',65,4);await insert('Run the queued user request');await key('Enter','Enter',13);
+ await pause();
+ const sendsBefore=await win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='sendMessage').length");
+ await emit('onDelta',{paneId:'main',delta:"Now I'll build the next image."});
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuation:{...continuation,attempt:2}});
+ await until(()=>win.webContents.executeJavaScript(`window.qaCalls.filter(c=>c[0]==='sendMessage').length===${sendsBefore+1}`),'queued user input takes priority over automatic continuation');
+ assert.equal(await continuationCalls(),1,'a queued prompt never starts a competing automatic turn');
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuationExhausted:true});
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('Stopped to avoid a retry loop')"),'retry exhaustion is explicit');
+ assert.equal(await continuationCalls(),1,'an exhausted budget cannot start another automatic turn');
+ // An empty retry must warn instead of inheriting produced=true from its predecessor.
+ await emit('onTurnStarted',{paneId:'main',turnId:'empty-retry-predecessor'});
+ await emit('onDelta',{paneId:'main',delta:"Now I'll run the remaining tests."});
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false,continuation:{...continuation,token:'next-task-ticket'}});
+ await until(async()=>await continuationCalls()===2,'a new task accepts its own continuation');
+ await emit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false});
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#main').innerText.includes('The model returned an empty response')"),'an empty automatic continuation reports its missing output');
+ // Mirrored host-started turns initialize a live scope without sending a user prompt.
+ await emit('onTurnStarted',{paneId:'multi:qa-mosaic',turnId:'mirrored-continuation',automaticContinuation:true});
+ await emit('onCommand',{paneId:'multi:qa-mosaic',phase:'started',item:{id:'mirrored-command',command:'mirrored test command',status:'inProgress'}});
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#mosaic').innerText.includes('running')"),'Mosaic mirrors show host-started commands as running');
+ assert.equal(await continuationCalls(),2,'mirrors do not start an extra automatic turn');
+ // Electron may deliver a burst before React commits the start updater.
+ // Settling that updater later must not revive a completed turn's scope.
+ const savedMainEntries=()=>win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='saveTranscript'&&c[1]==='chat-one').at(-1)?.[2]??[]");
+ const flatten=es=>es.flatMap(e=>[e,...(e.entries?flatten(e.entries):[])]);
+ await win.webContents.executeJavaScript(`
+   window.qaEmit('onTurnStarted',{paneId:'main',turnId:'burst-one',automaticContinuation:true});
+   window.qaEmit('onDelta',{paneId:'main',delta:'The first burst turn completed.'});
+   window.qaEmit('onMessageBoundary',{paneId:'main'});
+   window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false});
+ `);
+ await until(async()=>flatten(await savedMainEntries()).some(e=>e.text==='The first burst turn completed.'),'the first burst turn is persisted');
+ const emptyWarnings=es=>flatten(es).filter(e=>e.text?.includes('The model returned an empty response')).length;
+ const warningsBefore=emptyWarnings(await savedMainEntries());
+ await win.webContents.executeJavaScript(`
+   window.qaEmit('onTurnStarted',{paneId:'main',turnId:'burst-two',automaticContinuation:true});
+   window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false});
+ `);
+ await until(async()=>emptyWarnings(await savedMainEntries())===warningsBefore+1,'the next burst-delivered retry starts fresh and reports empty output');
+ assert.ok(flatten(await savedMainEntries()).filter(e=>e.kind==='work').every(e=>Number.isFinite(e.duration)),'batched folds retain finite durations');
  console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, prompt recall/draft restoration and side-chat/Mosaic scope.');win.destroy();app.quit();
 })().catch(e=>{console.error(e);app.exit(1)});

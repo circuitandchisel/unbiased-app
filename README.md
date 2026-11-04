@@ -79,6 +79,20 @@ default fonts.
   contrast. Settings → Appearance edits them live; `codex-theme-v1:{…}`
   exports import directly.
 
+## Continuing unfinished work
+
+When an interactive agent ends with a short, explicit promise to take another
+action, Unbiased can continue the already-authorized task automatically, up to
+two times. The chat shows each automatic continuation and explains when the
+limit is reached. Your queued messages take priority, and your draft stays intact.
+
+This is a conservative check for progress-only replies, not proof that every task
+is complete. It does not retry failed or interrupted turns, Plan mode, scheduled
+runs, or sub-agents. Approval requests, questions, browser handoffs and Stop block
+automatic continuation. Existing tool permissions still apply; the guard does not
+authorize deployment, publication or merging. Only the currently mounted chat can
+accept a short-lived continuation ticket.
+
 ## Agent control of in-app browser tabs
 
 The app includes a pinned `playwright-core` library. It controls Electron's

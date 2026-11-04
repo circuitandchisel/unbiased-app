@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld("unbiased", {
     attachments?: { name: string; path: string; kind?: string }[],
     options?: { computer?: boolean; visualize?: boolean; skillPath?: string; commandText?: string },
   ) => ipcRenderer.invoke("chat:send", { paneId, text, attachments, computer: options?.computer, visualize: options?.visualize, skillPath: options?.skillPath, commandText: options?.commandText }),
+  continueUnfinished: (p: { paneId: string; threadId: string; token: string }) => ipcRenderer.invoke("chat:continue-unfinished", p),
   slashCommands: (paneId: string) => ipcRenderer.invoke("chat:commands", paneId),
   chooseAttachments: () => ipcRenderer.invoke("attach:choose"),
   attachPaths: (paths: string[]) => ipcRenderer.invoke("attach:paths", { paths }),
