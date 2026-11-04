@@ -5,6 +5,56 @@ import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
 
+function sendFixture() {
+  const guard = new TurnContinuation(), sender = {};
+  const calls: Array<{ method: string; params: any }> = [];
+  let handler!: (event: any, input: any) => Promise<unknown>;
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const startAt = source.indexOf('  ipcMain.handle("chat:send",');
+  const endAt = source.indexOf("  // One-use host ticket:", startAt);
+  assert.ok(startAt > 0 && endAt > startAt);
+  const pane = { threadId: "chat", turnId: null };
+  const context = { ipcMain: { handle: (_name: string, cb: typeof handler) => { handler = cb; } },
+    panes: { main: pane }, ensurePane: () => pane, turnContinuation: guard, automaticTurnStarts: new Map(),
+    readJson: () => null, signInFile: () => "", pendingCwd: null, mainCwd: "/repo", planMode: false,
+    threadCwds: new Map([["chat", "/repo"]]), loadWorktrees: () => ({}), bundledSkillsDir: () => "/skills",
+    resolveSlashSkill: async () => null, configuredProjectContext: () => null, fileAttachmentContext: () => "",
+    pinTurnEnvironment: () => {}, turnEnvironments: { end: () => {} },
+    threadPolicy: () => ({ approvalPolicy: "on-request" }), turnSandbox: () => ({ type: "readOnly" }),
+    engine: { request: async (method: string, params: any) => { calls.push({ method, params }); return { turn: { id: "user-turn" } }; } },
+  };
+  runInNewContext(transformSync(source.slice(startAt, endAt), { loader: "ts" }).code, context);
+  // Exercise the actual preload serialization as well as the production host handler.
+  const preload = readFileSync(new URL("../preload/index.ts", import.meta.url), "utf8");
+  const fieldAt = preload.indexOf("  sendMessage: (");
+  const fieldEnd = preload.indexOf("  continueUnfinished:", fieldAt);
+  const bridge: any = { ipcRenderer: { invoke: (_method: string, payload: any) => handler({ sender }, payload) } };
+  runInNewContext(transformSync(`globalThis.api = ({${preload.slice(fieldAt, fieldEnd)}})`, { loader: "ts" }).code, bridge);
+  return { guard, calls, send: (wire: string, userRequests?: unknown) => bridge.api.sendMessage("main", wire, [], { userRequests }) };
+}
+
+test("annotation Proceed reaches the host through the preload without treating quoted text as authorization", async () => {
+  const wire = "Regarding this excerpt from the conversation:\n\n> But first, let me address the immediate EC2 E2E failure.\nComment: Proceed";
+  const reply = "I need to find where the timeout is configured and increase it. Let me trace where this value comes from.";
+  const f = sendFixture(); await f.send(wire, ["Proceed"]); f.guard.assistant("chat", reply);
+  assert.ok(f.guard.completed("chat", "completed", true).offer);
+  assert.equal(f.calls[0].params.input[0].text, wire, "the agent still receives the selected excerpt");
+  for (const request of ["", "Why is this happening?", "Review this excerpt"]) {
+    const denied = sendFixture(); await denied.send(wire, request ? [request] : []); denied.guard.assistant("chat", reply);
+    assert.deepEqual(denied.guard.completed("chat", "completed", true), {}, request || "empty user intent");
+  }
+  const legacy = sendFixture(); await legacy.send("Proceed"); legacy.guard.assistant("chat", reply);
+  assert.ok(legacy.guard.completed("chat", "completed", true).offer, "plain senders without the optional field retain their existing behavior");
+  const multiple = sendFixture(); await multiple.send(wire, ["What does this part mean?", "Proceed"]); multiple.guard.assistant("chat", reply);
+  assert.ok(multiple.guard.completed("chat", "completed", true).offer, "each user-authored comment can express the instruction");
+});
+test("malformed user intent is rejected before starting a turn", async () => {
+  for (const value of [null, "Proceed", { text: "Proceed" }, [42]]) {
+    const f = sendFixture(); await assert.rejects(f.send("Proceed", value), /Invalid user request/);
+    assert.equal(f.calls.length, 0);
+  }
+});
+
 function fixture(start?: () => Promise<unknown>) {
   const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false); guard.assistant("chat", "Now I'll run the tests.");
   const ticket = guard.completed("chat", "completed", true).offer!;

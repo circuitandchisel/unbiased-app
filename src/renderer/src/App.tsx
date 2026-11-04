@@ -646,7 +646,7 @@ declare global {
         paneId: PaneId,
         text: string,
         attachments?: Attachment[],
-        options?: { computer?: boolean; visualize?: boolean; skillPath?: string; commandText?: string },
+        options?: { computer?: boolean; visualize?: boolean; skillPath?: string; commandText?: string; userRequests?: string[] },
       ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
       continueUnfinished: (p: { paneId: string; threadId: string; token: string }) => Promise<{ ok: boolean }>;
       slashCommands: (paneId: PaneId) => Promise<{ commands: SlashCommand[]; error: string | null }>;
@@ -10882,7 +10882,10 @@ function ChatPane({
       return next;
     });
     try {
-      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, skillPath: q.skillPath, commandText: q.commandText });
+      // The wire message includes quoted excerpts. Only the composer and
+      // user-authored comments express intent for automatic continuation.
+      const userRequests = [q.text, ...(q.annotations ?? []).map(a => a.comment ?? "")].filter(s => s.trim());
+      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, skillPath: q.skillPath, commandText: q.commandText, userRequests });
       threadIdRef.current = res.threadId;
       onThreadCreated?.(res.threadId, res.created, q.text);
     } catch (err) {

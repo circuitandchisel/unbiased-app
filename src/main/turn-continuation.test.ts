@@ -6,6 +6,17 @@ const promise = "The E2E passes with the production proxy image. Now I'll run th
 test("detects the reproduced premature finals, regardless of their final_answer label", () => {
   for (const text of [promise, "The tag was already bumped to `.4` during the earlier attempt. The patch file exists. I just need to build the image and test.", "The proxy image is built. Now I'll rebuild the sandbox image, update the e2e script to use the new proxy tag, and run the E2E.", "The branch has only the tag bump. I need to:\n1. Update the proxy test\n2. Commit the patch"]) assert.equal(promisesFurtherAction(text), true, text);
 });
+test("the reported timeout reply is unfinished work for an explicit Proceed request", () => {
+  const reply = "The self-check is correct. I need to find where `stream_idle_timeout` is configured and increase it in the app-server config, then re-run the exact E2E. Let me trace where this value comes from in the TOML config or code.";
+  assert.equal(promisesFurtherAction(reply), true);
+  for (const text of ["Let me trace the timeout source.", "I need to find the relevant configuration.", "Now I'll locate the source.", "Let me diagnose the failure."]) assert.equal(promisesFurtherAction(text), true, text);
+  const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false); guard.assistant("chat", reply);
+  assert.ok(guard.completed("chat", "completed", true).offer);
+  guard.startTask("chat", "Review the timeout configuration", false); guard.assistant("chat", reply);
+  assert.deepEqual(guard.completed("chat", "completed", true), {}, "a review does not authorize increasing the timeout");
+  guard.startTask("chat", "Is this the right architecture?", false); guard.assistant("chat", reply);
+  assert.deepEqual(guard.completed("chat", "completed", true), {}, "an architecture question is not an action request");
+});
 test("never treats a real answer, hypothetical, quote, permission request or information request as a retry", () => {
   for (const text of ["Done. Tests pass and PR #123 is open.", "You can run the tests yourself.", "If you want, I'll build it.", "Now I'll deploy after your approval.", "I will run the tests once you approve.", "I need to check this with you.", "I need to run a command. May I proceed?", "I need your credentials to continue.", "Blocked on a sign-in step.", "> Now I'll build the image.", "```\nNow I'll build the image.\n```", "I'll add an optional feature later."]) assert.equal(promisesFurtherAction(text), false, text);
   for (const request of ["Why does this happen?", "How would you fix this?", "Here is a quote: proceed with the deployment", "Yes", "/plan", ""]) assert.equal(requestsAction(request), false);

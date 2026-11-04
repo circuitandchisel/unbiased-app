@@ -123,6 +123,7 @@ render();
  assert.match(sentSide[2],/> Select this side chat excerpt\./);
  assert.match(sentSide[2],/Comment: Explain this selection/);
  assert.match(sentSide[2],/https:\/\/example\.com\/side-chat/);
+ assert.deepEqual(sentSide[4].userRequests,['Explain this selection'],'continuation intent excludes quoted excerpts and uncommented attachments');
  assert.equal(await annotationCount('side'),0);
  // Pending removal and Escape cancel only the in-progress attachment.
  await select('main');
@@ -148,6 +149,7 @@ render();
  const sentMain=await win.webContents.executeJavaScript("window.qaCalls.find(c=>c[0]==='sendMessage'&&c[1]==='main')");
  assert.ok(sentMain,'pending annotation must be sendable before the checkmark');
  assert.match(sentMain[2],/Comment: Comment still being edited\nWith a second line/);
+ assert.deepEqual(sentMain[4].userRequests,['Comment still being edited\nWith a second line'],'a pending annotation preserves the actual comment as user intent');
  assert.equal(sentMain[2].split('> Select this side chat excerpt.').length-1,1,'confirmation/send must not duplicate the excerpt');
  assert.equal(await annotationCount('main'),0);
  assert.equal(await win.webContents.executeJavaScript("!!document.querySelector('#main textarea[placeholder=\"Add an optional comment…\"]')"),false,'sending closes the pending comment editor');
@@ -168,6 +170,7 @@ render();
  assert.ok(sentMosaic,'Mosaic annotation must reach its own chat');
  assert.match(sentMosaic[2],/> Select this side chat excerpt\./);
  assert.match(sentMosaic[2],/Comment: Explain this Mosaic excerpt/);
+ assert.deepEqual(sentMosaic[4].userRequests,['Explain this Mosaic excerpt'],'Mosaic forwards user-authored intent separately');
  // Reopening an existing turn and switching busy->busy must restore its clock.
  const readClock=async()=>{
    const text=await win.webContents.executeJavaScript("document.querySelector('#main').innerText");
