@@ -57,8 +57,11 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  await until(`!document.querySelector('[data-mosaic-chat-id]')`);
  await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('1m 14s')`);
  assert.ok((await mainText()).includes('Partial reply from Mosaic. Tail received while opening.'));
- await ev(`window.qaNow+=2000;window.qaEmit('onDelta',{paneId:'main',delta:' More text after navigation.'})`);await pause(150);
- assert.ok((await mainText()).includes('1m 16s'));assert.ok((await mainText()).includes('More text after navigation.'));
+ // The elapsed display updates on an interval. Wait for its observable
+ // result instead of assuming the CI renderer paints within 150 ms.
+ await ev(`window.qaNow+=2000;window.qaEmit('onDelta',{paneId:'main',delta:' More text after navigation.'})`);
+ await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('1m 16s')`);
+ assert.ok((await mainText()).includes('More text after navigation.'));
  // A different Mosaic conversation can still be thinking with no text yet.
  await ev(`window.qaRunning['chat-two']=true`);await mosaic();
  await until(`document.querySelector('[data-mosaic-chat-id="chat-two"]').innerText.includes('45s')`);
@@ -66,7 +69,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  await until(`!document.querySelector('[data-mosaic-chat-id]')`);
  await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('thinking… 45s')`);
  await ev(`window.qaNow+=3000;window.qaStream['chat-two']='First text after thinking.';window.qaEmit('onDelta',{paneId:'main',delta:window.qaStream['chat-two']})`);await pause(150);
- assert.ok((await mainText()).includes('48s'));assert.ok((await mainText()).includes('First text after thinking.'));
+ await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('48s')`);assert.ok((await mainText()).includes('First text after thinking.'));
  await ev(`window.qaRunning['chat-two']=false;window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed'})`);await pause(150);
  assert.equal((await mainText()).includes('thinking…'),false);
  assert.ok((await mainText()).includes('Worked for 48s'),'completed duration uses the original turn start');
@@ -84,7 +87,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  await ev(`window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed'});window.qaApproval['chat-two']=null`);await pause(100);
  await ev(`window.qaEmit('onTurnStarted',{paneId:'main',turnId:'mirrored-normal'})`);await pause(100);
  await ev(`window.qaNow+=3000`);await pause(150);
- assert.ok((await mainText()).includes('3s'),'normal mirrored starts initialize the live clock');
+ await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('thinking… 3s')`);
  assert.deepEqual(errors,[]);
  fs.writeFileSync(join(fixture,'handoff.png'),(await win.webContents.capturePage()).toPNG());
  console.log('PASS: same-thread Mosaic handoff refreshes live state; source stays mounted during load; in-flight text and subsequent deltas survive; thinking-only and paused-approval clocks carry over; mirrored starts initialize timing. Artifacts: '+fixture);
