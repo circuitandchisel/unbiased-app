@@ -4,7 +4,7 @@ import { InAppBrowserPreview } from "./InAppBrowserPreview";
 import type { SideBrowserHelp, SideBrowserTab, SideBrowserUpdate } from "../../shared/side-browser";
 import { AgentMirrorPane } from "./AgentMirrorPane";
 import { useSlashCommands } from "./slash-command-menu";
-import { commandToken, type SlashCommand } from "../../shared/slash-commands";
+import { commandToken, type SlashCommand, type SlashQuery } from "../../shared/slash-commands";
 import { PersonalizationSettings, type AgentInstructionsAPI } from "./PersonalizationSettings";
 import type { AgentInstructions, AgentInstructionsSaveResult, SaveAgentInstructions } from "../../shared/agent-instructions";
 import type { SkillOwnership } from "../../main/skill-ownership";
@@ -9684,7 +9684,10 @@ function ChatPane({
     drafts.setText(text);
     setDraft(text);
   };
-  const slash = useSlashCommands({ paneId, contextKey: `${threadId ?? "new"}:${reset.nonce}`, connected, draft, changeDraft, togglePlan: onTogglePlanMode, focus: () => requestAnimationFrame(() => composerRef.current?.focus("end")) });
+  const [slashQuery, setSlashQuery] = useState<SlashQuery | null>(null);
+  const slash = useSlashCommands({ paneId, contextKey: `${threadId ?? "new"}:${reset.nonce}`, connected, draft, cursorQuery: slashQuery,
+    replaceCommand: (query, text) => composerRef.current?.replaceCommand(query, text), togglePlan: onTogglePlanMode,
+    focus: () => requestAnimationFrame(() => composerRef.current?.focus()) });
   const canTypeToFocusRef = useRef(canTypeToFocus);
   canTypeToFocusRef.current = canTypeToFocus;
   useEffect(() => {
@@ -12236,6 +12239,7 @@ function ChatPane({
             paneId={paneId}
             value={draft}
             onChange={changeDraft}
+            onSlashQuery={setSlashQuery}
             onKeyDown={(e) => {
               if (slash.keyDown(e)) return;
               if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) {

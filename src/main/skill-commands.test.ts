@@ -37,10 +37,15 @@ test("the spaced Code Review alias resolves the same skill and preserves argumen
   assert.notEqual(commandToken("/Code Reviewer")?.name, "CodeReview");
 });
 
-test("ambiguous skill names require a source selection; revalidation blocks stale project choices", async () => {
+test("Unbiased is the default for duplicate names; explicit choices are still revalidated", async () => {
   const local = { ...bundled, path: "/project/.codex/skills/code-review/SKILL.md", scope: "repo" };
-  const duplicates = async () => ({ data: [{ skills: [bundled, local] }] });
-  await assert.rejects(resolveSlashSkill(duplicates, "/project", "/app/skills", "/CodeReview"), /More than one/);
+  const duplicates = async () => ({ data: [{ skills: [local, bundled] }] });
+  assert.equal((await resolveSlashSkill(duplicates, "/project", "/app/skills", "Please /CodeReview this PR"))?.path, bundled.path);
+  const listed = await listSlashCommands(duplicates, "/project", "/app/skills");
+  assert.deepEqual(listed.filter(command => command.command === "CodeReview").map(command => command.source), ["Unbiased", "This project"]);
+  const shared = { ...local, path: "/shared/code-review/SKILL.md", scope: "user" };
+  await assert.rejects(resolveSlashSkill(async () => ({ data: [{ skills: [shared, local] }] }), "/project", "/app/skills", "/CodeReview"), /More than one/);
+  assert.equal((await resolveSlashSkill(async () => ({ data: [{ skills: [{ ...bundled, enabled: false }, local] }] }), "/project", "/app/skills", "/CodeReview"))?.path, local.path);
   assert.deepEqual(await resolveSlashSkill(duplicates, "/project", "/app/skills", "/CodeReview", local.path), { type: "skill", name: "code-review", path: local.path });
   await assert.rejects(resolveSlashSkill(request, "/another-project", "/app/skills", "/CodeReview", local.path), /unavailable/);
   await assert.rejects(listSlashCommands(async () => ({}), null, "/app/skills"), /Could not load/);
@@ -64,5 +69,12 @@ for (const checkout of ["new-worktree", "existing-worktree"]) test(`first send p
   await assert.rejects(resolveSlashSkill(get, cwd, "/app/skills", "/ProjectCheck", "/other/.codex/skills/project-check/SKILL.md", "/project"), /unavailable/);
   for (const skills of [[], [{ ...destination, enabled: false }], [{ ...destination, scope: "user" }]]) {
     await assert.rejects(resolveSlashSkill(async () => ({ data: [{ skills }] }), cwd, "/app/skills", "/ProjectCheck", selection, "/project"), /unavailable/);
+  }
+});
+
+test("inline commands resolve after ordinary slash text and ignore code examples", async () => {
+  assert.equal((await resolveSlashSkill(request, "/project", "/app/skills", "Compare /unknown and then /CodeReview this PR"))?.path, bundled.path);
+  for (const text of ["See https://example.com/CodeReview", "Read /CodeReview/file", "Use `/CodeReview` as an example", "> /CodeReview", "```\n/CodeReview\n``` "]) {
+    assert.equal(commandToken(text), null, text);
   }
 });
