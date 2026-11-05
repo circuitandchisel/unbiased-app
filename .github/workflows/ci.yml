@@ -55,6 +55,9 @@ jobs:
           node node_modules/electron/install.js
           npm run smoke:transcript-actions
 
+      - name: Smoke test Mosaic scroll stability
+        run: npm run smoke:mosaic-stability
+
       - name: Smoke test custom agent instructions settings
         run: |
           npx electron-vite build

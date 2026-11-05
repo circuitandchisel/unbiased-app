@@ -11768,10 +11768,13 @@ function ChatPane({
               }}
               startReached={loadEarlierBlocks}
               components={transcriptComponents}
+              // Keep paragraph/turn margins inside each measured row. Collapsed
+              // margins make Virtuoso's total height oscillate as rows enter and
+              // leave the viewport, fighting bottom-follow (especially in Mosaic).
               itemContent={(index) => {
                 const i = index - firstBlockIndex;
                 if (i === displayBlocks.length) return (
-                  <div style={{ maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
+                  <div style={{ display: "flow-root", maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
                     {compacting ? (
                       <div style={{ display: "flex", justifyContent: "flex-start", margin: "10px 0" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 14px", borderRadius: 12, background: colors.panel, border: `1px solid ${colors.border}`, fontSize: 14, color: colors.dim }}>
@@ -11795,7 +11798,7 @@ function ChatPane({
                 const prev = displayBlocks[i - 1];
                 const afterWork = prev?.kind === "entry" && prev.entry.kind === "work";
                 return (
-                  <div style={{ maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
+                  <div style={{ display: "flow-root", maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
                     {b.kind === "entry" && b.entry.kind === "user" && b.entry.at !== undefined && datedUserIndices.has(b.key) && (
                       <div style={{ textAlign: "center", margin: "28px 0 18px", color: colors.dim, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
                         {formatConversationDayMarker(b.entry.at)}
