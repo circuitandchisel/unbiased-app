@@ -1,3 +1,4 @@
+import { slashQueryAt, type SlashQuery } from "../../shared/slash-commands";
 import { forwardRef, useEffect, useImperativeHandle, useRef, type ClipboardEvent, type KeyboardEvent } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -8,6 +9,7 @@ import TaskItem from "@tiptap/extension-task-item";
 
 export type MarkdownComposerHandle = {
   focus: (position?: "end") => void;
+  replaceCommand: (query: SlashQuery, text: string) => void;
   appendText: (text: string) => void;
   replaceSelection: (text: string) => void;
   recallPrompt: (text: string) => void;
@@ -23,15 +25,28 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
   paneId: string;
   value: string;
   onChange: (value: string) => void;
+  onSlashQuery?: (query: SlashQuery | null) => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder: string;
   title: string;
   disabled: boolean;
   suggestions?: { id: string; activeId?: string };
-}>(function MarkdownComposer({ paneId, value, onChange, onKeyDown, onPaste, placeholder, title, disabled, suggestions }, ref) {
+}>(function MarkdownComposer({ paneId, value, onChange, onSlashQuery, onKeyDown, onPaste, placeholder, title, disabled, suggestions }, ref) {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onSlashQueryRef = useRef(onSlashQuery);
+  onSlashQueryRef.current = onSlashQuery;
+  function publishSlashQuery(editor: import("@tiptap/react").Editor) {
+    const { $from, empty } = editor.state.selection;
+    if (!empty || $from.parent.type.spec.code || $from.marks().some(mark => mark.type.name === "code")
+      || Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1).type.name).includes("blockquote")) {
+      onSlashQueryRef.current?.(null); return;
+    }
+    const text = $from.parent.textBetween(0, $from.parent.content.size, "\n", "\ufffc");
+    const query = slashQueryAt(text, $from.parentOffset);
+    onSlashQueryRef.current?.(query ? { ...query, from: $from.start() + query.from, to: $from.start() + query.to } : null);
+  }
   const readyRef = useRef(false);
   const syncingRef = useRef(false);
   const lastMarkdownRef = useRef<string | null>(null);
@@ -49,7 +64,9 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
     editorProps: {
       attributes: { "data-pane-id": paneId, "aria-label": "Message", role: "textbox", "aria-multiline": "true" },
     },
+    onSelectionUpdate: ({ editor }) => publishSlashQuery(editor),
     onUpdate: ({ editor }) => {
+      publishSlashQuery(editor);
       if (!readyRef.current || syncingRef.current) return;
       const markdown = editor.getMarkdown();
       if (markdown === lastMarkdownRef.current) return;
@@ -95,6 +112,12 @@ export const MarkdownComposer = forwardRef<MarkdownComposerHandle, {
         if (direction === "up" ? index > 0 : index < count - 1) return false;
       }
       return editor.view.endOfTextblock(direction);
+    },
+    replaceCommand: (query, text) => {
+      if (!editor || query.from < 0 || query.to > editor.state.doc.content.size) return;
+      const to = text.endsWith(" ") && editor.state.doc.textBetween(query.to, Math.min(query.to + 1, editor.state.doc.content.size)) === " " ? query.to + 1 : query.to;
+      if (text) editor.chain().focus().insertContentAt({ from: query.from, to }, { type: "text", text }).run();
+      else editor.chain().focus().deleteRange({ from: query.from, to }).run();
     },
     focus: (position) => { editor?.commands.focus(position); },
     appendText: (text) => { editor?.chain().focus("end").insertContent({ type: "text", text }).run(); },
