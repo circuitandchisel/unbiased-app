@@ -1795,6 +1795,7 @@ export function App() {
     resume?: { running: boolean; approvals: HeldApproval[]; userInputs: UserInputRequest[] } | null;
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
+    runningTurnElapsedSeconds?: number;
     compacting?: boolean;
   }>({ entries: [], nonce: 0 });
   const mainDraftsRef = useRef<ConversationDrafts<Attachment> | null>(null);
@@ -2372,14 +2373,15 @@ export function App() {
     [],
   );
 
-  async function openThread(id: string, record = true) {
+  async function openThread(id: string, record = true, readClock?: LiveTurnClockReader) {
     // Leaving a full-page view is the same gesture as switching chats —
     // clicking a destination in the nav. Both entry points clear them so the
     // view never outlives the row that is lit.
     setScheduledOpen(false);
     setConnectorsOpen(false);
-    setMultiOpen(false);
-    if (id === activeThreadId) {
+    // A Mosaic tile may have started a turn since the hidden main pane last
+    // showed this thread. Read it again and keep the source mounted until ready.
+    if (id === activeThreadId && !multiOpen) {
       setUnreadCompletedThreads((current) => setThreadUnread(current, id, false));
       if (record) visit({ kind: "thread", id });
       return;
@@ -2390,6 +2392,9 @@ export function App() {
     const stale = () => openSeqRef.current !== seq;
     const res = await window.unbiased.openThread(id);
     if (stale() || !res) return;
+    const sourceClock = readClock?.();
+    const clock = sourceClock?.threadId === id && sourceClock.running && res.running ? sourceClock : null;
+    setMultiOpen(false);
     let entries = res.entries;
     if (res.running && res.streamText) {
       // The reply is still streaming. Main accumulated the full partial
@@ -2417,7 +2422,8 @@ export function App() {
       sessionId: res.sessionId,
       offset: res.offset,
       runningTurnStart: res.runningTurnStart,
-      runningTurnStartedAt: res.runningTurnStartedAt,
+      runningTurnStartedAt: clock?.startedAt ?? res.runningTurnStartedAt,
+      runningTurnElapsedSeconds: clock?.elapsedSeconds,
       compacting: res.compacting,
     }));
     resetSideView();
@@ -4274,7 +4280,7 @@ export function App() {
               onTogglePlanMode={togglePlanMode}
               onAdd={(id) => setMultiIds((ids) => addMultiViewChat(ids, id))}
               onCreate={createMosaicChat}
-              onOpenChat={(id) => { setNavPeekOpen(false); void openThread(id); }}
+              onOpenChat={(id, readClock) => { setNavPeekOpen(false); void openThread(id, true, readClock); }}
               onRemove={removeFromMultiView}
               onCreateProject={(id) => setEditProj({ mode: "create", id: "", path: "", name: "", folders: [], primary: "", icon: "folder", color: null, pickerOpen: false, error: null, targetFreshId: id })}
               onFreshTurnLanded={(id) => {
@@ -9151,6 +9157,9 @@ function useEntryTransition(open = true): boolean {
   return shown;
 }
 
+type LiveTurnClock = { threadId: string | null; running: boolean; startedAt: number | null; elapsedSeconds: number };
+type LiveTurnClockReader = () => LiveTurnClock | null;
+
 function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, threads, width, connected, accessMode, onAccessModeChange, planMode, onTogglePlanMode, onAdd, onCreate, onOpenChat, onRemove, onCreateProject, onFreshTurnLanded, onSelectFreshEnvironment, onTurnLanded, onOpenFile, onPreviewImage, onOpenLink, onOpenMcp, onOpenConnectors, onOpenSkills }: {
   ids: string[];
   freshIds: Set<string>;
@@ -9167,7 +9176,7 @@ function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, 
   onTogglePlanMode: () => void;
   onAdd: (id: string) => void;
   onCreate: () => Promise<void>;
-  onOpenChat: (id: string) => void;
+  onOpenChat: (id: string, readClock?: LiveTurnClockReader) => void;
   onRemove: (id: string) => void;
   onCreateProject: (id: string) => void;
   onFreshTurnLanded: (id: string) => void;
@@ -9198,7 +9207,7 @@ function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, 
         <MosaicEmptyState onCreate={onCreate} />
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "grid", gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(${rows === 1 ? 0 : 420}px, 1fr))`, gap: 6, padding: 6 }}>
-          {ids.map((id, index) => <MultiViewTile key={id} id={id} columnSpan={columnSpans[index]} fresh={freshIds.has(id)} project={freshProjects[id] ?? null} work={freshWork[id]} projects={projects} drafts={drafts.get(id)} onSelectEnvironment={(project, mode, dir) => onSelectFreshEnvironment(id, project, mode, dir)} onCreateProject={() => onCreateProject(id)} title={threads.find((thread) => thread.id === id)?.title ?? "New chat"} connected={connected} accessMode={accessMode} onAccessModeChange={onAccessModeChange} planMode={planMode} onTogglePlanMode={onTogglePlanMode} onOpenChat={() => onOpenChat(id)} onRemove={() => onRemove(id)} onTurnLanded={() => { onTurnLanded(); if (freshIds.has(id)) onFreshTurnLanded(id); }} onOpenFile={onOpenFile} onPreviewImage={onPreviewImage} onOpenLink={onOpenLink} onOpenMcp={onOpenMcp} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />)}
+          {ids.map((id, index) => <MultiViewTile key={id} id={id} columnSpan={columnSpans[index]} fresh={freshIds.has(id)} project={freshProjects[id] ?? null} work={freshWork[id]} projects={projects} drafts={drafts.get(id)} onSelectEnvironment={(project, mode, dir) => onSelectFreshEnvironment(id, project, mode, dir)} onCreateProject={() => onCreateProject(id)} title={threads.find((thread) => thread.id === id)?.title ?? "New chat"} connected={connected} accessMode={accessMode} onAccessModeChange={onAccessModeChange} planMode={planMode} onTogglePlanMode={onTogglePlanMode} onOpenChat={(readClock) => onOpenChat(id, readClock)} onRemove={() => onRemove(id)} onTurnLanded={() => { onTurnLanded(); if (freshIds.has(id)) onFreshTurnLanded(id); }} onOpenFile={onOpenFile} onPreviewImage={onPreviewImage} onOpenLink={onOpenLink} onOpenMcp={onOpenMcp} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />)}
         </div>
       )}
     </div>
@@ -9490,7 +9499,7 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
   onAccessModeChange: (mode: AccessMode) => void;
   planMode: boolean;
   onTogglePlanMode: () => void;
-  onOpenChat: () => void;
+  onOpenChat: (readClock?: LiveTurnClockReader) => void;
   onRemove: () => void;
   onTurnLanded: () => void;
   onOpenFile: (path: string) => void;
@@ -9500,6 +9509,7 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
   onOpenConnectors: () => void;
   onOpenSkills: () => void;
 }) {
+  const liveClockRef = useRef<LiveTurnClockReader | null>(null);
   const [loaded, setLoaded] = useState<Awaited<ReturnType<Window["unbiased"]["mountThread"]>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -9524,7 +9534,7 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
     <section data-mosaic-chat-id={id} style={{ gridColumn: `span ${columnSpan}`, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", border: `1px solid ${colors.border}`, borderRadius: 6, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px 6px 12px", borderBottom: `1px solid ${colors.border}` }}>
         <span title={title} style={{ minWidth: 0, flex: 1, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", fontSize: 13, fontWeight: 600 }}>{title}</span>
-        <IconButton title={`Open ${title} outside Mosaic`} onClick={onOpenChat}>
+        <IconButton title={`Open ${title} outside Mosaic`} onClick={() => onOpenChat(() => liveClockRef.current?.() ?? null)}>
           <svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true">
             <g stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M25 11H13C6.5 11 2 15.5 2 22v13c0 6.5 4.5 11 11 11h13c6.5 0 11-4.5 11-11V22" />
@@ -9547,6 +9557,7 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
           emptyState={null}
           composerHeader={fresh ? <MosaicNewChatEnvironment project={project} work={work} projects={projects} onSelect={onSelectEnvironment} onCreateProject={onCreateProject} disabled={busy} /> : undefined}
           onBusyChange={setBusy}
+          liveClockRef={liveClockRef}
           accessMode={accessMode}
           onAccessModeChange={onAccessModeChange}
           planMode={planMode}
@@ -9574,6 +9585,7 @@ function ChatPane({
   onContextClear,
   emptyState,
   onBusyChange,
+  liveClockRef,
   onTurnLanded,
   onThreadCreated,
   onAskSideChat,
@@ -9611,12 +9623,14 @@ function ChatPane({
     resume?: { running: boolean; approvals: HeldApproval[]; userInputs: UserInputRequest[] } | null;
     runningTurnStart?: number | null;
     runningTurnStartedAt?: number | null;
+    runningTurnElapsedSeconds?: number;
     compacting?: boolean;
   };
   contextChip?: string | { text: string; comment?: string; tag?: string; thumb?: string } | null;
   onContextClear?: () => void;
   emptyState: React.ReactNode;
   onBusyChange?: (busy: boolean) => void;
+  liveClockRef?: { current: LiveTurnClockReader | null };
   onTurnLanded?: () => void;
   /** The thread this pane is on, once the engine has made one. Threads are
    *  created lazily by the first send, and until App knows the id it treats
@@ -10171,9 +10185,9 @@ function ChatPane({
       ? (reset.runningTurnStart ?? reset.entries.length)
       : null;
     turnStartedAtRef.current = reset.resume?.running ? (reset.runningTurnStartedAt ?? null) : null;
-    elapsedBaseRef.current = turnStartedAtRef.current === null
-      ? 0
-      : Math.max(0, (Date.now() - turnStartedAtRef.current) / 1000);
+    elapsedBaseRef.current = reset.resume?.running && reset.runningTurnElapsedSeconds !== undefined
+      ? reset.runningTurnElapsedSeconds
+      : turnStartedAtRef.current === null ? 0 : Math.max(0, (Date.now() - turnStartedAtRef.current) / 1000);
     elapsedActiveSinceRef.current = null;
     setElapsed(elapsedBaseRef.current);
     for (const held of reset.resume?.approvals ?? []) applyApproval(held);
@@ -10284,6 +10298,12 @@ function ChatPane({
   const turnStartIndexRef = useRef<number | null>(null);
   const turnStartedAtRef = useRef<number | null>(null);
   const pendingTurnScopeRef = useRef<{ start: number } | null>(null);
+  // A view handoff preserves active time (including approval pauses), not an
+  // approximation reconstructed from the wall-clock turn start in history.
+  if (liveClockRef) liveClockRef.current = () => ({
+    threadId: threadIdRef.current, running: busy, startedAt: turnStartedAtRef.current,
+    elapsedSeconds: elapsedBaseRef.current + (elapsedActiveSinceRef.current === null ? 0 : Math.max(0, (Date.now() - elapsedActiveSinceRef.current) / 1000)),
+  });
 
   // An undecided approval means the agent is waiting on the human — the
   // thinking clock pauses rather than blaming the model for our latency.
@@ -10307,10 +10327,10 @@ function ChatPane({
   // (~3-5s of silence), so the wait needs to look attended, not frozen.
   // The clock accumulates across approval pauses instead of resetting.
   useEffect(() => {
-    if (!busy) {
-      setElapsed(0);
-      return;
-    }
+    // Reset/new-turn setup owns the initial value. Clearing it during the
+    // first idle render overwrites a restored clock before busy state applies,
+    // leaving an approval-paused conversation showing zero indefinitely.
+    if (!busy) return;
     if (awaitingApproval || awaitingInput) return; // frozen while the human decides
     elapsedActiveSinceRef.current ??= Date.now();
     const tick = () => setElapsed(elapsedBaseRef.current + Math.max(0, (Date.now() - (elapsedActiveSinceRef.current ?? Date.now())) / 1000));
@@ -10331,9 +10351,9 @@ function ChatPane({
     const offs = [
       window.unbiased.onTurnStarted((p) => {
         if (p.paneId !== paneId) return;
-        // Host-started continuations (and their Mosaic mirrors) do not go
-        // through sendNow. Give them the same live-output scope and clock.
-        if (p.automaticContinuation && turnStartIndexRef.current === null) {
+        // Turns started in another view (including Mosaic) and automatic
+        // continuations bypass this pane's sendNow. Mirrors still need a clock.
+        if (turnStartIndexRef.current === null) {
           const scope = prepareTurnOutput();
           setEntries(es => {
             resolveTurnOutputScope(scope, es.length);
