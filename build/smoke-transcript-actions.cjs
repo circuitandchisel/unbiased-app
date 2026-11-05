@@ -53,7 +53,7 @@ render();
  const pause=()=>new Promise(r=>setTimeout(r,100));
  const until=async(check,message)=>{
    for(let attempt=0;attempt<30;attempt++){if(await check())return;await pause();}
-   const diagnostics=await win.webContents.executeJavaScript("({sends:window.qaCalls.filter(c=>c[0]==='sendMessage'),sideText:document.querySelector('#side').innerText,keys:window.qaKeyEvents,activeElement:document.activeElement?.outerHTML?.slice(0,500),mainText:document.querySelector('#main').innerText,copyAnswers:[...document.querySelectorAll('#main button[aria-label=\"Copy reply\"]')].map(b=>b.parentElement.parentElement.textContent)})");
+   const diagnostics=await win.webContents.executeJavaScript("({sends:window.qaCalls.filter(c=>c[0]==='sendMessage'),sideText:document.querySelector('#side').innerText,keys:window.qaKeyEvents,selection:{anchor:window.getSelection()?.anchorOffset,focus:window.getSelection()?.focusOffset,text:window.getSelection()?.anchorNode?.textContent},activeElement:document.activeElement?.outerHTML?.slice(0,500),mainText:document.querySelector('#main').innerText,copyAnswers:[...document.querySelectorAll('#main button[aria-label=\"Copy reply\"]')].map(b=>b.parentElement.parentElement.textContent)})");
    assert.fail(message+JSON.stringify(diagnostics));
  };
  const exists=selector=>win.webContents.executeJavaScript(`!!document.querySelector(${JSON.stringify(selector)})`);
@@ -243,8 +243,34 @@ render();
  };
  const key=async(key,code,windowsVirtualKeyCode,modifiers=0)=>{await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,modifiers});await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers})};
  const insert=text=>win.webContents.debugger.sendCommand('Input.insertText',{text});
+ // Position the native DOM caret explicitly. A burst of debugger ArrowLeft
+ // events can arrive before Chromium has settled the insertion on CI macOS.
+ // Completion itself still uses trusted keyboard events below.
+ const placeCaret=async(id,offset)=>{
+   await win.webContents.executeJavaScript(`(()=>{
+     const editor=document.querySelector(${JSON.stringify(composer(id))});
+     editor.focus();
+     const nodes=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT);
+     let remaining=${offset},node;
+     while((node=nodes.nextNode())){
+       if(remaining<=node.textContent.length){
+         window.getSelection().setPosition(node,remaining);
+         document.dispatchEvent(new Event('selectionchange'));
+         return;
+       }
+       remaining-=node.textContent.length;
+     }
+     throw new Error('Caret offset is outside the composer');
+   })()`);
+   await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+   assert.equal(await win.webContents.executeJavaScript(`(()=>{
+     const range=document.createRange();range.selectNodeContents(document.querySelector(${JSON.stringify(composer(id))}));
+     const selection=window.getSelection();range.setEnd(selection.anchorNode,selection.anchorOffset);return range.toString().length;
+   })()`),offset,'native caret reaches the inline command');
+ };
+
  await focusComposer('main');await insert('Please /cOd origin/main');
- for(let i=0;i<' origin/main'.length;i++)await key('ArrowLeft','ArrowLeft',37);
+ await placeCaret('main','Please /cOd'.length);
  await until(()=>win.webContents.executeJavaScript("document.querySelectorAll('#main [role=option]').length===3"),'case-insensitive prefix shows matching enabled commands');
  assert.match(await win.webContents.executeJavaScript("document.querySelector('#main [role=listbox]').innerText"),/Code Review/);
  if(process.env.UNBIASED_SLASH_SCREENSHOT)require('node:fs').writeFileSync(process.env.UNBIASED_SLASH_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
@@ -413,7 +439,7 @@ render();
  await pause();await insert('this PR');await key('Enter','Enter',13);
  await until(()=>win.webContents.executeJavaScript("window.qaCalls.some(c=>c[0]==='sendMessage'&&c[4]?.skillPath==='/qa/shared/code-review/SKILL.md')"),'explicit Shared selection overrides the Unbiased default');
  await focusComposer('main');await insert('Please /Pl now');
- for(let i=0;i<' now'.length;i++)await key('ArrowLeft','ArrowLeft',37);
+ await placeCaret('main','Please /Pl'.length);
  await until(()=>exists('#main [role=option]'),'inline Plan picker opens at caret');
  await key('Tab','Tab',9);
  await until(()=>win.webContents.executeJavaScript("document.querySelector('#main [role=textbox]').textContent==='Please  now'"),'Plan removes only its token and preserves the surrounding draft');
