@@ -1,4 +1,5 @@
-import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
+import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE, isContinuationInput } from "./turn-continuation";
+import { systemOneContinuationJudge } from "./continuation-judge";
 import { retainBrowserCapture, readBrowserCapture, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
 import { collectBrowserCaptures } from "../shared/browser-capture";
 import { SIDE_BROWSER_TOOLS, SideBrowserController, sideBrowserUrl, sideLocator } from "./side-browser";
@@ -2575,7 +2576,11 @@ function paneForThread(threadId: unknown): PaneId | null {
 // the engine turn running, so live turns are tracked by THREAD. That lets a
 // backgrounded conversation be reopened mid-turn with its busy state, the
 // partial assistant text, and any approval request the agent is blocked on.
-const turnContinuation = new TurnContinuation();
+const turnContinuation = new TurnContinuation(systemOneContinuationJudge({
+  apiKey: () => readStoredKey()?.key ?? null,
+  redact: redactSecrets,
+  observe: ({ verdict, durationMs }) => console.info(`[continuation] SystemOne: ${verdict} (${durationMs}ms)`),
+}));
 const automaticTurnStarts = new Map<string, Promise<{ ok: boolean }>>();
 function blockTurnContinuation(threadId: string | null | undefined): void {
   if (!threadId) return;
@@ -3683,8 +3688,8 @@ function threadToEntries(
           // a fold — flush what came before it, folded, then show it.
           flush(false);
           entries.push({
-            kind: (item.text ?? contentToText(item.content)) === CONTINUATION_INPUT ? "assistant" : "user",
-            text: (item.text ?? contentToText(item.content)) === CONTINUATION_INPUT ? CONTINUATION_NOTICE : stripFileAttachmentContext(item.text ?? contentToText(item.content)),
+            kind: isContinuationInput(item.text ?? contentToText(item.content)) ? "assistant" : "user",
+            text: isContinuationInput(item.text ?? contentToText(item.content)) ? CONTINUATION_NOTICE : stripFileAttachmentContext(item.text ?? contentToText(item.content)),
             attachments: Array.isArray(item.content)
               ? item.content.flatMap((part: unknown) => {
                   if (!part || typeof part !== "object") return [];
@@ -3712,7 +3717,7 @@ function threadToEntries(
           const text = m.text ?? contentToText(m.content);
           if (!text) break;
           if (m.role === "user") {
-            entries.push({ kind: text === CONTINUATION_INPUT ? "assistant" : "user", text: text === CONTINUATION_INPUT ? CONTINUATION_NOTICE : stripFileAttachmentContext(text), ...(startedAt !== null ? { at: startedAt } : {}) });
+            entries.push({ kind: isContinuationInput(text) ? "assistant" : "user", text: isContinuationInput(text) ? CONTINUATION_NOTICE : stripFileAttachmentContext(text), ...(startedAt !== null ? { at: startedAt } : {}) });
             if (!foldThisTurn) runningTurnStart = entries.length;
           } else {
             bucket.push({ kind: "assistant", text, phase: m.phase ?? null, ...(foldThisTurn && answeredAt !== null ? { at: answeredAt } : {}) });
@@ -5889,6 +5894,9 @@ function wireNotifications(): void {
           | { type?: string; id?: string; status?: string; changes?: { path?: string }[] }
           | undefined;
         const phase = msg.method === "item/started" ? "started" : "completed";
+        if (threadId && phase === "completed" && ["commandExecution", "dynamicToolCall", "mcpToolCall", "fileChange"].includes(item?.type ?? "")) {
+          turnContinuation.action(threadId, item?.status === "failed" || item?.status === "interrupted" || (item as { success?: boolean }).success === false);
+        }
         if (threadId && item?.id && ["commandExecution", "dynamicToolCall", "mcpToolCall", "fileChange"].includes(item.type ?? "")) {
           const key = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
           const changed = key && (phase === "started"
@@ -6242,166 +6250,177 @@ function wireNotifications(): void {
         break;
       }
       case "turn/completed": {
-        if (threadId && compactingThreads.has(threadId)) updateThreadCompaction(threadId, "failed");
-        if (threadId) { sideBrowser.finishWorker(threadId); turnEnvironments.end(threadId); }
-        const turn = params.turn as
-          | { status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
-          | undefined;
-        const continuation = threadId ? turnContinuation.completed(threadId, turn?.status ?? "completed", !!paneId && !planMode && !subAgents.has(threadId) && !scheduledRuns.has(threadId) && !mcpApplyPending.has(threadId)
-          && ![...pendingApprovals.values()].some(p => p.threadId && rootThreadOf(p.threadId) === rootThreadOf(threadId))
-          && ![...pendingUserInputs.values()].some(p => p.threadId && rootThreadOf(p.threadId) === rootThreadOf(threadId))
-          && !sideBrowser.list(rootThreadOf(threadId)).some(tab => !!tab.help)) : {};
-        if (threadId) {
-          if (turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId)) {
-            const count = (completedTurnsSinceMemory.get(threadId) ?? 0) + 1;
-            completedTurnsSinceMemory.set(threadId, count);
-            if (count >= 25) {
-              completedTurnsSinceMemory.set(threadId, 0);
-              scheduleAutomaticMemory(threadId, "25-turns");
+        // The classifier is asynchronous. Other engine notifications and Stop /
+        // user input must keep flowing while it runs.
+        void (async (paneId: PaneId | null) => {
+          const finishingTurnId = threadId ? runningTurns.get(threadId) : undefined;
+          const turn = params.turn as
+            | { id?: string; status?: string; usage?: unknown; error?: { message?: string; additionalDetails?: string | null } | null }
+            | undefined;
+          if (turn?.id && finishingTurnId && turn.id !== finishingTurnId) return;
+          if (threadId && compactingThreads.has(threadId)) updateThreadCompaction(threadId, "failed");
+          if (threadId) { sideBrowser.finishWorker(threadId); turnEnvironments.end(threadId); }
+          const eligible = () => !!threadId && !!paneForThread(threadId) && !planMode && !subAgents.has(threadId) && !scheduledRuns.has(threadId) && !mcpApplyPending.has(threadId)
+            && ![...pendingApprovals.values()].some(p => p.threadId && rootThreadOf(p.threadId) === rootThreadOf(threadId))
+            && ![...pendingUserInputs.values()].some(p => p.threadId && rootThreadOf(p.threadId) === rootThreadOf(threadId))
+            && !sideBrowser.list(rootThreadOf(threadId)).some(tab => !!tab.help);
+          let continuation = threadId ? await turnContinuation.completed(threadId, turn?.status ?? "completed", eligible()) : {};
+          // A late verdict may never settle a newer turn or update a reused pane.
+          if (continuation.stale || (threadId && runningTurns.get(threadId) !== finishingTurnId)) return;
+          if (threadId) paneId = paneForThread(threadId);
+          if (continuation.offer && !eligible()) { turnContinuation.block(threadId!); continuation = {}; }
+          if (threadId) {
+            if (turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId)) {
+              const count = (completedTurnsSinceMemory.get(threadId) ?? 0) + 1;
+              completedTurnsSinceMemory.set(threadId, count);
+              if (count >= 25) {
+                completedTurnsSinceMemory.set(threadId, 0);
+                scheduleAutomaticMemory(threadId, "25-turns");
+              }
+            }
+            // The event the sidecar's whole reflex hangs on: turn_completed is
+            // what triggers scoring and distillation on its side. Observed
+            // BEFORE runningTurns is cleared so the event still carries its
+            // turn id, then flushed — a turn boundary is exactly the moment the
+            // app is between pieces of work.
+            observeLearning("turn_completed", threadId, `turn ${turn?.status ?? "completed"}`, {
+              status: turn?.status ?? "completed",
+            });
+            // Before runningTurns is cleared below: the id is what pairs this
+            // with its start record, and after the delete there is nothing to
+            // pair with.
+            metrics.record({
+              ...metricNow(threadId),
+              kind: "run",
+              turn: runningTurns.get(threadId) ?? null,
+              phase: "completed",
+              status: turn?.status ?? "completed",
+            } satisfies RunRecord);
+            learning?.flush();
+            // Idle again: nothing of the user's is competing for the gateway.
+            if (runningTurns.size <= 1) learning?.setIdle(true);
+            runningTurns.delete(threadId);
+            const reply = petReplies.get(threadId);
+            petReplies.delete(threadId);
+            const scheduledKey = scheduledRuns.get(threadId)?.key;
+            if (!scheduledKey) petFinished(`turn:${threadId}`, turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "completed");
+            if (turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId) && !scheduledKey?.startsWith("tune:")) {
+              const version = petNoticeVersion;
+              void showCompletedPetNotice(threadId, reply?.final || reply?.last || "", reply?.stream || "", version);
+            }
+            if (mcpApplyPending.delete(threadId)) {
+              // Queued while the turn ran; the thread is idle now.
+              void applyThreadMcp(threadId).catch((err) =>
+                send("mcp:thread-applied", { threadId, enabled: enabledMcpFor(threadId), error: String(err) }),
+              );
+            }
+            bgStream.delete(threadId);
+            // A turn can't end while the engine still waits on an approval —
+            // it dropped the request (interrupt/failure). Retire the card so
+            // dead Allow/Deny buttons don't linger in the transcript.
+            const droppedApprovals: string[] = [];
+            for (const [reqId, info] of pendingApprovals) {
+              if (info.threadId !== threadId) continue;
+              pendingApprovals.delete(reqId);
+              // A local waiter would hang forever otherwise.
+              if (info.kind === "local") info.settle("decline");
+              droppedApprovals.push(reqId);
+              const owner = subAgents.get(threadId)?.parent ?? threadId;
+              const ownerPane = paneForThread(owner);
+              if (ownerPane) send("chat:approval-canceled", { paneId: ownerPane, requestId: reqId });
+            }
+            if (droppedApprovals.length) {
+              for (const [tid, arr] of heldApprovals) {
+                const kept = arr.filter((a) => !droppedApprovals.includes(a.requestId as string));
+                if (kept.length !== arr.length) {
+                  if (kept.length) heldApprovals.set(tid, kept);
+                  else heldApprovals.delete(tid);
+                }
+              }
+            }
+            for (const [requestId, pending] of pendingUserInputs) {
+              if (pending.threadId !== threadId) continue;
+              pendingUserInputs.delete(requestId);
+              if (pending.kind === "local") pending.settle(null);
+              const owner = subAgents.get(threadId)?.parent ?? threadId;
+              const ownerPane = paneForThread(owner);
+              if (ownerPane) send("chat:user-input-canceled", { paneId: ownerPane, requestId });
+            }
+            const sub = subAgents.get(threadId);
+            if (sub) {
+              sub.status =
+                turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "idle";
+              pushSubAgents(sub.parent);
+              send("chat:subagent-activity", { threadId });
+              // Closure/failure rows fire once per task — sub turns also end
+              // between queued mails, and an interrupted turn already tells
+              // its own story via the interrupt marker.
+              const isFailure = turn?.status === "failed";
+              if ((isFailure || turn?.status === "completed") && !sub.closedAnnounced) {
+                sub.closedAnnounced = true;
+                const parentPane = paneForThread(sub.parent);
+                if (parentPane) {
+                  send("chat:subagent-event", {
+                    paneId: parentPane,
+                    event: isFailure ? "failed" : "completed",
+                    name: sub.name,
+                    path: sub.path,
+                    agentThreadId: threadId,
+                  });
+                }
+              }
+            }
+            if (!paneId && turn?.status === "failed") {
+              heldErrors.set(
+                threadId,
+                [turn.error?.message, turn.error?.additionalDetails].filter(Boolean).join(" — ") ||
+                  "unknown error",
+              );
+            }
+            send("chat:thread-activity", { threadId, running: false, completed: turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId) });
+            // Nicknames, for the case where raws never arrive. The engine emits
+            // raw items only for threads STARTED with experimentalRawEvents, so
+            // a resumed conversation learns nothing from the live path — and a
+            // spawn made during that conversation kept its task name. By turn
+            // end the spawn's output is in the rollout, so read it from there.
+            // Runs for the ROOT: a sub-agent's own turn ending is also the
+            // moment its nickname becomes readable.
+            const nickRoot = rootThreadOf(threadId);
+            for (const info of subAgents.values()) {
+              if (info.parent !== nickRoot) continue;
+              applyRolloutNicknames(nickRoot);
+              break;
             }
           }
-          // The event the sidecar's whole reflex hangs on: turn_completed is
-          // what triggers scoring and distillation on its side. Observed
-          // BEFORE runningTurns is cleared so the event still carries its
-          // turn id, then flushed — a turn boundary is exactly the moment the
-          // app is between pieces of work.
-          observeLearning("turn_completed", threadId, `turn ${turn?.status ?? "completed"}`, {
+          // A turn that only ever narrated: positively saw commentary, never a
+          // final answer. Reported as a status rather than an error, because the
+          // work usually DID happen — the agent just yielded without writing it
+          // up, and the user is otherwise left looking at a stopped screen with
+          // no idea anything is missing. Silent when phase was never stamped.
+          const narrated =
+            threadId !== null &&
+            turn?.status === "completed" &&
+            turnSawCommentary.has(threadId) &&
+            !turnSawFinalAnswer.has(threadId);
+          if (threadId) {
+            turnSawCommentary.delete(threadId);
+            turnSawFinalAnswer.delete(threadId);
+          }
+          if (!paneId) return;
+          panes[paneId].turnId = null;
+          send("chat:turn-completed", {
+            paneId,
+            narrated,
+            ...(continuation.offer && threadId ? { continuation: { ...continuation.offer, threadId, originPane: paneId } } : {}),
+            ...(continuation.exhausted ? { continuationExhausted: true } : {}),
             status: turn?.status ?? "completed",
+            usage: turn?.usage ?? null,
+            // A failed turn is invisible without this — surface the cause.
+            error: turn?.error
+              ? [turn.error.message, turn.error.additionalDetails].filter(Boolean).join(" — ")
+              : null,
           });
-          // Before runningTurns is cleared below: the id is what pairs this
-          // with its start record, and after the delete there is nothing to
-          // pair with.
-          metrics.record({
-            ...metricNow(threadId),
-            kind: "run",
-            turn: runningTurns.get(threadId) ?? null,
-            phase: "completed",
-            status: turn?.status ?? "completed",
-          } satisfies RunRecord);
-          learning?.flush();
-          // Idle again: nothing of the user's is competing for the gateway.
-          if (runningTurns.size <= 1) learning?.setIdle(true);
-          runningTurns.delete(threadId);
-          const reply = petReplies.get(threadId);
-          petReplies.delete(threadId);
-          const scheduledKey = scheduledRuns.get(threadId)?.key;
-          if (!scheduledKey) petFinished(`turn:${threadId}`, turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "completed");
-          if (turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId) && !scheduledKey?.startsWith("tune:")) {
-            const version = petNoticeVersion;
-            void showCompletedPetNotice(threadId, reply?.final || reply?.last || "", reply?.stream || "", version);
-          }
-          if (mcpApplyPending.delete(threadId)) {
-            // Queued while the turn ran; the thread is idle now.
-            void applyThreadMcp(threadId).catch((err) =>
-              send("mcp:thread-applied", { threadId, enabled: enabledMcpFor(threadId), error: String(err) }),
-            );
-          }
-          bgStream.delete(threadId);
-          // A turn can't end while the engine still waits on an approval —
-          // it dropped the request (interrupt/failure). Retire the card so
-          // dead Allow/Deny buttons don't linger in the transcript.
-          const droppedApprovals: string[] = [];
-          for (const [reqId, info] of pendingApprovals) {
-            if (info.threadId !== threadId) continue;
-            pendingApprovals.delete(reqId);
-            // A local waiter would hang forever otherwise.
-            if (info.kind === "local") info.settle("decline");
-            droppedApprovals.push(reqId);
-            const owner = subAgents.get(threadId)?.parent ?? threadId;
-            const ownerPane = paneForThread(owner);
-            if (ownerPane) send("chat:approval-canceled", { paneId: ownerPane, requestId: reqId });
-          }
-          if (droppedApprovals.length) {
-            for (const [tid, arr] of heldApprovals) {
-              const kept = arr.filter((a) => !droppedApprovals.includes(a.requestId as string));
-              if (kept.length !== arr.length) {
-                if (kept.length) heldApprovals.set(tid, kept);
-                else heldApprovals.delete(tid);
-              }
-            }
-          }
-          for (const [requestId, pending] of pendingUserInputs) {
-            if (pending.threadId !== threadId) continue;
-            pendingUserInputs.delete(requestId);
-            if (pending.kind === "local") pending.settle(null);
-            const owner = subAgents.get(threadId)?.parent ?? threadId;
-            const ownerPane = paneForThread(owner);
-            if (ownerPane) send("chat:user-input-canceled", { paneId: ownerPane, requestId });
-          }
-          const sub = subAgents.get(threadId);
-          if (sub) {
-            sub.status =
-              turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "idle";
-            pushSubAgents(sub.parent);
-            send("chat:subagent-activity", { threadId });
-            // Closure/failure rows fire once per task — sub turns also end
-            // between queued mails, and an interrupted turn already tells
-            // its own story via the interrupt marker.
-            const isFailure = turn?.status === "failed";
-            if ((isFailure || turn?.status === "completed") && !sub.closedAnnounced) {
-              sub.closedAnnounced = true;
-              const parentPane = paneForThread(sub.parent);
-              if (parentPane) {
-                send("chat:subagent-event", {
-                  paneId: parentPane,
-                  event: isFailure ? "failed" : "completed",
-                  name: sub.name,
-                  path: sub.path,
-                  agentThreadId: threadId,
-                });
-              }
-            }
-          }
-          if (!paneId && turn?.status === "failed") {
-            heldErrors.set(
-              threadId,
-              [turn.error?.message, turn.error?.additionalDetails].filter(Boolean).join(" — ") ||
-                "unknown error",
-            );
-          }
-          send("chat:thread-activity", { threadId, running: false, completed: turn?.status === "completed" && !continuation.offer && !continuation.exhausted && !subAgents.has(threadId) });
-          // Nicknames, for the case where raws never arrive. The engine emits
-          // raw items only for threads STARTED with experimentalRawEvents, so
-          // a resumed conversation learns nothing from the live path — and a
-          // spawn made during that conversation kept its task name. By turn
-          // end the spawn's output is in the rollout, so read it from there.
-          // Runs for the ROOT: a sub-agent's own turn ending is also the
-          // moment its nickname becomes readable.
-          const nickRoot = rootThreadOf(threadId);
-          for (const info of subAgents.values()) {
-            if (info.parent !== nickRoot) continue;
-            applyRolloutNicknames(nickRoot);
-            break;
-          }
-        }
-        // A turn that only ever narrated: positively saw commentary, never a
-        // final answer. Reported as a status rather than an error, because the
-        // work usually DID happen — the agent just yielded without writing it
-        // up, and the user is otherwise left looking at a stopped screen with
-        // no idea anything is missing. Silent when phase was never stamped.
-        const narrated =
-          threadId !== null &&
-          turn?.status === "completed" &&
-          turnSawCommentary.has(threadId) &&
-          !turnSawFinalAnswer.has(threadId);
-        if (threadId) {
-          turnSawCommentary.delete(threadId);
-          turnSawFinalAnswer.delete(threadId);
-        }
-        if (!paneId) break;
-        panes[paneId].turnId = null;
-        send("chat:turn-completed", {
-          paneId,
-          narrated,
-          ...(continuation.offer && threadId ? { continuation: { ...continuation.offer, threadId, originPane: paneId } } : {}),
-          ...(continuation.exhausted ? { continuationExhausted: true } : {}),
-          status: turn?.status ?? "completed",
-          usage: turn?.usage ?? null,
-          // A failed turn is invisible without this — surface the cause.
-          error: turn?.error
-            ? [turn.error.message, turn.error.additionalDetails].filter(Boolean).join(" — ")
-            : null,
-        });
+        })(paneId).catch(error => console.error("[continuation] Could not settle turn completion:", error));
         break;
       }
     }
