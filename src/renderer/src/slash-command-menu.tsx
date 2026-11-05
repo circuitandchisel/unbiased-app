@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { commandKey, commandMatches, commandToken, PLAN_COMMAND, type SlashCommand } from "../../shared/slash-commands";
+import { commandKey, commandMatches, commandTokens, compareSlashCommands, preferredCommand, PLAN_COMMAND, type SlashQuery, type SlashCommand } from "../../shared/slash-commands";
 
-export function useSlashCommands({ paneId, contextKey, connected, draft, changeDraft, togglePlan, focus }: {
+export function useSlashCommands({ paneId, contextKey, connected, draft, cursorQuery, replaceCommand, togglePlan, focus }: {
   paneId: string; contextKey: string; connected: boolean; draft: string;
-  changeDraft: (text: string) => void; togglePlan: () => void; focus: () => void;
+  cursorQuery: SlashQuery | null; replaceCommand: (query: SlashQuery, text: string) => void; togglePlan: () => void; focus: () => void;
 }) {
   const [commands, setCommands] = useState<SlashCommand[]>([PLAN_COMMAND]);
   const [loading, setLoading] = useState(false);
@@ -12,8 +12,8 @@ export function useSlashCommands({ paneId, contextKey, connected, draft, changeD
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ command: string; path: string } | null>(null);
   const loadingRequest = useRef(0);
-  const hasSlash = draft.startsWith("/");
-  const typedQuery = /^\/([^/\r\n]*)$/.exec(draft)?.[1] ?? null;
+  const hasSlash = cursorQuery !== null;
+  const typedQuery = cursorQuery?.query ?? null;
   const query = typedQuery !== null && !/\s$/.test(typedQuery) && (!/\s/.test(typedQuery) || commands.some(command => commandMatches(command, typedQuery))) ? typedQuery : null;
   const matches = query === null ? [] : commands.filter(command => commandMatches(command, query));
   const open = connected && query !== null && dismissed !== draft;
@@ -25,7 +25,7 @@ export function useSlashCommands({ paneId, contextKey, connected, draft, changeD
     if (typeof window.unbiased.slashCommands !== "function") { setError(true); setLoading(false); return; }
     void window.unbiased.slashCommands(paneId).then(result => {
       if (current !== loadingRequest.current) return;
-      setCommands([PLAN_COMMAND, ...(Array.isArray(result.commands) ? result.commands.filter(command => command.id !== PLAN_COMMAND.id) : [])]);
+      setCommands([PLAN_COMMAND, ...(Array.isArray(result.commands) ? result.commands.filter(command => command.id !== PLAN_COMMAND.id).sort(compareSlashCommands) : [])]);
       setError(!!result.error);
     }).catch(() => { if (current === loadingRequest.current) setError(true); })
       .finally(() => { if (current === loadingRequest.current) setLoading(false); });
@@ -38,8 +38,9 @@ export function useSlashCommands({ paneId, contextKey, connected, draft, changeD
     if (open) document.getElementById(`${menuId}-${selectedIndex}`)?.scrollIntoView({ block: "nearest" });
   }, [open, menuId, selectedIndex, matches.length]);
   function select(command: SlashCommand) {
-    if (!command.skill) { togglePlan(); changeDraft(""); setSelection(null); }
-    else { setSelection({ command: command.command, path: command.skill.path }); changeDraft(`/${command.command} `); }
+    if (!cursorQuery) return;
+    if (!command.skill) { togglePlan(); replaceCommand(cursorQuery, ""); setSelection(null); }
+    else { setSelection({ command: command.command, path: command.skill.path }); replaceCommand(cursorQuery, `/${command.command} `); }
     focus();
   }
   function keyDown(event: KeyboardEvent<HTMLDivElement>): boolean {
@@ -58,9 +59,10 @@ export function useSlashCommands({ paneId, contextKey, connected, draft, changeD
     }
     return false;
   }
-  const token = commandToken(draft);
+  const tokens = commandTokens(draft);
+  const token = tokens.find(token => commands.some(command => command.skill && commandKey(command.command) === commandKey(token.name)));
   const exact = token ? commands.filter(command => command.skill && commandKey(command.command) === commandKey(token.name)) : [];
-  const skillPath = selection && token && commandKey(selection.command) === commandKey(token.name) ? selection.path : exact.length === 1 ? exact[0].skill?.path : undefined;
+  const skillPath = selection && token && commandKey(selection.command) === commandKey(token.name) ? selection.path : preferredCommand(exact)?.skill?.path;
   const menu = open ? <div id={menuId} role="listbox" aria-label="Slash commands" data-popover style={{ position: "absolute", bottom: "calc(100% + 8px)", left: 0, right: 0, maxHeight: 300, overflowY: "auto", background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 14, padding: 6, zIndex: 20, boxShadow: "0 8px 24px rgba(0,0,0,0.45)" }}>
     {matches.map((command, index) => <button type="button" role="option" title={`/${command.command}`} aria-selected={index === selectedIndex} id={`${menuId}-${index}`} key={command.id} onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => select(command)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", background: index === selectedIndex ? "var(--chip)" : "transparent", color: "var(--fg)", border: 0, borderRadius: 10, padding: "10px 12px", textAlign: "left", font: "inherit", cursor: "pointer" }}>
       <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" style={{ flexShrink: 0 }}><path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5 M12 13v8" /></svg>
