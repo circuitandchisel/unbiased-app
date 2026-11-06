@@ -55,6 +55,9 @@ jobs:
           node node_modules/electron/install.js
           npm run smoke:transcript-actions
 
+      - name: Smoke test generated visual recovery
+        run: npm run smoke:visual-recovery
+
       - name: Smoke test live Mosaic conversation handoff
         run: npm run smoke:mosaic-handoff
 

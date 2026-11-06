@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM, VirtualConsole } from "jsdom";
-import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_PREVIEW_URL, MAX_INTERACTIVE_VISUAL_LENGTH, interactiveVisualDocument, interactiveVisualId, interactiveVisualPreviewCsp, interactiveVisualPreviewDocument, isInteractiveVisualPreviewUrl, isInteractiveVisualSource } from "../shared/interactive-visual";
+import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_PREVIEW_URL, MAX_INTERACTIVE_VISUAL_LENGTH, interactiveVisualDocument, interactiveVisualSourceIssue, interactiveVisualId, interactiveVisualPreviewCsp, interactiveVisualPreviewDocument, isInteractiveVisualPreviewUrl, isInteractiveVisualSource } from "../shared/interactive-visual";
 
 test("only a visual URL with an exact ID can resolve a frame", () => {
   const url = "unbiased-visual://view/fe84ba18-a111-4c40-a556-f882ae77cb7d";
@@ -202,4 +202,11 @@ test("streaming preview updates preserve existing visual nodes", async () => {
   } finally {
     dom.window.close();
   }
+});
+
+test("completed visual structure catches a style block swallowing the diagram", () => {
+  assert.match(interactiveVisualSourceIssue('<div><style>.flow { color: red; }</div><p>Flow</p>') ?? "", /unclosed <style>/);
+  assert.match(interactiveVisualSourceIssue('<div>Flow</div><script>const step = 1;') ?? "", /unclosed <script>/);
+  assert.equal(interactiveVisualSourceIssue('<style>.flow { color: red; }</style><div>Flow</div>'), null);
+  assert.equal(interactiveVisualSourceIssue('<script>const example = "<style>";</script><div>Flow</div>'), null);
 });

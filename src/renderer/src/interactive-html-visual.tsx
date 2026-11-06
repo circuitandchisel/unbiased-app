@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { interactiveVisualSourceIssue } from "../../shared/interactive-visual";
 import { VisualHtmlPreview } from "./visual-html-preview";
 
 const INITIAL_HEIGHT = 440;
@@ -33,8 +34,8 @@ function colorScheme(background: string): "light" | "dark" {
 }
 
 export function InteractiveHtmlVisual({ source, previewSource, incomplete = false }: { source: string | null; previewSource?: string; incomplete?: boolean }) {
-  const previewRef = useRef(previewSource ?? "");
-  if (previewSource) previewRef.current = previewSource;
+  const previewRef = useRef(previewSource ?? source ?? "");
+  previewRef.current = previewSource ?? source ?? previewRef.current;
   const registeredSourceRef = useRef<string | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -71,6 +72,8 @@ export function InteractiveHtmlVisual({ source, previewSource, incomplete = fals
     setHeight(source ? measuredHeights.get(source) ?? INITIAL_HEIGHT : INITIAL_HEIGHT);
     registeredSourceRef.current = null;
     if (!source) return () => { active = false; };
+    const issue = interactiveVisualSourceIssue(source);
+    if (issue) { setFailure(issue); return () => { active = false; }; }
     void window.unbiased.registerVisual(source).then((nextUrl) => {
       if (!active) return;
       if (nextUrl) {
@@ -96,12 +99,14 @@ export function InteractiveHtmlVisual({ source, previewSource, incomplete = fals
     const receive = (event: MessageEvent) => {
       if (event.source !== frameRef.current?.contentWindow || event.origin !== "null") return;
       if (event.data?.type === "unbiased-visual-ready") {
+        if (event.data.hasContent === false) return;
         setReady(true);
+        setFailure(previous => (previous === "empty-render" || previous === "ready-timeout") ? null : previous);
       } else if (event.data?.type === "unbiased-visual-error") {
-        const kind = event.data.kind === "unhandled-rejection" ? "unhandled-rejection" : "runtime-error";
+        const kind = event.data.kind === "empty-render" ? "empty-render" : event.data.kind === "unhandled-rejection" ? "unhandled-rejection" : "runtime-error";
         const detail = typeof event.data.detail === "string" ? event.data.detail.slice(0, 300) : "";
         console.warn(`[visual] HTML ${kind}:`, detail);
-        setFailure(kind);
+        setFailure(previous => kind === "empty-render" && (previous === "runtime-error" || previous === "unhandled-rejection") ? previous : kind);
       } else if (event.data?.type === "unbiased-visual-height") {
         const next = event.data.height;
         if (typeof next === "number" && Number.isFinite(next)) {
@@ -149,20 +154,21 @@ export function InteractiveHtmlVisual({ source, previewSource, incomplete = fals
     return () => observer.disconnect();
   }, [url]);
 
-  const showPreview = Boolean(previewRef.current && !ready);
+  const showPreview = Boolean(previewRef.current && !ready && !failure);
+  const partialFailure = ready && (failure === "runtime-error" || failure === "unhandled-rejection");
   return (
     <div
       aria-label="Interactive visual"
       className="app-interactive-html-visual"
       style={{
         width: "100%", minWidth: 0, margin: "16px 0 20px", overflow: "hidden", position: "relative",
-        minHeight: ready ? undefined : Math.min(MAX_HEIGHT, height),
+        minHeight: ready || failure ? undefined : Math.min(MAX_HEIGHT, height),
         border: "1px solid var(--border)", borderRadius: 28,
         background: "var(--panel)", boxShadow: "0 14px 36px rgba(0, 0, 0, 0.28)",
       }}
     >
       {showPreview && <VisualHtmlPreview source={previewRef.current} incomplete={incomplete} />}
-      {url && !failure ? (
+      {url ? (
         <iframe
           ref={frameRef}
           title="Interactive visual"
@@ -181,7 +187,8 @@ export function InteractiveHtmlVisual({ source, previewSource, incomplete = fals
         Preparing visual...
       </div>}
       {failure && <div role="alert" style={{ minHeight: 96, padding: 24, color: "var(--dim)", fontFamily: "var(--font-ui)", fontSize: 14 }}>
-        <div>This visual couldn't load. The rest of the answer is still available.</div>
+        <div>{partialFailure ? "The visual is available, but some interactions may not work." : failure.startsWith("The generated HTML") ? failure : failure === "empty-render" ? "The generated visual is empty." : "This visual couldn't load. The rest of the answer is still available."}</div>
+        <div style={{ marginTop: 6, fontSize: 12 }}>Ask the assistant to fix this visual. Reloading runs the same generated code.</div>
         <button type="button" onClick={() => setAttempt((value) => value + 1)} title="Reload visual" aria-label="Reload visual" style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 12, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, background: "var(--panel-2)", color: "var(--fg-msg)", cursor: "pointer" }}>
           <RefreshCw size={14} /> Reload visual
         </button>
