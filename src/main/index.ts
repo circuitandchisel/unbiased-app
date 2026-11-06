@@ -1318,7 +1318,7 @@ function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown): str
  * a second family to that would have made scheduling silently disappear on any
  * machine without agent-browser installed.
  */
-const serverTools = new ServerToolsClient(() => readStoredKey()?.key ?? null);
+const serverTools = new ServerToolsClient(() => readStoredKey()?.key ?? null, fetch, () => PLATFORM_BASE);
 const serverToolSessions = new ServerToolSessions();
 function resetServerTools(): void { serverTools.reset(); serverToolSessions.clear(); }
 
