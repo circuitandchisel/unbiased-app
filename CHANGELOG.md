@@ -6,6 +6,19 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.32 — November 6, 2026
+
+### Improved
+
+- **Softer assistant text.** Replies use gentler contrast while preserving your chosen font and theme.
+- **Use slash commands within a sentence.** The command picker follows your cursor and preserves the surrounding text. Commands default to the bundled Unbiased skill when names overlap; you can still choose another source.
+
+### Fixed
+
+- **Steadier Mosaic conversations.** Transcript rows keep their measured height, preventing repeated jumps as messages and command groups enter or leave view.
+- **Keep live work when opening a Mosaic chat.** Streaming text, thinking state, elapsed time and approval pauses carry over to the individual conversation view.
+- **Readable visuals survive script errors.** Generated HTML stays visible when its interaction code fails. Malformed HTML and empty output show a clear explanation instead of a blank card.
+
 ## 1.13.31 — November 3, 2026
 
 ### Fixed
