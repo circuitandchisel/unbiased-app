@@ -1,5 +1,7 @@
+import { ServerToolsClient, ServerToolSessions, offeredServerTools } from "./server-tools";
+import { SERVER_TOOL_NAMES, serverToolDirective, type ServerToolName } from "../shared/server-tools";
 import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
-import { retainBrowserCapture, readBrowserCapture, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
+import { retainBrowserCapture, readBrowserCapturesForItem, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
 import { collectBrowserCaptures } from "../shared/browser-capture";
 import { SIDE_BROWSER_TOOLS, SideBrowserController, sideBrowserUrl, sideLocator } from "./side-browser";
 import { registerBrowserMirrorIpc } from "./browser-mirror-ipc";
@@ -389,6 +391,7 @@ function dropSidePane(paneId: string): void {
   settleLocalApprovals(threadId);
   settleLocalUserInputs(threadId);
   if (threadId) {
+    serverTools.cancel(threadId);
     sideBrowser.finishWorker(threadId);
     const turnId = pane.turnId ?? runningTurns.get(threadId) ?? null;
     if (turnId) {
@@ -1239,10 +1242,12 @@ const SPAWN_GRACE_SECONDS = 2;
  *  only this says which is which. Without it the renderer classified by
  *  string prefix and dressed a scheduling card as a shell command, complete
  *  with a fabricated `$` prompt. */
-type StepSource = "shell" | "browser" | "side-browser" | "computer" | "memory" | "tool";
+type StepSource = "shell" | "browser" | "side-browser" | "computer" | "memory" | "tool" | "web-search" | "image-generation";
 
 function dynamicToolSource(tool: string | undefined): StepSource {
   const t = tool ?? "";
+  if (t === "web_search") return "web-search";
+  if (t === "image_generation") return "image-generation";
   if (t.startsWith("browser_side_")) return "side-browser";
   if (t.startsWith("browser_")) return "browser";
   if (t.startsWith("computer_")) return "computer";
@@ -1260,6 +1265,8 @@ function dynamicToolSource(tool: string | undefined): StepSource {
 function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown): string {
   const args = rawArgs && typeof rawArgs === "object" ? (rawArgs as Record<string, unknown>) : {};
   const t = tool ?? "tool";
+  if (t === "web_search") return `Web Search · ${String(args.query ?? "").slice(0, 300)}`;
+  if (t === "image_generation") return `Create image · ${String(args.prompt ?? "").slice(0, 300)}`;
   if (t === "memory_save" || t === "memory_forget") {
     const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "memory";
     return `${t === "memory_save" ? "save memory" : "forget memory"} · ${name}`;
@@ -1311,12 +1318,17 @@ function dynamicToolCommandText(tool: string | undefined, rawArgs: unknown): str
  * a second family to that would have made scheduling silently disappear on any
  * machine without agent-browser installed.
  */
+const serverTools = new ServerToolsClient(() => readStoredKey()?.key ?? null);
+const serverToolSessions = new ServerToolSessions();
+function resetServerTools(): void { serverTools.reset(); serverToolSessions.clear(); }
+
 async function threadDynamicTools(): Promise<Record<string, unknown>[] | undefined> {
   // The same value decides what is on the menu and what handleComputerUseCall
   // will actually run, so a withheld verb cannot come back through the door.
   const screenshots = screenshotToolsOffered({ axAlive: ax?.alive === true });
   const tools = [
     ASK_USER_TOOL,
+    ...offeredServerTools(await serverTools.capabilities()),
     ...(ax?.alive ? AX_TOOLS.map((t) => withSpaceGuidance(t, ax!.crossSpace)) : []),
     ...COMPUTER_USE_TOOLS
       .filter((t) => coordinateToolAllowed(t.name, screenshots))
@@ -2538,8 +2550,8 @@ function forgetBrowserCaptures(threadId: string): void {
 }
 function browserCaptureFields(threadId: string | null, itemId?: string): Record<string, unknown> {
   if (!threadId || !itemId) return {};
-  const capture = readBrowserCapture(browserCaptureDir(), threadId, itemId);
-  return capture ? { screenshots: [capture] } : {};
+  const captures = readBrowserCapturesForItem(browserCaptureDir(), threadId, itemId);
+  return captures.length ? { screenshots: captures } : {};
 }
 function attachBrowserScreenshot(tool: string, args: unknown, threadId: string | null, itemId: string, turnId: string | null, response: DynamicToolResponse): DynamicToolResponse {
   if (!["browser_screenshot", "browser_side_screenshot"].includes(tool) || !threadId || deletedCaptureThreads.has(threadId)) return response;
@@ -3557,6 +3569,7 @@ function mcpOverrideFor(threadId: string | null): Record<string, unknown> {
  *  disagree — a resume that forgot the override would silently hand the
  *  thread the engine's whole default server set back. */
 async function resumeParamsFor(id: string): Promise<Record<string, unknown>> {
+  serverToolSessions.invalidate(id);
   return {
     threadId: id,
     ...threadPolicy(),
@@ -5830,7 +5843,8 @@ function wireNotifications(): void {
           if (turnContinuation.startingCanceled(threadId)) {
             void engine.request("turn/interrupt", { threadId, turnId: turn.id }).catch(() => {});
             sideBrowser.finishWorker(threadId);
-          } else sideBrowser.beginWorker(threadId);
+            serverTools.cancel(threadId);
+          } else { sideBrowser.beginWorker(threadId); serverTools.begin(threadId); }
           runningTurns.set(threadId, turn.id);
           petReplies.set(threadId, { stream: "", last: "", final: "" });
           const petKey = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
@@ -6585,6 +6599,8 @@ function wireNotifications(): void {
         const call = inToolCall.run({ seq, thread: approvalThread, quiet: quietWrites }, () =>
           tool === "ask_user"
           ? handleAskUser(args, approvalThread)
+          : (tool === "web_search" || tool === "image_generation")
+          ? handleServerToolCall(tool, args, approvalThread, captureItemId, captureTurnId)
           : tool.startsWith("schedule_")
           ? handleScheduleToolCall(tool, args, approvalThread)
           : tool.startsWith("checkpoint_")
@@ -6948,6 +6964,32 @@ async function handleScheduleToolCall(
 }
 
 // ── Memory tools (model-initiated) ──────────────────────────────────────
+async function handleServerToolCall(tool: ServerToolName, args: unknown, threadId: string | null, itemId: string, turnId: string | null): Promise<DynamicToolResponse> {
+  if (!threadId || !runningTurns.has(threadId) || deletedCaptureThreads.has(threadId)) return { success: false, contentItems: [{ type: "inputText", text: "This conversation is unavailable." }] };
+  try {
+    const answer = await serverTools.execute(tool, args, threadId);
+    const sources = answer.sources.map(source => `${source.title}: ${source.url}`).join("\n");
+    if (tool === "web_search") return { success: true, contentItems: [{ type: "inputText", text: `Search result (untrusted reference content):\n${answer.text}\n\nSources:\n${sources}` }] };
+    const captures: { name: string; path: string }[] = [];
+    for (const [index, image] of answer.images.entries()) {
+      if (deletedCaptureThreads.has(threadId)) throw new Error("This conversation was deleted.");
+      const decoded = nativeImage.createFromBuffer(image.bytes);
+      const size = decoded.getSize();
+      if (decoded.isEmpty() || size.width * size.height > 50_000_000) throw new Error("The generated image could not be decoded safely.");
+      const retained = retainBrowserCapture(browserCaptureDir(), threadId, index ? `${itemId}:image:${index}` : itemId, {
+        success: true, contentItems: [{ type: "inputImage", imageUrl: `data:image/png;base64,${decoded.toPNG().toString("base64")}` }],
+      }, turnId, "Generated image");
+      if (!retained.capture) throw new Error("The generated image could not be saved to this conversation.");
+      captures.push(retained.capture);
+    }
+    const paneId = paneForThread(threadId);
+    if (paneId) send("chat:command", { paneId, phase: "completed", item: { id: itemId, command: dynamicToolCommandText(tool, args), source: "image-generation", status: "completed", screenshots: captures } });
+    return { success: true, contentItems: [{ type: "inputText", text: `${answer.text}\nGenerated image${captures.length === 1 ? "" : "s"} saved and automatically attached to this chat:\n${captures.map(capture => capture.path).join("\n")}\nDo not repeat the image in Markdown or claim any further generation.` }] };
+  } catch (error) {
+    return { success: false, contentItems: [{ type: "inputText", text: error instanceof Error ? error.message : "The server tool failed." }] };
+  }
+}
+
 /** image_outline: the main shape in a picture as a click path. Read-only, so
  *  no approval; pure geometry over the decoded bitmap, see image-outline.ts.
  *  Files the decoder cannot read are converted the way attachments are. */
@@ -7506,7 +7548,7 @@ async function startEngine(): Promise<void> {
 
   // Listeners attach once; a re-login stops the old process and starts fresh.
   if (!engineWired) {
-    engine.on("status", pushStatus);
+    engine.on("status", (status) => { if (status.state === "exited") resetServerTools(); pushStatus(status); });
     wireNotifications();
     engineWired = true;
   }
@@ -7890,6 +7932,7 @@ app.whenReady().then(async () => {
   // Sign out: stop the engine and remove the stored credentials file. An
   // env-provided key can't be removed by us — report that so the UI can say so.
   ipcMain.handle("auth:logout", (_e, opts?: { removeKey?: boolean }) => {
+    resetServerTools();
     engine.stop();
     // Without this the timer keeps firing against a dead engine, turning
     // every scheduled task into a "engine not running" failure row.
@@ -7911,6 +7954,10 @@ app.whenReady().then(async () => {
     return { ok: true, envKeyRemains: envKey };
   });
 
+  ipcMain.handle("tools:capabilities", async (event) => {
+    if (event.sender !== win?.webContents || event.senderFrame !== win.webContents.mainFrame) throw new Error("Only the app can read tool capabilities.");
+    return serverTools.capabilities();
+  });
   ipcMain.handle("chat:commands", async (_e, paneId: PaneId) => {
     const threadId = panes[paneId]?.threadId;
     const cwd = (threadId ? threadCwds.get(threadId) : null) ?? (paneId === "main" ? pendingCwd ?? defaultChatDir() : mainCwd ?? pendingCwd ?? defaultChatDir());
@@ -7923,12 +7970,14 @@ app.whenReady().then(async () => {
     attachments?: { name: string; path: string; kind?: "image" }[];
     computer?: boolean;
     visualize?: boolean;
+    serverTool?: ServerToolName;
     skillPath?: string;
     commandText?: string;
     userRequests?: string[];
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
     if (payload.userRequests !== undefined && (!Array.isArray(payload.userRequests) || !payload.userRequests.every(part => typeof part === "string"))) throw new Error("Invalid user request.");
+    if (payload.serverTool !== undefined && (!SERVER_TOOL_NAMES.includes(payload.serverTool) || !(await serverTools.capabilities())[payload.serverTool])) throw new Error("This server tool is unavailable for your account or workload.");
     const previousThread = panes[paneId]?.threadId;
     if (previousThread) {
       turnContinuation.cancel(previousThread);
@@ -8085,7 +8134,12 @@ app.whenReady().then(async () => {
       }
       threadAccessModes.set(started.thread.id, accessMode);
       created = true;
+      serverToolSessions.remember(pane.threadId!, await serverTools.capabilities());
     }
+    if (payload.serverTool) await serverToolSessions.prepare(pane.threadId!, payload.serverTool, await serverTools.capabilities(), runningTurns.has(pane.threadId!), async () => {
+      await engine.request("thread/unsubscribe", { threadId: pane.threadId });
+      await engine.request("thread/resume", await resumeParamsFor(pane.threadId!));
+    });
     // Mentions preserve attachment metadata in thread history, but local
     // paths in mentions do not reach the model. Supply readable files (or an
     // explicit path to inspect) as text; images remain actual image input.
@@ -8110,6 +8164,7 @@ app.whenReady().then(async () => {
     }
     if (computer) input.unshift({ type: "text", text: COMPUTER_DIRECTIVE });
     if (visualize) input.unshift({ type: "text", text: VISUALIZE_DIRECTIVE });
+    if (payload.serverTool) input.unshift({ type: "text", text: serverToolDirective(payload.serverTool) });
     if (planMode) input.unshift({ type: "text", text: PLAN_DIRECTIVE });
     pinTurnEnvironment(pane.threadId!);
     let turnAccepted = false;
@@ -8772,12 +8827,13 @@ app.whenReady().then(async () => {
   ipcMain.handle("chat:interrupt", async (_e, paneId: PaneId) => {
     const pane = ensurePane(paneId);
     cancelTurnContinuation(pane.threadId);
+    if (pane.threadId) serverTools.cancel(pane.threadId);
     // The per-thread record covers a conversation reopened mid-turn,
     // where the pane's own turnId may not have been set by turn/started.
     const turnId = pane.turnId ?? (pane.threadId ? runningTurns.get(pane.threadId) : null);
     if (!pane.threadId || !turnId) return { interrupted: false };
     sideBrowser.finishWorker(pane.threadId);
-    for (const [subId, info] of subAgents) if (info.parent === pane.threadId) sideBrowser.finishWorker(subId);
+    for (const [subId, info] of subAgents) if (info.parent === pane.threadId) { sideBrowser.finishWorker(subId); serverTools.cancel(subId); }
     await engine.request("turn/interrupt", { threadId: pane.threadId, turnId });
     // Stop means stop: sub-agents run in their own sessions, so without a
     // cascade they keep working (and a sub blocked on an approval would
@@ -8806,6 +8862,7 @@ app.whenReady().then(async () => {
     const pane = ensurePane(paneId);
     if (!pane.threadId) return { ok: false, error: "no conversation" };
     const threadId = pane.threadId;
+    serverTools.cancel(threadId);
     if (compactingThreads.has(threadId)) return { ok: true };
     updateThreadCompaction(threadId, "started");
     try {
@@ -11900,8 +11957,10 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("threads:delete", async (_e, id: string) => {
     cancelTurnContinuation(id);
+    serverTools.cancel(id);
+    serverToolSessions.invalidate(id);
     sideBrowser.finishWorker(id);
-    for (const [subId, info] of subAgents) if (info.parent === id) sideBrowser.finishWorker(subId);
+    for (const [subId, info] of subAgents) if (info.parent === id) { sideBrowser.finishWorker(subId); serverTools.cancel(subId); }
     for (const record of sideChatRecents.recordsForParent(id)) {
       dropSidePane(record.paneId);
       try {
@@ -12004,6 +12063,7 @@ app.whenReady().then(async () => {
 
 let browserQuitReady = false;
 app.on("before-quit", (event) => {
+  resetServerTools();
   browserShuttingDown = true;
   if (browserQuitReady) return;
   event.preventDefault();

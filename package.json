@@ -11,6 +11,7 @@
     "smoke:pal-fullscreen": "electron build/smoke-pal-fullscreen.cjs",
     "smoke:visual-preview": "electron build/smoke-visual-preview.cjs",
     "smoke:visual-scroll": "electron build/smoke-visual-scroll.cjs",
+    "smoke:server-tools": "electron build/smoke-server-tools.cjs",
     "smoke:visual-recovery": "electron build/smoke-visual-recovery.cjs",
     "smoke:visual-height": "electron build/smoke-visual-height.cjs",
     "smoke:completed-visuals": "electron build/smoke-completed-visuals.cjs",

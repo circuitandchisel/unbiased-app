@@ -3,7 +3,7 @@ import test from "node:test";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readBrowserCapture, readBrowserCaptureTurns, retainBrowserCapture, removeBrowserCaptures } from "./browser-captures";
+import { readBrowserCapture, readBrowserCaptureTurns, readBrowserCapturesForItem, retainBrowserCapture, removeBrowserCaptures } from "./browser-captures";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
 const response = () => ({ success: true, contentItems: [{ type: "inputImage" as const, imageUrl: `data:image/png;base64,${png}` }] });
@@ -53,4 +53,18 @@ test("turn associations recover images when engine history omits tool calls", t 
   assert.deepEqual(Object.keys(readBrowserCaptureTurns(root, 'b')), []);
   removeBrowserCaptures(root, 'a');
   assert.deepEqual(Object.keys(readBrowserCaptureTurns(root, 'a')), []);
+});
+
+test("generated images retain their label and all results across reload and deletion", t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "unbiased-generated-images-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const first = retainBrowserCapture(root, "chat", "call", response(), "turn", "Generated image").capture!;
+  const second = retainBrowserCapture(root, "chat", "call:image:1", response(), "turn", "Generated image").capture!;
+  assert.deepEqual(readBrowserCapturesForItem(root, "chat", "call"), [first, second]);
+  assert.deepEqual(readBrowserCaptureTurns(root, "chat").turn, [first, second]);
+  assert.equal(readBrowserCapture(root, "chat", "call")?.name, "Generated image");
+  removeBrowserCaptures(root, "chat");
+  assert.deepEqual(readBrowserCapturesForItem(root, "chat", "call"), []);
+  const noTurn = retainBrowserCapture(root, "chat", "standalone", response(), null, "Generated image").capture!;
+  assert.deepEqual(readBrowserCapture(root, "chat", "standalone"), noTurn);
 });
