@@ -6,6 +6,20 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.33 — November 6, 2026
+
+### Added
+
+- **Web Search and Create image.** Find these in the + menu with an active Chat subscription or approved organization access. Search results include sources, and generated images stay with the conversation.
+
+### Improved
+
+- **Clearer reply text.** Assistant replies use your theme’s primary text color for stronger contrast.
+
+### Fixed
+
+- **Use new tools in existing chats.** Eligible chats can gain tool access without starting over or losing their history.
+
 ## 1.13.32 — November 6, 2026
 
 ### Improved
