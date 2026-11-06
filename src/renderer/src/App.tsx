@@ -12050,7 +12050,7 @@ function ChatPane({
                 onClick={() => { setSelectedServerTool(selected => selected === "web_search" ? null : "web_search"); setPlusOpen(false); }}
               />}
               {serverCapabilities.image_generation && <MenuItem
-                icon={<Sparkles size={17} aria-hidden="true" />}
+                icon={<ImageGenerationIcon size={17} />}
                 label="Create image"
                 desc="Generate an image from your description"
                 trailing={<StatePill on={selectedServerTool === "image_generation"} />}
@@ -12403,7 +12403,7 @@ function ChatPane({
                 onClick={() => setSelectedServerTool(null)}
                 title="Selected for this message. Click to remove."
                 style={{ display: "flex", alignItems: "center", gap: 7, background: "var(--chip)", border: "none", borderRadius: 999, padding: "7px 12px", minHeight: 34, color: colors.accent, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit" }}>
-                {selectedServerTool === "web_search" ? <GlobeIcon size={15} /> : <Sparkles size={15} aria-hidden="true" />}
+                {selectedServerTool === "web_search" ? <GlobeIcon size={15} /> : <ImageGenerationIcon size={15} />}
                 {selectedServerTool === "web_search" ? "Web Search" : "Create image"}<CloseIcon />
               </button>}
               {computerSelected && (
@@ -19335,6 +19335,18 @@ function GlobeIcon({ size = 15 }: { size?: number } = {}) {
   );
 }
 
+function ImageGenerationIcon({ size = 15 }: { size?: number } = {}) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <g stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M24 2.5 C30.8 2.5 37.2 2.8 40.7 4.7 C44 6.5 45 9.2 45.5 14.5 C46.2 21 46.2 27 45.5 33.5 C45 38.8 44 41.5 40.7 43.3 C37.2 45.2 30.8 45.5 24 45.5 C17.2 45.5 10.8 45.2 7.3 43.3 C4 41.5 3 38.8 2.5 33.5 C1.8 27 1.8 21 2.5 14.5 C3 9.2 4 6.5 7.3 4.7 C10.8 2.8 17.2 2.5 24 2.5 Z" />
+        <circle cx="32" cy="17" r="5" />
+        <path d="M2.5 30 C6 26 9.2 23 12.7 23 C19.1 23 23.9 30.5 27.7 36 C30 39.3 31.7 42.4 33 45" />
+      </g>
+    </svg>
+  );
+}
+
 function FoldersIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -20990,7 +21002,7 @@ function stepIcon(e: CommandEntry): React.ReactNode {
     );
   }
   if (e.source === "web-search") return <GlobeIcon size={14} />;
-  if (e.source === "image-generation") return <Sparkles size={14} />;
+  if (e.source === "image-generation") return <ImageGenerationIcon size={14} />;
   if (isBrowserStep(e) || isSideBrowserStep(e)) return <GlobeIcon size={14} />;
   if (isMemoryStep(e)) return <LightbulbIcon />;
   if (isComputerStep(e)) return <DesktopIcon size={14} />;
