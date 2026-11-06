@@ -1,6 +1,6 @@
 {
   "name": "unbiased-app",
-  "version": "1.13.32",
+  "version": "1.13.33",
   "description": "Unbiased desktop — Pareto-powered coding agent",
   "main": "out/main/index.js",
   "scripts": {
@@ -23,7 +23,9 @@
     "smoke:browser-mirror": "electron build/smoke-browser-mirror.cjs",
     "smoke:transcript-actions": "electron build/smoke-transcript-actions.cjs",
     "smoke:mosaic-stability": "electron build/smoke-mosaic-stability.cjs",
+    "smoke:transcript-spacing": "electron build/smoke-transcript-spacing.cjs",
     "smoke:mosaic-handoff": "electron build/smoke-mosaic-handoff.cjs",
+    "smoke:side-chat-retention": "electron build/smoke-side-chat-retention.cjs",
     "smoke:themes": "electron build/smoke-themes.cjs",
     "smoke:personalization": "electron build/smoke-personalization.cjs",
     "smoke:agent-instructions": "node build/smoke-agent-instructions.cjs",

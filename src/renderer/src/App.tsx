@@ -1,3 +1,4 @@
+import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
 import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
@@ -1809,6 +1810,7 @@ export function App() {
   }, [authed]);
   // The panel starts closed; closed side chats can be reopened from Recents.
   const [sideOpen, setSideOpen] = useState(false);
+  const [sideHiddenForMosaic, setSideHiddenForMosaic] = useState(false);
   const sidePanelRef = useRef<HTMLDivElement>(null);
   // Side-chat tabs use distinct pane IDs; their engine threads are retained
   // for recovery after a close or restart.
@@ -1817,6 +1819,7 @@ export function App() {
   const [sideChatRestores, setSideChatRestores] = useState<Record<string, SideChatRecovery>>({});
   const [sideChatRecoveryError, setSideChatRecoveryError] = useState<string | null>(null);
   const sideRestorePendingRef = useRef(new Set<string>());
+  const [sideChatRecovering, setSideChatRecovering] = useState<string[]>([]);
   const [sideContexts, setSideContexts] = useState<Record<string, string | null>>({});
   const [sideNonce, setSideNonce] = useState(0);
   const sideChatIdleRef = useRef(new SideChatIdleTracker());
@@ -1894,6 +1897,7 @@ export function App() {
 
   function setSideOpenPersisted(open: boolean) {
     if (open && !sideOpen) setSideFrac(0.5);
+    if (open) setSideHiddenForMosaic(false);
     setSideOpen(open);
   }
 
@@ -1990,7 +1994,8 @@ export function App() {
     setScheduledOpen(false);
     setConnectorsOpen(false);
     setMultiOpen(true);
-    setSideOpenPersisted(false);
+    // Mosaic hides the conversation's panel without changing its open state.
+    setSideHiddenForMosaic(true);
     if (record) visit({ kind: "multi" });
   }
 
@@ -2429,8 +2434,12 @@ export function App() {
       runningTurnElapsedSeconds: clock?.elapsedSeconds,
       compacting: res.compacting,
     }));
-    resetSideView();
-    restoreSideView(id);
+    // Returning from Mosaic refreshes the main transcript, but the same
+    // conversation still owns its live side chats, drafts and panel layout.
+    if (id !== activeThreadId) {
+      resetSideView();
+      restoreSideView(id);
+    }
     // The engine may still be running spawns for this thread — pick up the
     // roster the live pushes accumulated while it was backgrounded.
     fileExistsCache.clear(); // chip probes resolve against the new thread's cwd
@@ -2917,24 +2926,35 @@ export function App() {
       return false;
     }
     sideRestorePendingRef.current.add(recent.paneId);
+    setSideChatRecovering((ids) => [...ids, recent.paneId]);
+    const needsParent = activeThreadId !== recent.parentThreadId;
+    const navigation = openSeqRef.current + (needsParent ? 1 : 0);
     try {
-      if (activeThreadId !== recent.parentThreadId) await openThread(recent.parentThreadId);
+      if (needsParent) await openThread(recent.parentThreadId);
+      if (openSeqRef.current !== navigation) return false;
       const result = await window.unbiased.reopenSideChat(recent.paneId);
+      if (openSeqRef.current !== navigation) {
+        // Recovery can finish after leaving for Mosaic or another chat.
+        // Keep the thread in Recents rather than leaving an invisible pane.
+        if (!("error" in result)) void window.unbiased.resetSideChat(recent.paneId);
+        return false;
+      }
       if ("error" in result) {
         setSideChatRecoveryError(result.error ?? "Could not restore this side chat.");
         return false;
       }
       sideChatIdleRef.current.use(recent.paneId);
       setSideChatRestores((restores) => ({ ...restores, [recent.paneId]: result }));
-      setSideChats((chats) => [...chats, recent.paneId]);
+      setSideChats((chats) => chats.includes(recent.paneId) ? chats : [...chats, recent.paneId]);
       setPanelMode(recent.paneId);
       setSideOpenPersisted(true);
       return true;
     } catch {
-      setSideChatRecoveryError("Could not restore this side chat.");
+      if (openSeqRef.current === navigation) setSideChatRecoveryError("Could not restore this side chat.");
       return false;
     } finally {
       sideRestorePendingRef.current.delete(recent.paneId);
+      setSideChatRecovering((ids) => ids.filter((id) => id !== recent.paneId));
     }
   }
   const reopenRecentSideChatRef = useRef(reopenRecentSideChat);
@@ -3326,7 +3346,7 @@ export function App() {
    *  The one exception is the Agent browser: a scheduled run drives it, and
    *  watching that run happen is the reason to be on the Scheduled page at
    *  all (the mirror is already wired to the running task's thread). */
-  const sideVisible = sideOpen && (!pageOpen || multiOpen || panelMode === "agentmirror");
+  const sideVisible = sideOpen && !(multiOpen && sideHiddenForMosaic) && (!pageOpen || multiOpen || panelMode === "agentmirror");
   const previewBrowserTabs = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
   const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
   const visibleThreadIds = authed !== "in" || showSettings || showChangelog ? []
@@ -5442,6 +5462,7 @@ export function App() {
                   <BrowserStartPage
                     visits={browserVisits}
                     recentSideChats={recentSideChats}
+                    recoveringSideChats={sideChatRecovering}
                     recoveryError={sideChatRecoveryError}
                     inProject={inProject}
                     canSideChat={mainStarted}
@@ -7620,6 +7641,7 @@ function BrowserPane({ browserId, browserState, autoFocusAddress, startPage, hel
 function BrowserStartPage({
   visits,
   recentSideChats,
+  recoveringSideChats,
   recoveryError,
   inProject,
   canSideChat,
@@ -7634,6 +7656,7 @@ function BrowserStartPage({
 }: {
   visits: BrowserVisit[];
   recentSideChats: RecentSideChat[];
+  recoveringSideChats: string[];
   recoveryError: string | null;
   inProject: boolean;
   canSideChat: boolean;
@@ -7715,11 +7738,11 @@ function BrowserStartPage({
             </div>
           </div>
           {recentsOpen && (recent.length > 0 ? recent.map((item) => (
-            <button key={item.kind === "page" ? item.visit.url : item.chat.paneId} type="button" className="u-browser-start-link" onClick={() => item.kind === "page" ? onNavigate(item.visit.url) : onReopenSideChat(item.chat)} title={item.kind === "page" ? item.visit.url : "Reopen side chat"} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, minWidth: 0, border: 0, borderBottom: `1px solid ${colors.border}`, borderRadius: 8, padding: "10px 12px", background: "transparent", color: colors.fg, textAlign: "left", font: "inherit", cursor: "pointer" }}>
+            <button key={item.kind === "page" ? item.visit.url : item.chat.paneId} type="button" className="u-browser-start-link" disabled={item.kind === "side" && recoveringSideChats.includes(item.chat.paneId)} aria-busy={item.kind === "side" && recoveringSideChats.includes(item.chat.paneId)} onClick={() => item.kind === "page" ? onNavigate(item.visit.url) : onReopenSideChat(item.chat)} title={item.kind === "page" ? item.visit.url : "Reopen side chat"} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, minWidth: 0, border: 0, borderBottom: `1px solid ${colors.border}`, borderRadius: 8, padding: "10px 12px", background: "transparent", color: colors.fg, textAlign: "left", font: "inherit", cursor: "pointer" }}>
               <span style={{ display: "grid", placeItems: "center", width: 30, height: 30, flexShrink: 0, borderRadius: 7, background: "var(--panel-2)", color: colors.dim }}>{item.kind === "page" ? <GlobeIcon size={16} /> : <ChatPlusIcon />}</span>
               <span style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13.5 }}>{item.kind === "page" ? item.visit.title : item.chat.title}</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11.5, color: colors.dim }}>{item.kind === "page" ? item.visit.url : `Side chat · Recover within ${sideChatRecoveryDuration(item.chat.closedAt, now)}`}</span>
+                <span role={item.kind === "side" && recoveringSideChats.includes(item.chat.paneId) ? "status" : undefined} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11.5, color: colors.dim }}>{item.kind === "page" ? item.visit.url : recoveringSideChats.includes(item.chat.paneId) ? "Reopening side chat…" : `Side chat · Recover within ${sideChatRecoveryDuration(item.chat.closedAt, now)}`}</span>
               </span>
               <span style={{ color: colors.dim, fontSize: 11.5, flexShrink: 0 }}>{item.kind === "page" ? new Date(item.at).toLocaleDateString() : new Date(item.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
             </button>
@@ -11313,6 +11336,7 @@ function ChatPane({
       if (transcriptSessionRef.current === sessionId) pageLoadingRef.current = false;
     });
   };
+  const transcriptSpacing = useMemo(() => new TranscriptSpacing(), [reset.nonce]);
   const transcriptComponents = useMemo(() => ({
     Header: () => historyOffset > 0 ? (
       <button type="button" onClick={loadEarlierBlocks} style={{ display: "block", margin: "16px auto", background: "transparent", border: "none", color: colors.dim, cursor: "pointer", fontSize: 13 }}>
@@ -11816,13 +11840,11 @@ function ChatPane({
               }}
               startReached={loadEarlierBlocks}
               components={transcriptComponents}
-              // Keep paragraph/turn margins inside each measured row. Collapsed
-              // margins make Virtuoso's total height oscillate as rows enter and
-              // leave the viewport, fighting bottom-follow (especially in Mosaic).
+              // Keep margins inside measured rows and collapse shared edge space once.
               itemContent={(index) => {
                 const i = index - firstBlockIndex;
                 if (i === displayBlocks.length) return (
-                  <div style={{ display: "flow-root", maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
+                  <TranscriptRow index={index} spacing={transcriptSpacing}>
                     {compacting ? (
                       <div style={{ display: "flex", justifyContent: "flex-start", margin: "10px 0" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 14px", borderRadius: 12, background: colors.panel, border: `1px solid ${colors.border}`, fontSize: 14, color: colors.dim }}>
@@ -11839,21 +11861,21 @@ function ChatPane({
                         )}
                       </div>
                     )}
-                  </div>
+                  </TranscriptRow>
                 );
                 const b = displayBlocks[i];
                 if (!b) return null;
                 const prev = displayBlocks[i - 1];
                 const afterWork = prev?.kind === "entry" && prev.entry.kind === "work";
                 return (
-                  <div style={{ display: "flow-root", maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
+                  <TranscriptRow index={index} spacing={transcriptSpacing}>
                     {b.kind === "entry" && b.entry.kind === "user" && b.entry.at !== undefined && datedUserIndices.has(b.key) && (
                       <div style={{ textAlign: "center", margin: "28px 0 18px", color: colors.dim, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
                         {formatConversationDayMarker(b.entry.at)}
                       </div>
                     )}
                     {renderBlock(b, copyableAssistantIndices.has(b.key), false, afterWork)}
-                  </div>
+                  </TranscriptRow>
                 );
               }}
             />

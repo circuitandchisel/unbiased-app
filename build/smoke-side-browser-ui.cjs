@@ -101,7 +101,9 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await until("document.querySelectorAll('[data-browser-preview]').length===3&&document.querySelector('[data-preview-front]').dataset.browserPreview==='-5'");
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Show 2 more browser tabs\"]').textContent"), '+2 tabs');
     const captureStart = await evaluate('window.qaCalls.length');
-    await new Promise(resolve => setTimeout(resolve,750));
+    // Capture timers can be delayed on a busy CI host; wait for the observed
+    // frames rather than assuming all three arrive within a fixed 750 ms.
+    await until(`window.qaCalls.slice(${captureStart}).filter(c=>c[0]==='previewSideBrowser').length>=3`);
     const stackedCaptures = await evaluate(`window.qaCalls.slice(${captureStart}).filter(c=>c[0]==='previewSideBrowser').map(c=>c[1])`);
     assert.ok(stackedCaptures.length>=3);
     assert.ok(stackedCaptures.every(id=>[-5,-4,-3].includes(id)), 'only the three exposed cards capture frames');
