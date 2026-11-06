@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
-import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
+import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE, LEGACY_CONTINUATION_INPUT, isContinuationInput } from "./turn-continuation";
 
-function sendFixture() {
-  const guard = new TurnContinuation(), sender = {};
+function sendFixture(verdict: "continue" | "wait" = "continue") {
+  const guard = new TurnContinuation(async () => verdict), sender = {};
   const calls: Array<{ method: string; params: any }> = [];
   let handler!: (event: any, input: any) => Promise<unknown>;
   const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
@@ -37,16 +37,16 @@ test("annotation Proceed reaches the host through the preload without treating q
   const wire = "Regarding this excerpt from the conversation:\n\n> But first, let me address the immediate EC2 E2E failure.\nComment: Proceed";
   const reply = "I need to find where the timeout is configured and increase it. Let me trace where this value comes from.";
   const f = sendFixture(); await f.send(wire, ["Proceed"]); f.guard.assistant("chat", reply);
-  assert.ok(f.guard.completed("chat", "completed", true).offer);
+  assert.ok((await f.guard.completed("chat", "completed", true)).offer);
   assert.equal(f.calls[0].params.input[0].text, wire, "the agent still receives the selected excerpt");
   for (const request of ["", "Why is this happening?", "Review this excerpt"]) {
-    const denied = sendFixture(); await denied.send(wire, request ? [request] : []); denied.guard.assistant("chat", reply);
-    assert.deepEqual(denied.guard.completed("chat", "completed", true), {}, request || "empty user intent");
+    const denied = sendFixture("wait"); await denied.send(wire, request ? [request] : []); denied.guard.assistant("chat", reply);
+    assert.deepEqual((await denied.guard.completed("chat", "completed", true)), {}, request || "empty user intent");
   }
   const legacy = sendFixture(); await legacy.send("Proceed"); legacy.guard.assistant("chat", reply);
-  assert.ok(legacy.guard.completed("chat", "completed", true).offer, "plain senders without the optional field retain their existing behavior");
+  assert.ok((await legacy.guard.completed("chat", "completed", true)).offer, "plain senders without the optional field retain their existing behavior");
   const multiple = sendFixture(); await multiple.send(wire, ["What does this part mean?", "Proceed"]); multiple.guard.assistant("chat", reply);
-  assert.ok(multiple.guard.completed("chat", "completed", true).offer, "each user-authored comment can express the instruction");
+  assert.ok((await multiple.guard.completed("chat", "completed", true)).offer, "each user-authored comment can express the instruction");
 });
 test("malformed user intent is rejected before starting a turn", async () => {
   for (const value of [null, "Proceed", { text: "Proceed" }, [42]]) {
@@ -55,9 +55,9 @@ test("malformed user intent is rejected before starting a turn", async () => {
   }
 });
 
-function fixture(start?: () => Promise<unknown>) {
-  const guard = new TurnContinuation(); guard.startTask("chat", "Proceed", false); guard.assistant("chat", "Now I'll run the tests.");
-  const ticket = guard.completed("chat", "completed", true).offer!;
+async function fixture(start?: () => Promise<unknown>) {
+  const guard = new TurnContinuation(async () => "continue"); guard.startTask("chat", "Proceed", false); guard.assistant("chat", "Now I'll run the tests.");
+  const ticket = (await guard.completed("chat", "completed", true)).offer!;
   const calls: Array<{ method: string; params: any }> = [];
   const pane = { threadId: "chat", turnId: null as string | null }, sender = {};
   let handler!: (event: any, input: any) => Promise<{ ok: boolean }>;
@@ -76,7 +76,7 @@ function fixture(start?: () => Promise<unknown>) {
   return { guard, ticket, pane, calls, context, invoke: (input: any = { paneId: "main", threadId: "chat", token: ticket.token }, actor = sender) => handler({ sender: actor }, input) };
 }
 test("production continuation IPC preserves current permissions and one-use thread ownership", async () => {
-  const f = fixture();
+  const f = await fixture();
   await assert.rejects(f.invoke(undefined, {}), /Only the app/);
   assert.equal((await f.invoke({ paneId: "main", threadId: "other", token: f.ticket.token })).ok, false);
   assert.equal((await f.invoke()).ok, true);
@@ -88,7 +88,7 @@ test("production continuation IPC preserves current permissions and one-use thre
 });
 test("Stop while automatic turn/start is in flight interrupts the returned turn", async () => {
   let finish!: (value: unknown) => void;
-  const f = fixture(() => new Promise(resolve => { finish = resolve; }));
+  const f = await fixture(() => new Promise(resolve => { finish = resolve; }));
   const pending = f.invoke();
   assert.equal(f.context.automaticTurnStarts.has("chat"), true);
   f.guard.cancel("chat"); assert.equal(f.guard.startingCanceled("chat"), true);
@@ -102,7 +102,7 @@ test("Stop while automatic turn/start is in flight interrupts the returned turn"
 test("approval, input and browser handoffs during startup wait without interrupting the accepted turn", async () => {
   for (const boundary of ["approval", "input", "browser handoff"]) {
     let finish!: (value: unknown) => void;
-    const f = fixture(() => new Promise(resolve => { finish = resolve; }));
+    const f = await fixture(() => new Promise(resolve => { finish = resolve; }));
     const pending = f.invoke();
     f.guard.turnStarted("chat");
     f.context.runningTurns.set("chat", "awaiting-user");
@@ -115,19 +115,19 @@ test("approval, input and browser handoffs during startup wait without interrupt
     assert.equal(f.pane.turnId, "awaiting-user", boundary);
     assert.deepEqual(f.calls.map(c => c.method), ["turn/start"], boundary);
     f.guard.assistant("chat", "Now I'll run the next test.");
-    assert.deepEqual(f.guard.completed("chat", "completed", true), {}, boundary);
+    assert.deepEqual((await f.guard.completed("chat", "completed", true)), {}, boundary);
     assert.equal(f.context.automaticTurnStarts.has("chat"), false);
   }
 });
 test("rejected automatic startup clears the live-turn marker", async () => {
-  const f = fixture(async () => { throw new Error("startup failed"); });
+  const f = await fixture(async () => { throw new Error("startup failed"); });
   await assert.rejects(f.invoke(), /startup failed/);
   assert.equal(f.guard.turnStarted("chat"), false);
   assert.equal(f.context.automaticTurnStarts.has("chat"), false);
 });
 test("navigation, plan mode, disconnect and a newer active turn prevent automatic starts", async () => {
   for (const block of ["navigation", "plan", "disconnect", "running"]) {
-    const f = fixture();
+    const f = await fixture();
     if (block === "navigation") f.pane.threadId = "other";
     if (block === "plan") f.context.planMode = true;
     if (block === "disconnect") f.context.lastStatus.state = "exited";
@@ -142,13 +142,86 @@ test("cold transcript replay labels generated reminders as app status rather tha
   const endAt = source.indexOf("/** Small data-URL preview", startAt);
   const context: any = { readBrowserCaptureTurns: () => ({}), browserCaptureDir: () => "", epochMillis: (v: any) => v ?? null,
     collectBrowserCaptures: () => [], stripFileAttachmentContext: (v: string) => v, contentToText: (v: any[]) => v.map(p => p.text ?? "").join(""),
-    CONTINUATION_INPUT, CONTINUATION_NOTICE,
+    CONTINUATION_INPUT, CONTINUATION_NOTICE, isContinuationInput,
   };
   runInNewContext(transformSync(source.slice(startAt, endAt), { loader: "ts" }).code, context);
-  for (const input of [{ type: "userMessage", text: CONTINUATION_INPUT }, { type: "message", role: "user", content: [{ type: "input_text", text: CONTINUATION_INPUT }] }]) {
+  for (const input of [{ type: "userMessage", text: LEGACY_CONTINUATION_INPUT }, { type: "userMessage", text: CONTINUATION_INPUT }, { type: "message", role: "user", content: [{ type: "input_text", text: CONTINUATION_INPUT }] }]) {
     const replay = context.threadToEntries({ id: "chat", turns: [{ id: "auto", items: [input, { type: "agentMessage", phase: "final_answer", text: "Done. Tests pass." }] }] });
     assert.equal(replay.entries.some((e: any) => e.kind === "user"), false);
     assert.equal(replay.entries[0].text, CONTINUATION_NOTICE);
     assert.equal(replay.entries[1].text, "Done. Tests pass.");
   }
+});
+
+function completionFixture() {
+  let resolve!: (value: "continue" | "done" | "unknown") => void;
+  const guard = new TurnContinuation(async () => new Promise(done => { resolve = done; }));
+  guard.startTask("chat", "Review the PR", false); guard.turnStarted("chat"); guard.assistant("chat", "I'll inspect the diff and report a merge verdict.");
+  const sent: Array<{ channel: string; payload: any }> = [];
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const at = source.indexOf('      case "turn/completed": {', source.indexOf("function wireNotifications()"));
+  const end = source.indexOf('\n        break;\n      }', at) + '\n        break;\n      }'.length;
+  const branch = source.slice(at, end).replace("void (async (paneId:", "return (async (paneId:");
+  let ended = 0;
+  const context: any = {
+    paneId: "main", threadId: "chat", params: { turn: { id: "first", status: "completed" } },
+    panes: { main: { threadId: "chat", turnId: "first" } }, runningTurns: new Map([["chat", "first"]]),
+    paneForThread: (thread: string) => context.panes.main.threadId === thread ? "main" : null,
+    compactingThreads: new Set(), updateThreadCompaction: () => {},
+    sideBrowser: { finishWorker: () => {}, list: () => [] }, turnEnvironments: { end: () => { ended++; } },
+    planMode: false, subAgents: new Map(), scheduledRuns: new Map(), mcpApplyPending: new Set(), pendingApprovals: new Map(), pendingUserInputs: new Map(),
+    rootThreadOf: (thread: string) => thread, turnContinuation: guard, completedTurnsSinceMemory: new Map(), scheduleAutomaticMemory: () => {},
+    observeLearning: () => {}, metrics: { record: () => {} }, metricNow: () => ({}), learning: null,
+    petReplies: new Map(), petFinished: () => {}, petNoticeVersion: 0, showCompletedPetNotice: () => {},
+    bgStream: new Map(), heldApprovals: new Map(), heldErrors: new Map(), turnSawCommentary: new Set(), turnSawFinalAnswer: new Set(),
+    send: (channel: string, payload: any) => sent.push({ channel, payload }),
+    console: { error: (_message: string, error: unknown) => { throw error; } },
+  };
+  runInNewContext(transformSync(`async function finish() { switch ("turn/completed") { ${branch} } }; globalThis.finish = finish;`, { loader: "ts" }).code, context);
+  return { guard, context, sent, run: () => context.finish() as Promise<void>, resolve: (verdict: "continue" | "done" | "unknown") => resolve(verdict), ended: () => ended };
+}
+
+test("production completion waits for SystemOne then publishes a host-owned continuation ticket", async () => {
+  const f = completionFixture(); const pending = f.run(); await Promise.resolve();
+  assert.equal(f.sent.length, 0);
+  f.resolve("continue"); await pending;
+  const completed = f.sent.find(x => x.channel === "chat:turn-completed")!;
+  assert.equal(completed.payload.continuation.threadId, "chat");
+  assert.equal(completed.payload.continuation.originPane, "main");
+  assert.ok(f.guard.claim("chat", completed.payload.continuation.token));
+  assert.equal(f.context.runningTurns.size, 0);
+});
+
+test("production completion fails closed but still settles the UI on classifier failure", async () => {
+  const f = completionFixture(); const pending = f.run(); await Promise.resolve();
+  f.resolve("unknown"); await pending;
+  const completed = f.sent.find(x => x.channel === "chat:turn-completed")!;
+  assert.equal(completed.payload.continuation, undefined);
+  assert.equal(f.context.panes.main.turnId, null);
+});
+
+test("a late classifier result cannot clear a newer engine turn or reused pane", async () => {
+  for (const replacement of ["turn", "pane", "plan", "approval"]) {
+    const f = completionFixture(); const pending = f.run(); await Promise.resolve();
+    if (replacement === "turn") { f.guard.turnStarted("chat"); f.context.runningTurns.set("chat", "second"); f.context.panes.main.turnId = "second"; }
+    else if (replacement === "pane") { f.context.panes.main.threadId = "another-chat"; f.context.panes.main.turnId = "another-turn"; }
+    else if (replacement === "plan") f.context.planMode = true;
+    else f.context.pendingApprovals.set("approval", { threadId: "chat" });
+    f.resolve("continue"); await pending;
+    assert.equal(f.sent.some(x => x.payload.continuation), false, replacement);
+    if (replacement === "turn") assert.equal(f.context.panes.main.turnId, "second");
+    if (replacement === "pane") assert.equal(f.context.panes.main.turnId, "another-turn");
+  }
+});
+
+test("an old engine completion is ignored before touching the newer turn environment", async () => {
+  const f = completionFixture(); f.context.runningTurns.set("chat", "second"); f.context.panes.main.turnId = "second";
+  await f.run(); assert.equal(f.ended(), 0); assert.equal(f.sent.length, 0);
+});
+
+test("duplicate production completion notifications do not settle the UI ahead of the pending verdict", async () => {
+  const f = completionFixture(); const first = f.run(); await Promise.resolve();
+  await f.run(); assert.equal(f.sent.length, 0);
+  f.resolve("continue"); await first;
+  assert.equal(f.sent.filter(x => x.channel === "chat:turn-completed").length, 1);
 });

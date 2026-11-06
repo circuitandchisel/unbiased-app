@@ -158,6 +158,39 @@ You type *"Create a file named demo.py"* and press Enter.
 The important line: **the model never touches your machine.** It can only
 ask the engine to act, and the engine decides whether that's allowed.
 
+## Recovering premature final replies
+
+After an eligible interactive turn completes, the main process asks
+`https://api.unbiased.ai/v1/systemone` whether the user's requested work is
+finished, should continue now, or needs user input. This replaces request and
+reply keyword matching. The classifier receives the actual user-authored
+requests (annotation comments stay separate from quoted excerpts), the latest
+assistant reply, the preceding request/reply exchange when available, and
+completed/failed action counts. It receives no tool output or full transcript.
+The app uses its existing API key and known-secret redaction; oversized evidence
+is skipped rather than truncated past a possible constraint.
+
+Only a validated `continue` choice with confidence at least 0.85 can produce a
+host-owned one-use continuation ticket. Plan mode, pending approvals, questions,
+browser handoffs and autonomous jobs remain ineligible. The classifier cannot
+change sandbox or approval settings, authorize new actions, or bypass the
+existing limit of two automatic continuations. Stop, new user input and a new
+turn invalidate pending checks and tickets. Late results cannot settle a newer
+turn or update a pane now showing another conversation.
+
+There is one classification request per eligible completed reply, with no
+network retries and a 1,500 ms host deadline. HTTP failures, invalid answers,
+uncertainty and timeouts leave the turn stopped; there is no text-match fallback.
+The main process logs only verdict and duration, not classifier evidence. Both
+old and new app-generated continuation reminders replay as app notices.
+
+Run the opt-in semantic/latency evaluation with
+`node --import tsx build/eval-turn-continuation.mts`. It uses synthetic examples
+and the app's configured key, prints verdicts/timings/status codes only, and
+exits unsuccessfully for misclassifications or unavailable service. Production
+latency and semantic accuracy must be measured with a healthy endpoint; local
+mocked tests do not establish either.
+
 ## The sandbox and access modes
 
 Every turn carries a sandbox policy and an approval policy. The app exposes
