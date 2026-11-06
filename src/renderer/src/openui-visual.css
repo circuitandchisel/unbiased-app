@@ -188,3 +188,33 @@
   color: var(--dim);
   font: 14px var(--font-ui);
 }
+
+/* Image attachments share the Visualize top layer, toolbar and zoom variable. */
+.app-generated-visual-viewport.app-image-lightbox:popover-open {
+  width: calc(100vw - 32px);
+  height: calc(100dvh - 32px);
+}
+
+.app-image-lightbox__canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
+}
+
+.app-image-lightbox__content {
+  display: grid;
+  place-items: center;
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+}
+
+.app-image-lightbox__content img {
+  display: block;
+  width: calc(var(--image-fit-width) * var(--visual-zoom, 1));
+  max-width: none;
+  height: auto;
+  border-radius: 4px;
+}

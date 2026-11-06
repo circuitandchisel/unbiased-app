@@ -82,7 +82,7 @@ export function ImageGenerationPreview({ path, running = false, reveal = false, 
     return () => window.clearTimeout(timeout);
   }, [url, reveal, revealed, reducedMotion, effectUnavailable, active]);
 
-  return <div ref={host} data-image-generation-preview={running ? "running" : failed ? "failed" : url ? "ready" : "loading"}
+  return <div ref={host} data-image-generation-path={path} data-image-generation-preview={running ? "running" : failed ? "failed" : url ? "ready" : "loading"}
     style={{ width: "min(320px, 100%)", margin: "10px 0", flexShrink: 0 }}>
     <div style={{ position: "relative", aspectRatio: "1", borderRadius: 12, overflow: "hidden", background: "var(--panel-2)", border: "1px solid var(--border)" }}>
       {url && !failed && <button type="button" aria-label="Open generated image" onClick={onOpen} disabled={!onOpen}

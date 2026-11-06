@@ -1,5 +1,6 @@
 import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
 import { ImageGenerationPreview } from "./image-generation-preview";
+import { ImageLightbox } from "./image-lightbox";
 import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
@@ -1811,6 +1812,7 @@ export function App() {
   }, [authed]);
   // The panel starts closed; closed side chats can be reopened from Recents.
   const [sideOpen, setSideOpen] = useState(false);
+  const [imageLightbox, setImageLightbox] = useState<{ name: string; path: string; returnFocus: HTMLElement | null } | null>(null);
   const [sideHiddenForMosaic, setSideHiddenForMosaic] = useState(false);
   const sidePanelRef = useRef<HTMLDivElement>(null);
   // Side-chat tabs use distinct pane IDs; their engine threads are retained
@@ -2871,6 +2873,7 @@ export function App() {
       !renameDialog &&
       !moveDialog &&
       !editProj &&
+      !imageLightbox &&
       // A WebContentsView is an OS-level overlay, not a DOM node: the panel
       // hiding itself with display:none would leave the page floating over
       // Scheduled or Connectors. It has to be told.
@@ -2896,7 +2899,7 @@ export function App() {
     };
     void sync();
     return () => { cancelled = true; };
-  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, pageOpen]);
+  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, imageLightbox, pageOpen]);
 
   function openSideChatTab(): string {
     if (sideChats.length >= MAX_TABS_PER_KIND) {
@@ -3146,6 +3149,10 @@ export function App() {
   }
 
   async function openImagePreview(a: { name: string; path: string }) {
+    if (a.name === "Generated image") {
+      setImageLightbox({ ...a, returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null });
+      return;
+    }
     const result = await window.unbiased.readImage(a.path);
     addFileTab({
       name: a.name,
@@ -6390,6 +6397,7 @@ export function App() {
       {showChangelog && (
         <ChangelogModal releases={releases} onClose={() => setShowChangelog(false)} />
       )}
+      {imageLightbox && <ImageLightbox key={imageLightbox.path} image={imageLightbox} onClose={() => setImageLightbox(null)} />}
       {renameDialog && (
         <div
           onMouseDown={(e) => {
