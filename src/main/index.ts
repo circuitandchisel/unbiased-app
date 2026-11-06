@@ -3549,21 +3549,8 @@ function mcpOverrideFor(threadId: string | null): Record<string, unknown> {
 
 }
 
-// Re-declare everything a thread/start would. Tools are declared per
-// session, not stored with the thread, so a resumed conversation had
-// NO dynamic tools at all — reopening a chat silently cost it the
-// agent browser and the scheduling tool, and the model discovered
-// that mid-task ("there are no browser_connect tools available").
-//
-// Same omission as the side-chat fork, in the path I did not check
-// when fixing that one. ThreadResumeParams accepts
-// developerInstructions; dynamicTools and experimentalRawEvents are
-// experimentalApi fields absent from the schema, and the engine
-// ignores unknown params, so this cannot break a resume. Whether it
-// HONOURS them on resume is unverified — experimentalRawEvents is
-// known to be ignored here (measured for the sub-agent nicknames),
-// so dynamicTools may be too. If it is, a reopened conversation
-// needs a fresh thread to regain tools, not this.
+// Resume restores the thread's saved dynamic tools. Replacement is explicit:
+// a selected server tool refreshes an idle, unsubscribed session before its turn.
 /** Everything a thread/resume must re-declare, plus the conversation's MCP
  *  set. One function so the reopen path and the MCP-switch path can never
  *  disagree — a resume that forgot the override would silently hand the
@@ -3573,7 +3560,6 @@ async function resumeParamsFor(id: string): Promise<Record<string, unknown>> {
   return {
     threadId: id,
     ...threadPolicy(),
-    dynamicTools: await threadDynamicTools(),
     // A cold reopen can safely recover thread-private notes by ID. Project
     // memory still needs a known cwd; never substitute the previous chat's.
     developerInstructions: developerInstructionsFor(threadCwds.get(id) ?? null, id),
@@ -8139,7 +8125,7 @@ app.whenReady().then(async () => {
     }
     if (payload.serverTool) await serverToolSessions.prepare(pane.threadId!, payload.serverTool, await serverTools.capabilities(), runningTurns.has(pane.threadId!), async () => {
       await engine.request("thread/unsubscribe", { threadId: pane.threadId });
-      await engine.request("thread/resume", await resumeParamsFor(pane.threadId!));
+      await engine.request("thread/resume", { ...await resumeParamsFor(pane.threadId!), dynamicTools: await threadDynamicTools() });
     });
     // Mentions preserve attachment metadata in thread history, but local
     // paths in mentions do not reach the model. Supply readable files (or an
