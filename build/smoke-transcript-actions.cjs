@@ -12,10 +12,10 @@ import {ChatPane,MultiViewTile} from './src/renderer/src/App';
 window.qaCopied=[];Object.defineProperty(navigator,"clipboard",{value:{writeText:async text=>window.qaCopied.push(text)}});window.qaCalls=[];window.qaListeners=new Map();window.qaEmit=(name,payload)=>{for(const cb of window.qaListeners.get(name)??[])cb(payload)};window.qaKeyEvents=[];document.addEventListener('keydown',e=>window.qaKeyEvents.push({key:e.key,code:e.code,keyCode:e.keyCode,trusted:e.isTrusted,target:e.target.outerHTML?.slice(0,150)}),true);
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const listeners=window.qaListeners.get(key)??new Set();listeners.add(cb);window.qaListeners.set(key,listeners);return ()=>listeners.delete(cb)};
- return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='sendMessage')return {threadId:args[0]==='main'?'chat-one':args[0],turnId:'qa-user-turn',created:false};if(key==='continueUnfinished'){window.qaEmit('onTurnStarted',{paneId:args[0].paneId,turnId:'auto-turn',automaticContinuation:true});return {ok:true}};if(key==='slashCommands')return {commands:[{id:'review',command:'CodeReview',label:'Code Review',description:'Review standards and spec',source:args[0]==='main'?'Unbiased':'This project',skill:{name:'code-review',path:'/qa/'+args[0]+'/code-review/SKILL.md'}},{id:'style',command:'CodeStyle',label:'Code Style',description:'Check style',source:'Shared',skill:{name:'code-style',path:'/qa/style/SKILL.md'}}],error:null};if(key==='mountThread')return {lease:'qa-lease',entries,running:!!window.qaMosaicCompacting,compacting:!!window.qaMosaicCompacting};if(key==='contextUsage')return null;if(key==='mcpThreadGet')return {enabled:[]};if(key==='liveApprovals'||key==='liveUserInputs')return [];if(key==='fileExists')return {exists:false};if(key==='favicon')return {dataUrl:null};return {};};
+ return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='sendMessage')return {threadId:args[0]==='main'?'chat-one':args[0],turnId:'qa-user-turn',created:false};if(key==='continueUnfinished'){window.qaEmit('onTurnStarted',{paneId:args[0].paneId,turnId:'auto-turn',automaticContinuation:true});return {ok:true}};if(key==='slashCommands')return {commands:[{id:'review',command:'CodeReview',label:'Code Review',description:'Review standards and spec',source:args[0]==='main'?'Unbiased':'This project',skill:{name:'code-review',path:'/qa/'+args[0]+'/code-review/SKILL.md'}},...(args[0]==='main'?[{id:'shared-review',command:'CodeReview',label:'Code Review',description:'Personal copy',source:'Shared',skill:{name:'code-review',path:'/qa/shared/code-review/SKILL.md'}}]:[]),{id:'style',command:'CodeStyle',label:'Code Style',description:'Check style',source:'Shared',skill:{name:'code-style',path:'/qa/style/SKILL.md'}}],error:null};if(key==='mountThread')return {lease:'qa-lease',entries,running:!!window.qaMosaicCompacting,compacting:!!window.qaMosaicCompacting};if(key==='contextUsage')return {usage:null};if(key==='mcpThreadGet')return {enabled:[]};if(key==='liveApprovals'||key==='liveUserInputs')return [];if(key==='fileExists')return {exists:false};if(key==='favicon')return {dataUrl:null};return {};};
 }});
 const entries=[{kind:'assistant',text:'Select this side chat excerpt.\\n\\nSee [example link](https://example.com/side-chat).'}];
-const side={paneId:'side:qa',connected:true,canTypeToFocus:()=>false,reset:{entries,nonce:0},emptyState:null,accessMode:'untrusted',onAccessModeChange:()=>{},planMode:false,onTogglePlanMode:()=>{}};
+const side={paneId:'side:qa',connected:true,canTypeToFocus:()=>false,reset:{entries,nonce:0},emptyState:null,accessMode:'untrusted',onAccessModeChange:()=>{},planMode:false,onTogglePlanMode:()=>window.qaCalls.push(['togglePlan'])};
 const mosaic={...side,id:'qa-mosaic',columnSpan:1,fresh:false,project:null,projects:[],title:'Mosaic QA',onSelectEnvironment:async()=>{},onCreateProject:()=>{},onOpenChat:()=>{},onRemove:()=>{},onTurnLanded:()=>{}};
 const main={...side,persistTranscript:true,paneId:'main',onAskSideChat:text=>window.qaCalls.push(['askSide',text])};
 const root=createRoot(document.getElementById('root'));
@@ -53,7 +53,7 @@ render();
  const pause=()=>new Promise(r=>setTimeout(r,100));
  const until=async(check,message)=>{
    for(let attempt=0;attempt<30;attempt++){if(await check())return;await pause();}
-   const diagnostics=await win.webContents.executeJavaScript("({sends:window.qaCalls.filter(c=>c[0]==='sendMessage'),sideText:document.querySelector('#side').innerText,keys:window.qaKeyEvents,activeElement:document.activeElement?.outerHTML?.slice(0,500),mainText:document.querySelector('#main').innerText,copyAnswers:[...document.querySelectorAll('#main button[aria-label=\"Copy reply\"]')].map(b=>b.parentElement.parentElement.textContent)})");
+   const diagnostics=await win.webContents.executeJavaScript("({sends:window.qaCalls.filter(c=>c[0]==='sendMessage'),sideText:document.querySelector('#side').innerText,keys:window.qaKeyEvents,selection:{anchor:window.getSelection()?.anchorOffset,focus:window.getSelection()?.focusOffset,text:window.getSelection()?.anchorNode?.textContent},activeElement:document.activeElement?.outerHTML?.slice(0,500),mainText:document.querySelector('#main').innerText,copyAnswers:[...document.querySelectorAll('#main button[aria-label=\"Copy reply\"]')].map(b=>b.parentElement.parentElement.textContent)})");
    assert.fail(message+JSON.stringify(diagnostics));
  };
  const exists=selector=>win.webContents.executeJavaScript(`!!document.querySelector(${JSON.stringify(selector)})`);
@@ -243,20 +243,48 @@ render();
  };
  const key=async(key,code,windowsVirtualKeyCode,modifiers=0)=>{await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,modifiers});await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode,modifiers})};
  const insert=text=>win.webContents.debugger.sendCommand('Input.insertText',{text});
- await focusComposer('main');await insert('/cOd');
- await until(()=>win.webContents.executeJavaScript("document.querySelectorAll('#main [role=option]').length===2"),'case-insensitive prefix shows matching enabled commands');
+ // Position the native DOM caret explicitly. A burst of debugger ArrowLeft
+ // events can arrive before Chromium has settled the insertion on CI macOS.
+ // Completion itself still uses trusted keyboard events below.
+ const placeCaret=async(id,offset)=>{
+   await win.webContents.executeJavaScript(`(()=>{
+     const editor=document.querySelector(${JSON.stringify(composer(id))});
+     editor.focus();
+     const nodes=document.createTreeWalker(editor,NodeFilter.SHOW_TEXT);
+     let remaining=${offset},node;
+     while((node=nodes.nextNode())){
+       if(remaining<=node.textContent.length){
+         window.getSelection().setPosition(node,remaining);
+         document.dispatchEvent(new Event('selectionchange'));
+         return;
+       }
+       remaining-=node.textContent.length;
+     }
+     throw new Error('Caret offset is outside the composer');
+   })()`);
+   await win.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+   assert.equal(await win.webContents.executeJavaScript(`(()=>{
+     const range=document.createRange();range.selectNodeContents(document.querySelector(${JSON.stringify(composer(id))}));
+     const selection=window.getSelection();range.setEnd(selection.anchorNode,selection.anchorOffset);return range.toString().length;
+   })()`),offset,'native caret reaches the inline command');
+ };
+
+ await focusComposer('main');await insert('Please /cOd origin/main');
+ await placeCaret('main','Please /cOd'.length);
+ await until(()=>win.webContents.executeJavaScript("document.querySelectorAll('#main [role=option]').length===3"),'case-insensitive prefix shows matching enabled commands');
  assert.match(await win.webContents.executeJavaScript("document.querySelector('#main [role=listbox]').innerText"),/Code Review/);
  if(process.env.UNBIASED_SLASH_SCREENSHOT)require('node:fs').writeFileSync(process.env.UNBIASED_SLASH_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
- await key('ArrowDown','ArrowDown',40);
+ assert.match(await win.webContents.executeJavaScript("document.querySelector('#main [role=option][aria-selected=true]').innerText"),/Unbiased/);
+ await key('ArrowDown','ArrowDown',40);await key('ArrowDown','ArrowDown',40);
  assert.match(await win.webContents.executeJavaScript("document.querySelector('#main [role=option][aria-selected=true]').innerText"),/Code Style/);
- await key('ArrowUp','ArrowUp',38);await key('Tab','Tab',9);
- await until(()=>win.webContents.executeJavaScript("document.querySelector('#main [role=textbox]').textContent.startsWith('/CodeReview')&&!document.querySelector('#main [role=listbox]')"),'Tab inserts canonical command without sending');
- await pause();await insert('origin/main');await key('Enter','Enter',13);
+ await key('ArrowUp','ArrowUp',38);await key('ArrowUp','ArrowUp',38);await key('Tab','Tab',9);
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#main [role=textbox]').textContent==='Please /CodeReview origin/main'&&!document.querySelector('#main [role=listbox]')"),'Tab inserts canonical command without sending');
+ await pause();await key('End','End',35);await key('Enter','Enter',13);
  await until(()=>win.webContents.executeJavaScript("window.qaCalls.some(c=>c[0]==='sendMessage'&&c[1]==='main'&&c[2].includes('/CodeReview'))"),'selected command is sent');
  const reviewSend=await win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='sendMessage'&&c[1]==='main').at(-1)");
- assert.equal(reviewSend[2],'/CodeReview origin/main');
+ assert.equal(reviewSend[2],'Please /CodeReview origin/main');
  assert.equal(reviewSend[4].skillPath,'/qa/main/code-review/SKILL.md');
- assert.equal(reviewSend[4].commandText,'/CodeReview origin/main');
+ assert.equal(reviewSend[4].commandText,'Please /CodeReview origin/main');
  await focusComposer('main');await insert('/Code');
  await until(()=>exists('#main [role=listbox]'),'picker opens during a running turn');
  const interrupts=await win.webContents.executeJavaScript("window.qaCalls.filter(c=>c[0]==='interrupt').length");
@@ -403,5 +431,18 @@ render();
  `);
  await until(async()=>emptyWarnings(await savedMainEntries())===warningsBefore+1,'the next burst-delivered retry starts fresh and reports empty output');
  assert.ok(flatten(await savedMainEntries()).filter(e=>e.kind==='work').every(e=>Number.isFinite(e.duration)),'batched folds retain finite durations');
+ // An explicit alternative source remains usable, and inline Plan preserves prose.
+ await win.webContents.executeJavaScript('window.qaPromptHistory()');
+ await focusComposer('main');await insert('Please /Code');
+ await until(()=>win.webContents.executeJavaScript("document.querySelectorAll('#main [role=option]').length===3"),'inline command picker loads duplicate sources');
+ await key('ArrowDown','ArrowDown',40);await key('Tab','Tab',9);
+ await pause();await insert('this PR');await key('Enter','Enter',13);
+ await until(()=>win.webContents.executeJavaScript("window.qaCalls.some(c=>c[0]==='sendMessage'&&c[4]?.skillPath==='/qa/shared/code-review/SKILL.md')"),'explicit Shared selection overrides the Unbiased default');
+ await focusComposer('main');await insert('Please /Pl now');
+ await placeCaret('main','Please /Pl'.length);
+ await until(()=>exists('#main [role=option]'),'inline Plan picker opens at caret');
+ await key('Tab','Tab',9);
+ await until(()=>win.webContents.executeJavaScript("document.querySelector('#main [role=textbox]').textContent==='Please  now'"),'Plan removes only its token and preserves the surrounding draft');
+ assert.ok(await win.webContents.executeJavaScript("window.qaCalls.some(c=>c[0]==='togglePlan')"),'Plan selection toggles the mode');
  console.log('PASS: transcript actions, annotations, timers, compaction, completed copy actions, and slash-command matching, keyboard selection, arguments, queueing, Escape, prompt recall/draft restoration and side-chat/Mosaic scope.');win.destroy();app.quit();
 })().catch(e=>{console.error(e);app.exit(1)});

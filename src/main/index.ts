@@ -59,7 +59,7 @@ import { ProjectStore } from "./project-store";
 import { OPENUI_VISUAL_INSTRUCTIONS, VISUALIZE_DIRECTIVE } from "./visual-instructions";
 import { epochMillis } from "../shared/conversation-time";
 import { alignRunningTurnStart, chooseTranscript, initialTranscriptPage, replaceTranscriptTail, retitleTranscript, transcriptPage, type TranscriptRow } from "../shared/transcript-pages";
-import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_SCHEME, interactiveVisualDocument, interactiveVisualId, interactiveVisualPreviewCsp, interactiveVisualPreviewDocument, isInteractiveVisualPreviewUrl, isInteractiveVisualSource } from "../shared/interactive-visual";
+import { INTERACTIVE_VISUAL_CSP, INTERACTIVE_VISUAL_SCHEME, interactiveVisualDocument, interactiveVisualSourceIssue, interactiveVisualId, interactiveVisualPreviewCsp, interactiveVisualPreviewDocument, isInteractiveVisualPreviewUrl, isInteractiveVisualSource } from "../shared/interactive-visual";
 import { agentInputFields, codexInputResponse, mcpInputFields, mcpInputResponse, validateUserInput, type UserInputRequest, type UserInputValue } from "../shared/user-input";
 
 import { startSecretProxy, type SecretConnector } from "./oauth-proxy";
@@ -7666,7 +7666,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("visual:register", (event, source: unknown) => {
     if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
-        !isInteractiveVisualSource(source)) return null;
+        !isInteractiveVisualSource(source) || interactiveVisualSourceIssue(source)) return null;
     const id = randomUUID();
     interactiveVisuals.set(id, source);
     if (interactiveVisuals.size > 32) interactiveVisuals.delete(interactiveVisuals.keys().next().value!);

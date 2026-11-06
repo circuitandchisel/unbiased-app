@@ -57,6 +57,11 @@ jobs:
 
       - name: Smoke test Mosaic scroll stability
         run: npm run smoke:mosaic-stability
+      - name: Smoke test generated visual recovery
+        run: npm run smoke:visual-recovery
+
+      - name: Smoke test live Mosaic conversation handoff
+        run: npm run smoke:mosaic-handoff
 
       - name: Smoke test custom agent instructions settings
         run: |

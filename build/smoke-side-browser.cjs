@@ -11,6 +11,19 @@ const { connectSidePage } = require('../src/main/side-browser-cdp.ts');
 const fixture = fs.mkdtempSync(join(tmpdir(), 'unbiased-side-control-'));
 app.setPath('userData', join(fixture, 'profile'));
 const deadline = setTimeout(() => { console.error('Side-browser regression timed out'); app.exit(1); }, 60000); deadline.unref();
+// Chromium may reject the first hidden capture before its compositor has a
+// frame on macOS CI. Retry only that transient Viz failure, keeping the native
+// view hidden and retaining all pixel/visibility assertions below.
+async function captureHidden(contents) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await contents.capturePage(undefined, { stayHidden: true }); }
+    catch (error) {
+      if (error.message !== 'UnknownVizError' || attempt >= 2) throw error;
+      await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+}
+
 async function main() {
   const server = http.createServer((request, response) => {
     response.setHeader('content-type', 'text/html');
@@ -39,7 +52,7 @@ async function main() {
   });
   try {
     const tab = await controller.open('chat-one', url);
-    const thumbnail = await views.get(tab.id).webContents.capturePage(undefined, {stayHidden:true});
+    const thumbnail = await captureHidden(views.get(tab.id).webContents);
     assert.equal(thumbnail.isEmpty(), false, 'hidden native tab can supply a preview without being shown');
     if (process.env.UNBIASED_PREVIEW_QA_PAGE) fs.writeFileSync(process.env.UNBIASED_PREVIEW_QA_PAGE, thumbnail.toPNG());
 
@@ -76,8 +89,8 @@ async function main() {
     await controller.run('chat-one', tab.id, async page => {
       await page.evaluate(() => { document.body.style.background = '#204060'; });
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const firstFrame = await views.get(tab.id).webContents.capturePage(undefined, {stayHidden:true});
-      const otherFrame = await views.get(other.id).webContents.capturePage(undefined, {stayHidden:true});
+      const firstFrame = await captureHidden(views.get(tab.id).webContents);
+      const otherFrame = await captureHidden(views.get(other.id).webContents);
       assert.deepEqual([...firstFrame.toBitmap().subarray(0,3)], [0x60,0x40,0x20], 'a covered background tab supplies its own freshly updated pixels');
       assert.deepEqual([...otherFrame.toBitmap().subarray(0,3)], [255,255,255], 'another background tab supplies a distinct frame');
       assert.equal(background.isVisible(), false);
