@@ -3,9 +3,22 @@ export type ServerToolName = typeof SERVER_TOOL_NAMES[number];
 export type ServerToolCapabilities = Record<ServerToolName, boolean>;
 export const NO_SERVER_TOOLS: ServerToolCapabilities = { web_search: false, image_generation: false };
 
+/** Match Chat's authenticated whoami / subscription-or-organization-grant gate. */
 export function serverToolCapabilities(value: unknown): ServerToolCapabilities {
-  const tools = value && typeof value === "object" ? (value as { tools?: Record<string, { allowed?: unknown }> }).tools : undefined;
-  return { web_search: tools?.web_search?.allowed === true, image_generation: tools?.image_generation?.allowed === true };
+  const identity = value as {
+    ok?: unknown; accessStatus?: unknown; accountType?: unknown; keyName?: unknown;
+    organization?: { id?: unknown; name?: unknown }; workload?: { id?: unknown; name?: unknown };
+    chatEligibility?: { allowed?: unknown; reason?: unknown };
+  } | null;
+  const text = (field: unknown): boolean => typeof field === "string" && field.trim().length > 0;
+  const validIdentity = identity?.ok === true && identity.accessStatus === "granted"
+    && text(identity.organization?.id) && text(identity.organization?.name)
+    && text(identity.workload?.id) && text(identity.workload?.name) && text(identity.keyName);
+  const entitlement = identity?.chatEligibility;
+  const allowed = validIdentity && entitlement?.allowed === true
+    && (entitlement.reason === "organization_grant"
+      || (identity?.accountType === "personal" && entitlement.reason === "eligible"));
+  return { web_search: allowed, image_generation: allowed };
 }
 
 export function serverToolDirective(tool: ServerToolName): string {

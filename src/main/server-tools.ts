@@ -67,21 +67,21 @@ export class ServerToolsClient {
   private epoch = 0;
   private stopped = new Set<string>();
   private calls = new Map<string, Set<AbortController>>();
-  constructor(private key: () => string | null, private request: typeof fetch = fetch) {}
+  constructor(private key: () => string | null, private request: typeof fetch = fetch, private platformBase: () => string = () => "https://platform.unbiased.ai") {}
 
-  async capabilities(): Promise<ServerToolCapabilities> {
+  async capabilities(refresh = false): Promise<ServerToolCapabilities> {
     const key = this.key();
     if (!key) return { ...NO_SERVER_TOOLS };
-    if (this.cache?.key === key && this.cache.until > Date.now()) return this.cache.capabilities;
+    if (!refresh && this.cache?.key === key && this.cache.until > Date.now()) return this.cache.capabilities;
     if (this.pending?.key === key) return this.pending.result;
     const epoch = this.epoch;
     const result = (async () => {
       let capabilities = { ...NO_SERVER_TOOLS };
       try {
-        const response = await this.request(`${BASE}/v1/tool-capabilities`, { headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(2500) });
+        const response = await this.request(`${this.platformBase()}/api/cli/whoami`, { headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(2500) });
         if (response.ok) capabilities = serverToolCapabilities(await boundedJson(response));
         else await response.body?.cancel();
-      } catch { /* Unknown, offline or undeployed capability discovery stays hidden. */ }
+      } catch { /* Unknown or offline Chat entitlement stays hidden. */ }
       if (this.key() !== key || epoch !== this.epoch) return { ...NO_SERVER_TOOLS };
       this.cache = { key, until: Date.now() + 30_000, capabilities };
       return capabilities;
@@ -101,7 +101,7 @@ export class ServerToolsClient {
     const controller = new AbortController();
     const calls = this.calls.get(thread) ?? new Set<AbortController>(); calls.add(controller); this.calls.set(thread, calls);
     try {
-      if (!key || !(await this.capabilities())[tool] || this.key() !== key) throw new ServerToolError("This server tool is unavailable for your account or workload.");
+      if (!key || !(await this.capabilities(true))[tool] || this.key() !== key) throw new ServerToolError("This server tool requires an active Chat subscription or organization grant.");
       controller.signal.throwIfAborted();
       const args = rawArgs && typeof rawArgs === "object" ? rawArgs as Record<string, unknown> : {};
       const field = tool === "web_search" ? "query" : "prompt";
@@ -141,7 +141,7 @@ export class ServerToolSessions {
   clear(): void { this.tools.clear(); }
   remember(thread: string, capabilities: ServerToolCapabilities): void { this.tools.set(thread, new Set(SERVER_TOOL_NAMES.filter(name => capabilities[name]))); }
   async prepare(thread: string, tool: ServerToolName, capabilities: ServerToolCapabilities, running: boolean, refresh: () => Promise<void>): Promise<void> {
-    if (!capabilities[tool]) throw new ServerToolError("This server tool is unavailable for your account or workload.");
+    if (!capabilities[tool]) throw new ServerToolError("This server tool requires an active Chat subscription or organization grant.");
     if (this.tools.get(thread)?.has(tool)) return;
     if (running) throw new ServerToolError("Wait for the current turn to finish before selecting this server tool.");
     await refresh();
