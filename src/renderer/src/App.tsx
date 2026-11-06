@@ -1,3 +1,4 @@
+import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
 import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
@@ -11313,6 +11314,7 @@ function ChatPane({
       if (transcriptSessionRef.current === sessionId) pageLoadingRef.current = false;
     });
   };
+  const transcriptSpacing = useMemo(() => new TranscriptSpacing(), [reset.nonce]);
   const transcriptComponents = useMemo(() => ({
     Header: () => historyOffset > 0 ? (
       <button type="button" onClick={loadEarlierBlocks} style={{ display: "block", margin: "16px auto", background: "transparent", border: "none", color: colors.dim, cursor: "pointer", fontSize: 13 }}>
@@ -11816,13 +11818,11 @@ function ChatPane({
               }}
               startReached={loadEarlierBlocks}
               components={transcriptComponents}
-              // Keep paragraph/turn margins inside each measured row. Collapsed
-              // margins make Virtuoso's total height oscillate as rows enter and
-              // leave the viewport, fighting bottom-follow (especially in Mosaic).
+              // Keep margins inside measured rows and collapse shared edge space once.
               itemContent={(index) => {
                 const i = index - firstBlockIndex;
                 if (i === displayBlocks.length) return (
-                  <div style={{ display: "flow-root", maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
+                  <TranscriptRow index={index} spacing={transcriptSpacing}>
                     {compacting ? (
                       <div style={{ display: "flex", justifyContent: "flex-start", margin: "10px 0" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 14px", borderRadius: 12, background: colors.panel, border: `1px solid ${colors.border}`, fontSize: 14, color: colors.dim }}>
@@ -11839,21 +11839,21 @@ function ChatPane({
                         )}
                       </div>
                     )}
-                  </div>
+                  </TranscriptRow>
                 );
                 const b = displayBlocks[i];
                 if (!b) return null;
                 const prev = displayBlocks[i - 1];
                 const afterWork = prev?.kind === "entry" && prev.entry.kind === "work";
                 return (
-                  <div style={{ display: "flow-root", maxWidth: 768, margin: "0 auto", padding: "0 24px" }}>
+                  <TranscriptRow index={index} spacing={transcriptSpacing}>
                     {b.kind === "entry" && b.entry.kind === "user" && b.entry.at !== undefined && datedUserIndices.has(b.key) && (
                       <div style={{ textAlign: "center", margin: "28px 0 18px", color: colors.dim, fontSize: 12.5, fontVariantNumeric: "tabular-nums" }}>
                         {formatConversationDayMarker(b.entry.at)}
                       </div>
                     )}
                     {renderBlock(b, copyableAssistantIndices.has(b.key), false, afterWork)}
-                  </div>
+                  </TranscriptRow>
                 );
               }}
             />

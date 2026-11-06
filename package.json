@@ -23,6 +23,7 @@
     "smoke:browser-mirror": "electron build/smoke-browser-mirror.cjs",
     "smoke:transcript-actions": "electron build/smoke-transcript-actions.cjs",
     "smoke:mosaic-stability": "electron build/smoke-mosaic-stability.cjs",
+    "smoke:transcript-spacing": "electron build/smoke-transcript-spacing.cjs",
     "smoke:mosaic-handoff": "electron build/smoke-mosaic-handoff.cjs",
     "smoke:themes": "electron build/smoke-themes.cjs",
     "smoke:personalization": "electron build/smoke-personalization.cjs",

@@ -57,6 +57,10 @@ jobs:
 
       - name: Smoke test Mosaic scroll stability
         run: npm run smoke:mosaic-stability
+
+      - name: Smoke test transcript spacing
+        run: npm run smoke:transcript-spacing
+
       - name: Smoke test eligible server-tool menu
         run: npm run smoke:server-tools
 

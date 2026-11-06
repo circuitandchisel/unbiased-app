@@ -18,6 +18,7 @@ Write for the person using the app, not the person who wrote the code.
 
 ### Fixed
 
+- **Compact transcript spacing.** Replies and command rows use their earlier spacing while keeping scrolling steady.
 - **Use new tools in existing chats.** Eligible chats can gain tool access without starting over or losing their history.
 
 ## 1.13.32 — November 6, 2026
