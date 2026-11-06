@@ -7860,6 +7860,7 @@ app.whenReady().then(async () => {
         return { ok: false, error: `Couldn't save credentials: ${String(err)}` };
       }
     }
+    resetServerTools();
     scopedIdentity.clear();
     const owner=who.user?.id && who.organization?.id && who.accessStatus === "granted" ? {organizationId:who.organization.id,memberId:who.user.id} : null;
     if(owner)scopedIdentity.remember(key,owner);
