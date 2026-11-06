@@ -30,6 +30,7 @@ async function main(){
   await controller.shutdown();
   assert.deepEqual(readBrowserCaptureTurns(join(fixture,'captures'),'capture-chat')['capture-turn'],[saved.capture]);
   const cachePath=join(fixture,'transcript.json');
+  ipcMain.handle('tools:capabilities',()=>({web_search:false,image_generation:false}));
   ipcMain.handle('chat:commands',()=>({commands:[],error:null}));
   ipcMain.handle('mcp:thread-get',()=>({enabled:[]}));
   ipcMain.handle('usage:context',()=>({usage:null}));

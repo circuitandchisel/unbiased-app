@@ -1,3 +1,4 @@
+import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
 import { InAppBrowserPreview } from "./InAppBrowserPreview";
@@ -98,7 +99,7 @@ type CommandItem = {
   aggregatedOutput?: string;
   output?: string;
   /** Sent live by the main process, not only on a transcript reload. */
-  source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer";
+  source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer" | "web-search" | "image-generation";
   /** For a computer step: the icon of the app it acted on, as a data URL. */
   appIcon?: string;
   screenshots?: BrowserCapture[];
@@ -143,7 +144,7 @@ type Entry =
        *  browser | memory | tool) or "approval" for a card the app itself
        *  raised. Absent on entries persisted before this existed, which is
        *  why the readers below still fall back to text sniffing. */
-     source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer";
+     source?: "shell" | "browser" | "side-browser" | "memory" | "tool" | "approval" | "computer" | "web-search" | "image-generation";
      /** For a computer step: the icon of the app it acted on, as a data URL. */
      appIcon?: string;
      screenshots?: BrowserCapture[];
@@ -189,6 +190,7 @@ type QueuedMsg = {
   wire: string; // what actually goes to the engine
   computer?: boolean; // explicitly prefer desktop tools for this turn
   visualize?: boolean; // explicitly request a visual for this turn
+  serverTool?: ServerToolName;
   skillPath?: string;
   commandText?: string;
   attachments: Attachment[];
@@ -646,9 +648,10 @@ declare global {
         paneId: PaneId,
         text: string,
         attachments?: Attachment[],
-        options?: { computer?: boolean; visualize?: boolean; skillPath?: string; commandText?: string; userRequests?: string[] },
+        options?: { computer?: boolean; visualize?: boolean; serverTool?: ServerToolName; skillPath?: string; commandText?: string; userRequests?: string[] },
       ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
       continueUnfinished: (p: { paneId: string; threadId: string; token: string }) => Promise<{ ok: boolean }>;
+      serverToolCapabilities: () => Promise<ServerToolCapabilities>;
       slashCommands: (paneId: PaneId) => Promise<{ commands: SlashCommand[]; error: string | null }>;
       chooseAttachments: () => Promise<{ attachments: Attachment[]; errors?: string[] }>;
       attachPaths: (paths: string[]) => Promise<{ attachments: Attachment[]; errors?: string[] }>;
@@ -9689,6 +9692,8 @@ function ChatPane({
   // requests still work without explicitly selecting this first.
   const [computerSelected, setComputerSelected] = useState(false);
   const [visualizeSelected, setVisualizeSelected] = useState(false);
+  const [selectedServerTool, setSelectedServerTool] = useState<ServerToolName | null>(null);
+  const [serverCapabilities, setServerCapabilities] = useState<ServerToolCapabilities>({ ...NO_SERVER_TOOLS });
   const composerRef = useRef<MarkdownComposerHandle | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>(() => drafts.current().attachments);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -9755,6 +9760,23 @@ function ChatPane({
   // The + button's popup menu, plus whether the clipboard held an image
   // when it was opened (drives the "Image from clipboard" item's state).
   const [plusOpen, setPlusOpen] = useState(false);
+  useEffect(() => {
+    let active = true;
+    if (!connected) {
+      setServerCapabilities({ ...NO_SERVER_TOOLS }); setSelectedServerTool(null);
+      return;
+    }
+    if (typeof window.unbiased.serverToolCapabilities !== "function") return;
+    void window.unbiased.serverToolCapabilities().then(result => {
+      if (!active) return;
+      const capabilities = { web_search: result?.web_search === true, image_generation: result?.image_generation === true };
+      setServerCapabilities(capabilities);
+      setSelectedServerTool(selected => selected && !capabilities[selected] ? null : selected);
+    }).catch(() => {
+      if (active) { setServerCapabilities({ ...NO_SERVER_TOOLS }); setSelectedServerTool(null); }
+    });
+    return () => { active = false; };
+  }, [connected, plusOpen, reset.nonce]);
   // Entry state for the + menu. See useEntryTransition: a mounted flag rather
   // than a keyframe, because this menu can be toggled fast.
   const plusShown = useEntryTransition(plusOpen);
@@ -10248,6 +10270,7 @@ function ChatPane({
       setQueue([]);
       setComputerSelected(false);
       setVisualizeSelected(false);
+      setSelectedServerTool(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reset.nonce]);
@@ -10908,7 +10931,7 @@ function ChatPane({
       // The wire message includes quoted excerpts. Only the composer and
       // user-authored comments express intent for automatic continuation.
       const userRequests = [q.text, ...(q.annotations ?? []).map(a => a.comment ?? "")].filter(s => s.trim());
-      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, skillPath: q.skillPath, commandText: q.commandText, userRequests });
+      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, serverTool: q.serverTool, skillPath: q.skillPath, commandText: q.commandText, userRequests });
       threadIdRef.current = res.threadId;
       onThreadCreated?.(res.threadId, res.created, q.text);
     } catch (err) {
@@ -10964,6 +10987,7 @@ function ChatPane({
       wire,
       computer: computerSelected,
       visualize: visualizeSelected,
+      serverTool: selectedServerTool && serverCapabilities[selectedServerTool] ? selectedServerTool : undefined,
       skillPath: slash.skillPath,
       commandText: commandToken(text) ? text : undefined,
       attachments: sentAttachments,
@@ -11005,6 +11029,7 @@ function ChatPane({
     if (q.annotations) setAnnotations(q.annotations);
     setComputerSelected(!!q.computer);
     setVisualizeSelected(!!q.visualize);
+    setSelectedServerTool(q.serverTool ?? null);
   }
 
   async function decide(itemId: string, requestId: string, decision: ApprovalDecision) {
@@ -12013,9 +12038,24 @@ function ChatPane({
                 trailing={<StatePill on={visualizeSelected} />}
                 onClick={() => {
                   setVisualizeSelected((selected) => !selected);
+                  setSelectedServerTool(selected => selected === "image_generation" ? null : selected);
                   setPlusOpen(false);
                 }}
               />
+              {serverCapabilities.web_search && <MenuItem
+                icon={<GlobeIcon size={15} />}
+                label="Web Search"
+                desc="Search the web for current information"
+                trailing={<StatePill on={selectedServerTool === "web_search"} />}
+                onClick={() => { setSelectedServerTool(selected => selected === "web_search" ? null : "web_search"); setPlusOpen(false); }}
+              />}
+              {serverCapabilities.image_generation && <MenuItem
+                icon={<ImageGenerationIcon size={15} />}
+                label="Create image"
+                desc="Generate an image from your description"
+                trailing={<StatePill on={selectedServerTool === "image_generation"} />}
+                onClick={() => { setSelectedServerTool(selected => selected === "image_generation" ? null : "image_generation"); setVisualizeSelected(false); setPlusOpen(false); }}
+              />}
               <MenuItem
                 icon={<SkillIcon />}
                 label="Skills"
@@ -12359,6 +12399,13 @@ function ChatPane({
                   <CloseIcon />
                 </button>
               )}
+              {selectedServerTool && serverCapabilities[selectedServerTool] && <button
+                onClick={() => setSelectedServerTool(null)}
+                title="Selected for this message. Click to remove."
+                style={{ display: "flex", alignItems: "center", gap: 7, background: "var(--chip)", border: "none", borderRadius: 999, padding: "7px 12px", minHeight: 34, color: colors.accent, fontSize: 13.5, cursor: "pointer", fontFamily: "inherit" }}>
+                {selectedServerTool === "web_search" ? <GlobeIcon size={15} /> : <ImageGenerationIcon size={15} />}
+                {selectedServerTool === "web_search" ? "Web Search" : "Create image"}<CloseIcon />
+              </button>}
               {computerSelected && (
                 <button
                   onClick={() => setComputerSelected(false)}
@@ -19288,6 +19335,18 @@ function GlobeIcon({ size = 15 }: { size?: number } = {}) {
   );
 }
 
+function ImageGenerationIcon({ size = 15 }: { size?: number } = {}) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <g stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M24 2.5 C30.8 2.5 37.2 2.8 40.7 4.7 C44 6.5 45 9.2 45.5 14.5 C46.2 21 46.2 27 45.5 33.5 C45 38.8 44 41.5 40.7 43.3 C37.2 45.2 30.8 45.5 24 45.5 C17.2 45.5 10.8 45.2 7.3 43.3 C4 41.5 3 38.8 2.5 33.5 C1.8 27 1.8 21 2.5 14.5 C3 9.2 4 6.5 7.3 4.7 C10.8 2.8 17.2 2.5 24 2.5 Z" />
+        <circle cx="32" cy="17" r="5" />
+        <path d="M2.5 30 C6 26 9.2 23 12.7 23 C19.1 23 23.9 30.5 27.7 36 C30 39.3 31.7 42.4 33 45" />
+      </g>
+    </svg>
+  );
+}
+
 function FoldersIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -20942,6 +21001,8 @@ function stepIcon(e: CommandEntry): React.ReactNode {
       />
     );
   }
+  if (e.source === "web-search") return <GlobeIcon size={14} />;
+  if (e.source === "image-generation") return <ImageGenerationIcon size={14} />;
   if (isBrowserStep(e) || isSideBrowserStep(e)) return <GlobeIcon size={14} />;
   if (isMemoryStep(e)) return <LightbulbIcon />;
   if (isComputerStep(e)) return <DesktopIcon size={14} />;
@@ -21105,7 +21166,7 @@ function StepsGroup({
   const computing = items.some(isComputerStep);
   // Same courtesy for memory-only groups: name the action, not the count.
   const memoryLabel = memoryStepsLabel(items);
-  const summary = needsApproval
+  const baseSummary = needsApproval
     ? { text: "Needs your approval", color: colors.fg, verb: null as string | null }
     : running
       ? {
@@ -21129,6 +21190,13 @@ function StepsGroup({
               color: failed ? colors.err : colors.dim,
               verb: null,
             };
+  const searching = items.every(item => item.source === "web-search");
+  const generating = items.every(item => item.source === "image-generation");
+  const summary = !needsApproval && (searching || generating) ? {
+    text: running ? searching ? "Searching the web…" : "Creating image…" : `${searching ? "Searched the web" : "Created image"}${issueSuffix}`,
+    color: failed ? colors.err : running ? colors.amber : colors.dim,
+    verb: null,
+  } : baseSummary;
   const hoverTextColor = "var(--fg-msg)";
   const summaryColor = hoveringSummary && summary.color === colors.dim ? hoverTextColor : summary.color;
 
