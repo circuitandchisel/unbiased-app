@@ -16380,6 +16380,8 @@ function LoginView({ onSignedIn }: { onSignedIn: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  // The key field is for developers: behind a link whenever browser sign-in is offered.
+  const [showKey, setShowKey] = useState(false);
 
   // On mount: is there a stored key? If so, validate it and offer "continue".
   useEffect(() => {
@@ -16499,7 +16501,7 @@ function LoginView({ onSignedIn }: { onSignedIn: () => void }) {
           <BrandMark size={38} />
           <div style={{ fontSize: 18, fontWeight: 600, marginTop: 14 }}>Sign in to Unbiased</div>
           <div style={{ fontSize: 13, color: colors.dim, marginTop: 4, textAlign: "center" }}>
-            {browserSignIn ? "Sign in with your browser, or paste an API key." : "Connect your Pareto API key to start."}
+            {browserSignIn ? "Click the button and finish in your browser. Nothing to copy or paste." : "Connect your Pareto API key to start."}
           </div>
         </div>
 
@@ -16569,22 +16571,43 @@ function LoginView({ onSignedIn }: { onSignedIn: () => void }) {
                 >
                   {busy ? "Opening your browser…" : "Sign in with your browser"}
                 </button>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    margin: "18px 0 12px",
-                    color: colors.dim,
-                    fontSize: 12,
-                  }}
-                >
-                  <div style={{ flex: 1, height: 1, background: colors.border }} />
-                  or paste an API key
-                  <div style={{ flex: 1, height: 1, background: colors.border }} />
-                </div>
+                {error && !showKey && <div style={{ color: colors.err, fontSize: 12.5, marginTop: 10 }}>{error}</div>}
+                {showKey ? (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      margin: "18px 0 12px",
+                      color: colors.dim,
+                      fontSize: 12,
+                    }}
+                  >
+                    <div style={{ flex: 1, height: 1, background: colors.border }} />
+                    or paste an API key
+                    <div style={{ flex: 1, height: 1, background: colors.border }} />
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowKey(true)}
+                    style={{
+                      width: "100%",
+                      background: "transparent",
+                      border: "none",
+                      color: colors.dim,
+                      fontSize: 12.5,
+                      cursor: "pointer",
+                      marginTop: 14,
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    Have an API key? Paste it instead
+                  </button>
+                )}
               </>
             )}
+            {(!browserSignIn || showKey) && (
+              <>
             <input
               type="password"
               value={keyInput}
@@ -16675,6 +16698,8 @@ function LoginView({ onSignedIn }: { onSignedIn: () => void }) {
                   </span>
                 </div>
               </div>
+            )}
+              </>
             )}
           </>
         )}
