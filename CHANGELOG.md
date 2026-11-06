@@ -11,6 +11,7 @@ Write for the person using the app, not the person who wrote the code.
 ### Added
 
 - **Web Search and Create image.** Find these in the + menu with an active Chat subscription or approved organization access. Search results include sources, and generated images stay with the conversation.
+- **Image generation previews.** Image requests expand to a live pixel mosaic that reveals the finished image. Reduced motion uses a static preview.
 
 ### Improved
 

@@ -1,4 +1,5 @@
 import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
+import { ImageGenerationPreview } from "./image-generation-preview";
 import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
@@ -8361,15 +8362,18 @@ function TerminalPane() {
 /** Markdown images load through the main process because CSP forbids file://.
  *  File previews resolve relative to their own directory; chat resolves
  *  relative to the selected thread's working directory. */
-function BrowserScreenshotGallery({ captures, markdown = "", onPreviewImage }: {
+function BrowserScreenshotGallery({ captures, markdown = "", onPreviewImage, pendingImageReveals }: {
   captures: BrowserCapture[];
   markdown?: string;
   onPreviewImage?: (image: Attachment) => void;
+  pendingImageReveals?: Set<string>;
 }) {
   const visible = captures.filter(capture => !markdown.includes(`](<${capture.path}>)`) && !markdown.includes(`](${capture.path})`));
   if (!visible.length) return null;
-  return <div aria-label="Browser screenshots" style={{ display: "flex", flexDirection: "column", gap: 12, margin: "12px 0" }}>
-    {visible.map(capture => <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
+  return <div aria-label={visible.every(capture => capture.name === "Generated image") ? "Generated images" : "Browser screenshots"} style={{ display: "flex", flexDirection: "column", gap: 12, margin: "12px 0" }}>
+    {visible.map(capture => capture.name === "Generated image" ? <ImageGenerationPreview key={capture.path} path={capture.path}
+      reveal={pendingImageReveals?.has(capture.path)} onRevealed={() => pendingImageReveals?.delete(capture.path)}
+      onOpen={onPreviewImage ? () => onPreviewImage({ ...capture, kind: "image" }) : undefined} /> : <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
       style={{ display: "block", width: "fit-content", maxWidth: "100%", padding: 8, background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 12, cursor: onPreviewImage ? "zoom-in" : "default", textAlign: "left" }}>
       <MdImage src={capture.path} alt={capture.name} chat />
       <span style={{ display: "block", padding: "6px 4px 0", font: "inherit", fontSize: 12, color: colors.dim }}>Browser screenshot{onPreviewImage ? " · Open preview" : ""}</span>
@@ -9700,6 +9704,10 @@ function ChatPane({
   entriesRef.current = entries;
   const unchangedTranscriptRef = useRef<Entry[] | null>(null);
   const openWorkEntriesRef = useRef(new WeakSet<object>());
+  // Only live results reveal. History replays remain static and do not spin up WebGL.
+  const pendingImageReveals = useMemo(() => new Set<string>(), [reset.nonce]);
+  const pendingImageRevealsRef = useRef(pendingImageReveals);
+  pendingImageRevealsRef.current = pendingImageReveals;
   const [historyOffset, setHistoryOffset] = useState(reset.offset ?? 0);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const historyOffsetRef = useRef(reset.offset ?? 0);
@@ -10788,6 +10796,9 @@ function ChatPane({
         if (p.paneId !== paneId) return;
         producedRef.current = true;
         const item = p.item;
+        if (item.source === "image-generation" && p.phase === "completed") {
+          for (const capture of item.screenshots ?? []) pendingImageRevealsRef.current.add(capture.path);
+        }
         setEntries((es) => {
           const cleaned = withoutTrailingPlaceholder(es);
           const itemId = item.id ?? "unknown";
@@ -11359,8 +11370,8 @@ function ChatPane({
   ): React.ReactNode => {
     if (block.kind === "steps") {
       return (
-        <Fragment key={`s${block.key}`}><StepsGroup items={block.items} statusLabel={statusLabel} decide={decide} />
-          {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(block.items)} onPreviewImage={onPreviewImage} />}
+        <Fragment key={`s${block.key}`}><StepsGroup items={block.items} statusLabel={statusLabel} decide={decide} onPreviewImage={onPreviewImage} pendingImageReveals={pendingImageReveals} />
+          {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(block.items.filter(item => item.source !== "image-generation"))} onPreviewImage={onPreviewImage} />}
         </Fragment>
       );
     }
@@ -11563,7 +11574,7 @@ function ChatPane({
               {e.text}
             </Markdown>
           </StreamingVisualContext.Provider>
-          <BrowserScreenshotGallery captures={e.screenshots ?? []} markdown={e.text} onPreviewImage={onPreviewImage} />
+          <BrowserScreenshotGallery captures={e.screenshots ?? []} markdown={e.text} onPreviewImage={onPreviewImage} pendingImageReveals={pendingImageReveals} />
           {e.interrupted && <div style={{ color: colors.dim, fontSize: 12, marginTop: 4 }}>— stopped</div>}
           {/* Receipts sit between the answer and its action row: below the
               thing they are about, above the copy button — and outside the
@@ -11612,7 +11623,7 @@ function ChatPane({
           initiallyOpen={openWorkEntriesRef.current.has(e)}
           onOpenChange={(open) => { if (open) openWorkEntriesRef.current.add(e); else openWorkEntriesRef.current.delete(e); }}
         />
-        {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(e.entries).filter(capture => !carried.has(capture.path))} markdown={next?.kind === "assistant" ? next.text : undefined} onPreviewImage={onPreviewImage} />}
+        {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(e.entries).filter(capture => !carried.has(capture.path))} markdown={next?.kind === "assistant" ? next.text : undefined} onPreviewImage={onPreviewImage} pendingImageReveals={pendingImageReveals} />}
       </Fragment>;
     }
     return null;
@@ -21131,10 +21142,14 @@ function StepsGroup({
   items,
   statusLabel,
   decide,
+  onPreviewImage,
+  pendingImageReveals,
 }: {
   items: CommandEntry[];
   statusLabel: (e: CommandEntry) => { text: string; color: string };
   decide: (itemId: string, requestId: string, decision: ApprovalDecision) => Promise<void>;
+  onPreviewImage?: (image: Attachment) => void;
+  pendingImageReveals?: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
@@ -21160,14 +21175,14 @@ function StepsGroup({
   useEffect(() => {
     const previouslyAutoOpened = new Set(autoOpenedItems.current);
     const fresh = items
-      .filter((e) => e.status === "inProgress" && isShellStep(e) && !previouslyAutoOpened.has(e.itemId))
+      .filter((e) => e.status === "inProgress" && (isShellStep(e) || e.source === "image-generation") && !previouslyAutoOpened.has(e.itemId))
       .map((e) => e.itemId);
     const finished = items
       .filter((e) => e.status !== "inProgress" && previouslyAutoOpened.has(e.itemId))
       .map((e) => e.itemId);
     if (!fresh.length && !finished.length) return;
     setOpenItems((current) => {
-      const next = closeFinishedAutoOpenedPanels(items, current, previouslyAutoOpened, manuallyOpenedItems.current);
+      const next = closeFinishedAutoOpenedPanels(items.filter(item => item.source !== "image-generation"), current, previouslyAutoOpened, manuallyOpenedItems.current);
       fresh.forEach((id) => next.add(id));
       return next.size === current.size && [...next].every((id) => current.has(id)) ? current : next;
     });
@@ -21314,7 +21329,7 @@ function StepsGroup({
       {expanded &&
         items.map((e) => {
           const label = statusLabel(e);
-          const hasOutputPanel = showsCommandOutputPanel(e, isShellStep(e));
+          const hasOutputPanel = e.source === "image-generation" || showsCommandOutputPanel(e, isShellStep(e));
           const itemOpen = openItems.has(e.itemId);
           const awaiting = e.status === "awaitingApproval" && e.approval && !e.approval.decision;
           const failed = e.status === "failed" || (e.exitCode ?? 0) !== 0;
@@ -21380,7 +21395,16 @@ function StepsGroup({
                     onDecide={(d) => void decide(e.itemId, e.approval!.requestId, d)}
                   />
                 ))}
-              {hasOutputPanel && itemOpen && <CommandOutputPanel entry={e} />}
+              {hasOutputPanel && itemOpen && (e.source === "image-generation" ? <div style={{ margin: "6px 0 8px 24px" }}>
+                {(e.status === "inProgress" || (e.screenshots?.length ?? 0) > 0) && <ImageGenerationPreview
+                  running={e.status === "inProgress"} path={e.screenshots?.[0]?.path}
+                  reveal={e.screenshots?.[0] ? pendingImageReveals?.has(e.screenshots[0].path) : false}
+                  onRevealed={() => { if (e.screenshots?.[0]) pendingImageReveals?.delete(e.screenshots[0].path); }}
+                  onOpen={onPreviewImage && e.screenshots?.[0] ? () => onPreviewImage({ ...e.screenshots![0], kind: "image" }) : undefined} />}
+                {(e.screenshots ?? []).slice(1).map(capture => <ImageGenerationPreview key={capture.path} path={capture.path}
+                  reveal={pendingImageReveals?.has(capture.path)} onRevealed={() => pendingImageReveals?.delete(capture.path)}
+                  onOpen={onPreviewImage ? () => onPreviewImage({ ...capture, kind: "image" }) : undefined} />)}
+              </div> : <CommandOutputPanel entry={e} />)}
             </div>
           );
         })}
