@@ -19,7 +19,7 @@ test("expanded HTML visual uses its full reported height and restores the inline
   try {
     await act(async () => root.render(<GeneratedVisualViewport><InteractiveHtmlVisual source="<div>Long visual</div>" /></GeneratedVisualViewport>));
     const viewport = dom.window.document.querySelector<HTMLElement>(".app-generated-visual-viewport")!;
-    const frame = viewport.querySelector<HTMLIFrameElement>("iframe")!;
+    const frame = viewport.querySelector<HTMLIFrameElement>('iframe[title="Interactive visual"]')!;
     await act(async () => {
       dom.window.dispatchEvent(new dom.window.MessageEvent("message", {
         source: frame.contentWindow, origin: "null", data: { type: "unbiased-visual-height", height: 2600 },
@@ -63,7 +63,7 @@ test("a completed visual reserves its measured height while a remounted frame lo
   let root = createRoot(container);
   try {
     await act(async () => root.render(<InteractiveHtmlVisual source={source} />));
-    let frame = container.querySelector<HTMLIFrameElement>("iframe")!;
+    let frame = container.querySelector<HTMLIFrameElement>('iframe[title="Interactive visual"]')!;
     await act(async () => {
       dom.window.dispatchEvent(new dom.window.MessageEvent("message", {
         source: frame.contentWindow, origin: "null", data: { type: "unbiased-visual-height", height: 1180 },
@@ -78,7 +78,7 @@ test("a completed visual reserves its measured height while a remounted frame lo
     root = createRoot(container);
     await act(async () => root.render(<InteractiveHtmlVisual source={source} />));
     const visual = container.querySelector<HTMLElement>(".app-interactive-html-visual")!;
-    frame = visual.querySelector<HTMLIFrameElement>("iframe")!;
+    frame = visual.querySelector<HTMLIFrameElement>('iframe[title="Interactive visual"]')!;
     assert.equal(registrations, 2);
     assert.equal(visual.style.minHeight, "1180px");
     assert.equal(frame.style.visibility, "hidden");
