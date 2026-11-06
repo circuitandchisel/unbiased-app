@@ -25,6 +25,7 @@
     "smoke:mosaic-stability": "electron build/smoke-mosaic-stability.cjs",
     "smoke:transcript-spacing": "electron build/smoke-transcript-spacing.cjs",
     "smoke:mosaic-handoff": "electron build/smoke-mosaic-handoff.cjs",
+    "smoke:side-chat-retention": "electron build/smoke-side-chat-retention.cjs",
     "smoke:themes": "electron build/smoke-themes.cjs",
     "smoke:personalization": "electron build/smoke-personalization.cjs",
     "smoke:agent-instructions": "node build/smoke-agent-instructions.cjs",

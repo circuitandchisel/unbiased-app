@@ -11040,11 +11040,12 @@ app.whenReady().then(async () => {
     if (mainCwd) threadCwds.set(id, mainCwd); // memory_save now targets the right project
     // An unanswered browser card on the conversation we are leaving would
     // otherwise block its tool call — and therefore its turn — forever.
-    if (!panes.main.threadId || !panes[`multi:${panes.main.threadId}`]) settleLocalApprovals(panes.main.threadId);
+    const changingConversation = panes.main.threadId !== id;
+    if (changingConversation && (!panes.main.threadId || !panes[`multi:${panes.main.threadId}`])) settleLocalApprovals(panes.main.threadId);
     panes.main.threadId = id;
     panes.main.turnId = runningTurns.get(id) ?? null;
     // Closing the previous context retains its side chats for recovery.
-    resetSidePanes();
+    if (changingConversation) resetSidePanes();
     // Everything that happened while this thread was backgrounded: the
     // partial assistant stream, approval requests the agent is blocked
     // on, and a turn failure nobody saw. Held items are consumed here.
@@ -11220,15 +11221,16 @@ app.whenReady().then(async () => {
     if (!record || record.closedAt === null ||
         !sideChatRecents.recent().some((recent) => recent.paneId === paneId)) return { error: "Side chat is no longer available" };
     if (panes.main.threadId !== record.parentThreadId) return { error: "Open the original chat first" };
+    const parentOpenSequence = mainOpenSequence;
     sideChatReopens.add(paneId);
     threadCwds.set(record.threadId, record.cwd);
     try {
       await sideChatInterrupts.get(record.threadId);
       const result = await engine.request("thread/resume", await resumeParamsFor(record.threadId)) as { thread: WireThread };
-      if (panes.main.threadId !== record.parentThreadId) return { error: "Original chat changed while restoring" };
+      if (mainOpenSequence !== parentOpenSequence || panes.main.threadId !== record.parentThreadId) return { error: "Original chat changed while restoring" };
       const replay = threadToEntries({ ...result.thread, turns: result.thread.turns?.slice(record.baselineTurns) });
       const page = await openTranscriptSession(record.threadId, replay.entries, {}, null);
-      if (panes.main.threadId !== record.parentThreadId ||
+      if (mainOpenSequence !== parentOpenSequence || panes.main.threadId !== record.parentThreadId ||
           !sideChatRecents.reopen(paneId, record.parentThreadId)) {
         transcriptSessions.delete(page.sessionId);
         return { error: "Side chat is no longer available" };

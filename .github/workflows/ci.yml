@@ -70,6 +70,9 @@ jobs:
       - name: Smoke test live Mosaic conversation handoff
         run: npm run smoke:mosaic-handoff
 
+      - name: Smoke test side-chat retention and recovery
+        run: npm run smoke:side-chat-retention
+
       - name: Smoke test custom agent instructions settings
         run: |
           npx electron-vite build
