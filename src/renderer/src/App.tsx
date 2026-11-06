@@ -21056,6 +21056,7 @@ function stepIcon(e: CommandEntry): React.ReactNode {
  *  card asking whether it may. */
 function stepRowText(e: CommandEntry): string {
   const c = e.command ?? "";
+  if (e.source === "image-generation") return c.replace(/^Create image\s*·\s*/, "");
   if (!isShellStep(e)) return c;
   if (e.status === "awaitingApproval") return `Run ${c}`;
   if (e.status === "inProgress") return `Running ${c}`;
@@ -21370,7 +21371,7 @@ function StepsGroup({
                   // full: they cannot consent to what an ellipsis hid, and it
                   // has no output panel to reveal the rest. Everything else
                   // stays one tidy line, with the full text on hover.
-                  title={e.command}
+                  title={e.source === "image-generation" ? stepRowText(e) : e.command}
                   style={{
                     minWidth: 0,
                     ...(awaiting

@@ -37,6 +37,7 @@ function Fixture(){const [reset,setReset]=useState({entries:[{kind:'user',text:'
   await start('image-one');
   await until(`document.querySelector('[data-image-generation-preview="running"] canvas')`);
   assert.equal(await ev(`document.querySelector('[aria-label="Hide steps"]')!==null`),true,'running section expands without a click');
+  assert.equal(await ev(`document.querySelector('[title="A whimsical illustration of a cow standing in a sunny pasture."]')?.textContent`),'A whimsical illustration of a cow standing in a sunny pasture.','the image step starts with its prompt, without repeating Create image');
   assert.equal(await ev(`document.querySelectorAll('[aria-label="Open generated image"]').length`),0,'never reveal a fake image while pending');
   const before=await ev(`document.querySelector('[data-image-generation-preview]').getBoundingClientRect().toJSON()`);
   await ev(`document.querySelector('[data-image-generation-preview]').scrollIntoView({block:'center'})`);
