@@ -247,7 +247,7 @@ export function themeVars(theme: ThemeConfig): Record<string, string> {
     "--nav-bg": p?.sidebar ?? mix(0.05), "--panel": p?.panel ?? mix(0.05), "--panel-2": p?.inset ?? mix(0.09),
     "--chip": p?.inset ?? mix(0.09), "--chip-raised": p?.raised ?? mix(0.17), "--border": p?.border ?? mix(0.095),
     "--dim": p?.muted ?? mixHex(theme.surface, theme.ink, 0.62),
-    "--fg-soft": mixHex(theme.surface, theme.ink, 0.88), "--fg-msg": mixHex(theme.surface, theme.ink, 0.84), "--gutter": mix(0.25),
+    "--fg-soft": mixHex(theme.surface, theme.ink, 0.88), "--fg-msg": theme.ink, "--gutter": mix(0.25),
     "--ok": p?.success ?? (light ? "#216E47" : "#8BC6A1"), "--err": p?.error ?? (light ? "#A1323C" : "#F29797"),
     "--amber": p?.warning ?? (light ? "#744D08" : "#E4BE7B"), "--info": p?.info ?? (light ? "#285F9A" : "#8EBDF0"),
     "--violet": light ? "#714292" : "#C9AEEC", "--cyan": light ? "#246D73" : "#73D1D2",
