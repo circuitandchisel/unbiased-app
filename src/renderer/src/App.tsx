@@ -12043,14 +12043,14 @@ function ChatPane({
                 }}
               />
               {serverCapabilities.web_search && <MenuItem
-                icon={<GlobeIcon size={17} />}
+                icon={<GlobeIcon size={15} />}
                 label="Web Search"
                 desc="Search the web for current information"
                 trailing={<StatePill on={selectedServerTool === "web_search"} />}
                 onClick={() => { setSelectedServerTool(selected => selected === "web_search" ? null : "web_search"); setPlusOpen(false); }}
               />}
               {serverCapabilities.image_generation && <MenuItem
-                icon={<ImageGenerationIcon size={17} />}
+                icon={<ImageGenerationIcon size={15} />}
                 label="Create image"
                 desc="Generate an image from your description"
                 trailing={<StatePill on={selectedServerTool === "image_generation"} />}
