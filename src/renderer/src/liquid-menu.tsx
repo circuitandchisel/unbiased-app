@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import "./liquid-menu.css";
 
 export const LIQUID_MENU_DURATION = 200;
@@ -30,7 +30,9 @@ export function LiquidMenuSurface({ open, host, anchor, corner = 12, className =
     preference.addEventListener("change", update);
     return () => preference.removeEventListener("change", update);
   }, []);
-  useLayoutEffect(() => {
+  // Portal parents attach their refs after child layout effects. Subscribe in
+  // the passive phase so a first-open picker never keeps the fallback size.
+  useEffect(() => {
     const menu = host.current, trigger = anchor.current;
     if (!menu || !trigger) return;
     const measure = () => {
@@ -46,7 +48,7 @@ export function LiquidMenuSurface({ open, host, anchor, corner = 12, className =
     observer.observe(menu); observer.observe(trigger);
     return () => observer.disconnect();
   }, [open, host, anchor]);
-  return <motion.div className={`u-liquid-menu-surface ${className}`.trim()} aria-hidden="true" initial={false}
+  return <motion.div className={`u-liquid-menu-surface ${className}`.trim()} aria-hidden="true" initial={{ width: anchor.current?.getBoundingClientRect().width ?? 120, height: anchor.current?.getBoundingClientRect().height ?? 30, borderRadius: 15, opacity: 0 }}
     animate={{ width: open ? shape.width : shape.pillWidth, height: open ? shape.height : shape.pillHeight, borderRadius: open ? corner : Math.min(15, shape.pillHeight / 2), opacity: open ? 1 : 0 }}
     transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 420, damping: 30, mass: .5 }} />;
 }

@@ -48,8 +48,11 @@ localStorage.setItem('unbiased.authed','1');createRoot(document.getElementById('
   await ev(`document.querySelector('[aria-label="Choose where this chat works"]').click()`);
   await until(`document.querySelector('.u-project-picker')?.style.visibility==='visible'`);
   assert.ok(await ev(`(()=>{const picker=document.querySelector('.u-project-picker'),r=picker.getBoundingClientRect(),trigger=document.querySelector('[aria-label="Choose where this chat works"]').getBoundingClientRect();return r.top>=trigger.bottom&&r.bottom<=innerHeight-8&&!!picker.querySelector('.u-liquid-menu-surface')})()`),'top-positioned composer opens the project picker below using the shared liquid surface');
+  await until(`(()=>{const picker=document.querySelector('.u-project-picker'),body=picker.querySelector('.u-liquid-menu-surface'),r=body.getBoundingClientRect();return Math.abs(r.width-picker.clientWidth)<1&&Math.abs(r.height-picker.clientHeight)<1})()`);
+  assert.ok(await ev(`getComputedStyle(document.querySelector('.u-project-picker .u-liquid-menu-surface')).backgroundColor!=='rgba(0, 0, 0, 0)'`),'first-open portal paints an opaque surface across the entire menu');
   win.setSize(1300,480);await new Promise(resolve=>setTimeout(resolve,160));
   assert.ok(await ev(`(()=>{const r=document.querySelector('.u-project-picker').getBoundingClientRect();return r.top>=8&&r.bottom<=innerHeight-8})()`),'project picker remains inside a short window');
+  await until(`(()=>{const picker=document.querySelector('.u-project-picker'),body=picker.querySelector('.u-liquid-menu-surface').getBoundingClientRect();return Math.abs(body.width-picker.clientWidth)<1&&Math.abs(body.height-picker.clientHeight)<1})()`);
   await ev(`document.querySelector('[aria-label="Choose where this chat works"]').click()`);
   await until(`!document.querySelector('.u-project-picker')`);
   win.setSize(1300,1000);await new Promise(resolve=>setTimeout(resolve,100));
