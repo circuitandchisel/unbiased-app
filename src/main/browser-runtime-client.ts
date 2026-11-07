@@ -7,6 +7,8 @@ type Configuration = ConstructorParameters<typeof PinnedBrowserRuntimeClient>[0]
 export class BrowserRuntimeClient extends PinnedBrowserRuntimeClient {
   private readonly runtimeOptions: Configuration["options"];
   private portAllocation: Promise<void> | null = null;
+  private initialization: ReturnType<PinnedBrowserRuntimeClient["ready"]> | null = null;
+  private shutdownInFlight: ReturnType<PinnedBrowserRuntimeClient["shutdown"]> | null = null;
 
   constructor(config: Configuration) {
     const options = { ...config.options };
@@ -14,7 +16,25 @@ export class BrowserRuntimeClient extends PinnedBrowserRuntimeClient {
     this.runtimeOptions = options;
   }
 
-  override async ready() {
+  override ready(): ReturnType<PinnedBrowserRuntimeClient["ready"]> {
+    if (this.shutdownInFlight) return Promise.reject(new Error("Agent Browser is shutting down."));
+    this.initialization ??= this.initializeRuntime().finally(() => { this.initialization = null; });
+    return this.initialization;
+  }
+
+  override shutdown(): ReturnType<PinnedBrowserRuntimeClient["shutdown"]> {
+    if (this.shutdownInFlight) return this.shutdownInFlight;
+    const initialization = this.initialization;
+    this.shutdownInFlight = (async () => {
+      // The base client cannot see a child until port allocation completes.
+      // Drain that startup (including its handshake) before stopping the child.
+      await initialization?.catch(() => undefined);
+      return super.shutdown();
+    })().finally(() => { this.shutdownInFlight = null; });
+    return this.shutdownInFlight;
+  }
+
+  private async initializeRuntime() {
     if (this.runtimeOptions.port === undefined) {
       this.portAllocation ??= new Promise<void>((resolve, reject) => {
         const reservation = createServer();
