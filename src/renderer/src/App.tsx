@@ -1,4 +1,6 @@
 import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
+import { ImageGenerationPreview } from "./image-generation-preview";
+import { ImageLightbox, type ImageLightboxSource } from "./image-lightbox";
 import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
@@ -930,7 +932,7 @@ declare global {
       onAgentMirrorState: (
         cb: (p: { connected: boolean; url?: string; title?: string; reason?: string; error?: string }) => void,
       ) => () => void;
-      onAgentMirrorActivity: (cb: (p: { tool: string }) => void) => () => void;
+      onAgentMirrorActivity: (cb: (p: { tool: string; threadId?: string | null }) => void) => () => void;
       changelogReleases: () => Promise<{ releases: ChangelogRelease[] }>;
       updatePrefs: () => Promise<{ autoDownload: boolean; version: string; lastCheckedAt: number | null }>;
       setUpdatePrefs: (p: { autoDownload: boolean }) => Promise<{ ok: boolean }>;
@@ -1810,6 +1812,9 @@ export function App() {
   }, [authed]);
   // The panel starts closed; closed side chats can be reopened from Recents.
   const [sideOpen, setSideOpen] = useState(false);
+  const sideOpenRef = useRef(sideOpen);
+  sideOpenRef.current = sideOpen;
+  const [imageLightbox, setImageLightbox] = useState<ImageLightboxSource | null>(null);
   const [sideHiddenForMosaic, setSideHiddenForMosaic] = useState(false);
   const sidePanelRef = useRef<HTMLDivElement>(null);
   // Side-chat tabs use distinct pane IDs; their engine threads are retained
@@ -1896,7 +1901,8 @@ export function App() {
   }
 
   function setSideOpenPersisted(open: boolean) {
-    if (open && !sideOpen) setSideFrac(0.5);
+    if (open && !sideOpenRef.current) setSideFrac(0.5);
+    sideOpenRef.current = open;
     if (open) setSideHiddenForMosaic(false);
     setSideOpen(open);
   }
@@ -2537,10 +2543,31 @@ export function App() {
   const [terminalTabs, setTerminalTabs] = useState<number[]>([]);
   // Singleton: one Chrome, one mirror — like the terminal, a LIVE tab.
   const [agentMirrorOpen, setAgentMirrorOpen] = useState(false);
+  const agentMirrorOpenRef = useRef(agentMirrorOpen);
+  agentMirrorOpenRef.current = agentMirrorOpen;
   // The activity subscription below is mounted once, so it cannot close over
   // activeThreadId — it would compare against the value at mount forever.
   const activeThreadIdRef = useRef<string | null>(null);
   activeThreadIdRef.current = activeThreadId;
+  const pendingAgentMirrorActivityRef = useRef<string | null>(null);
+  const revealAgentMirrorActivityRef = useRef(() => {});
+  revealAgentMirrorActivityRef.current = () => {
+    const already = agentMirrorOpenRef.current;
+    agentMirrorOpenRef.current = true;
+    setAgentMirrorOpen(true);
+    // A retained tab is not necessarily visible. Reopen a closed panel,
+    // while leaving another already visible tab in focus.
+    if (!already || !sideOpenRef.current) {
+      setPanelMode("agentmirror");
+      setSideOpenPersisted(true);
+    }
+  };
+  useEffect(() => {
+    const pending = pendingAgentMirrorActivityRef.current;
+    if (!activeThreadId || !pending) return;
+    pendingAgentMirrorActivityRef.current = null;
+    if (pending === activeThreadId) revealAgentMirrorActivityRef.current();
+  }, [activeThreadId]);
   useEffect(
     () =>
       window.unbiased.onAgentMirrorActivity((p) => {
@@ -2552,17 +2579,17 @@ export function App() {
         // must not open a pane here: with one tab per conversation that pane
         // would be showing work the user did not ask to watch, in a chat that
         // is not doing it. Its own pane is restored when they switch to it.
-        const from = (p as { threadId?: string | null } | null)?.threadId ?? null;
-        if (from && activeThreadIdRef.current && from !== activeThreadIdRef.current) return;
-        setAgentMirrorOpen((already) => {
-          // Don't yank focus away from a tab the user is reading if the pane
-          // is already there; just make sure it exists.
-          if (!already) {
-            setPanelMode("agentmirror");
-            setSideOpenPersisted(true);
-          }
-          return true;
-        });
+        const from = p?.threadId;
+        // Unscoped Chrome launch events cannot identify the owning chat.
+        if (!from) return;
+        if (!activeThreadIdRef.current) {
+          // A first-turn tool may arrive before sendMessage returns the new
+          // thread ID. Wait for adoption rather than opening a foreign pane.
+          pendingAgentMirrorActivityRef.current = from;
+          return;
+        }
+        if (from !== activeThreadIdRef.current) return;
+        revealAgentMirrorActivityRef.current();
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -2870,6 +2897,7 @@ export function App() {
       !renameDialog &&
       !moveDialog &&
       !editProj &&
+      !imageLightbox &&
       // A WebContentsView is an OS-level overlay, not a DOM node: the panel
       // hiding itself with display:none would leave the page floating over
       // Scheduled or Connectors. It has to be told.
@@ -2895,7 +2923,7 @@ export function App() {
     };
     void sync();
     return () => { cancelled = true; };
-  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, pageOpen]);
+  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, imageLightbox, pageOpen]);
 
   function openSideChatTab(): string {
     if (sideChats.length >= MAX_TABS_PER_KIND) {
@@ -3145,6 +3173,14 @@ export function App() {
   }
 
   async function openImagePreview(a: { name: string; path: string }) {
+    if (a.name === "Generated image") {
+      const origin = Array.from(document.querySelectorAll<HTMLElement>("[data-image-generation-path]"))
+        .find(node => node.dataset.imageGenerationPath === a.path && node.getClientRects().length)
+        ?.querySelector<HTMLButtonElement>("button") ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      const scroll = origin?.closest<HTMLElement>("[data-transcript-scroll], [data-virtuoso-scroller]");
+      setImageLightbox({ ...a, returnFocus: origin, scrollPosition: scroll ? { element: scroll, top: scroll.scrollTop } : null });
+      return;
+    }
     const result = await window.unbiased.readImage(a.path);
     addFileTab({
       name: a.name,
@@ -5437,7 +5473,7 @@ export function App() {
                   to watch — otherwise it picks by URL and can show a different
                   chat browsing. */}
               <AgentMirrorPane
-                active={panelMode === "agentmirror"}
+                active={sideVisible && panelMode === "agentmirror" && !imageLightbox && !showSettings && !showChangelog}
                 threadId={scheduledOpen ? (runningScheduledThread ?? activeThreadId) : activeThreadId}
               />
             </div>
@@ -6389,6 +6425,7 @@ export function App() {
       {showChangelog && (
         <ChangelogModal releases={releases} onClose={() => setShowChangelog(false)} />
       )}
+      {imageLightbox && <ImageLightbox key={imageLightbox.path} image={imageLightbox} onClose={() => setImageLightbox(null)} />}
       {renameDialog && (
         <div
           onMouseDown={(e) => {
@@ -8361,15 +8398,18 @@ function TerminalPane() {
 /** Markdown images load through the main process because CSP forbids file://.
  *  File previews resolve relative to their own directory; chat resolves
  *  relative to the selected thread's working directory. */
-function BrowserScreenshotGallery({ captures, markdown = "", onPreviewImage }: {
+function BrowserScreenshotGallery({ captures, markdown = "", onPreviewImage, pendingImageReveals }: {
   captures: BrowserCapture[];
   markdown?: string;
   onPreviewImage?: (image: Attachment) => void;
+  pendingImageReveals?: Set<string>;
 }) {
   const visible = captures.filter(capture => !markdown.includes(`](<${capture.path}>)`) && !markdown.includes(`](${capture.path})`));
   if (!visible.length) return null;
-  return <div aria-label="Browser screenshots" style={{ display: "flex", flexDirection: "column", gap: 12, margin: "12px 0" }}>
-    {visible.map(capture => <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
+  return <div aria-label={visible.every(capture => capture.name === "Generated image") ? "Generated images" : "Browser screenshots"} style={{ display: "flex", flexDirection: "column", gap: 12, margin: "12px 0" }}>
+    {visible.map(capture => capture.name === "Generated image" ? <ImageGenerationPreview key={capture.path} path={capture.path}
+      reveal={pendingImageReveals?.has(capture.path)} onRevealed={() => pendingImageReveals?.delete(capture.path)}
+      onOpen={onPreviewImage ? () => onPreviewImage({ ...capture, kind: "image" }) : undefined} /> : <button key={capture.path} type="button" aria-label="Open browser screenshot" onClick={() => onPreviewImage?.({ ...capture, kind: "image" })}
       style={{ display: "block", width: "fit-content", maxWidth: "100%", padding: 8, background: "var(--panel)", border: "1px solid var(--border)", borderRadius: 12, cursor: onPreviewImage ? "zoom-in" : "default", textAlign: "left" }}>
       <MdImage src={capture.path} alt={capture.name} chat />
       <span style={{ display: "block", padding: "6px 4px 0", font: "inherit", fontSize: 12, color: colors.dim }}>Browser screenshot{onPreviewImage ? " · Open preview" : ""}</span>
@@ -9700,6 +9740,10 @@ function ChatPane({
   entriesRef.current = entries;
   const unchangedTranscriptRef = useRef<Entry[] | null>(null);
   const openWorkEntriesRef = useRef(new WeakSet<object>());
+  // Only live results reveal. History replays remain static and do not spin up WebGL.
+  const pendingImageReveals = useMemo(() => new Set<string>(), [reset.nonce]);
+  const pendingImageRevealsRef = useRef(pendingImageReveals);
+  pendingImageRevealsRef.current = pendingImageReveals;
   const [historyOffset, setHistoryOffset] = useState(reset.offset ?? 0);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const historyOffsetRef = useRef(reset.offset ?? 0);
@@ -10788,6 +10832,9 @@ function ChatPane({
         if (p.paneId !== paneId) return;
         producedRef.current = true;
         const item = p.item;
+        if (item.source === "image-generation" && p.phase === "completed") {
+          for (const capture of item.screenshots ?? []) pendingImageRevealsRef.current.add(capture.path);
+        }
         setEntries((es) => {
           const cleaned = withoutTrailingPlaceholder(es);
           const itemId = item.id ?? "unknown";
@@ -11359,8 +11406,8 @@ function ChatPane({
   ): React.ReactNode => {
     if (block.kind === "steps") {
       return (
-        <Fragment key={`s${block.key}`}><StepsGroup items={block.items} statusLabel={statusLabel} decide={decide} />
-          {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(block.items)} onPreviewImage={onPreviewImage} />}
+        <Fragment key={`s${block.key}`}><StepsGroup items={block.items} statusLabel={statusLabel} decide={decide} onPreviewImage={onPreviewImage} pendingImageReveals={pendingImageReveals} />
+          {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(block.items.filter(item => item.source !== "image-generation"))} onPreviewImage={onPreviewImage} />}
         </Fragment>
       );
     }
@@ -11447,7 +11494,7 @@ function ChatPane({
               <UserMessageMarkdown text={e.text} onOpenLink={onOpenLink} />
             </div>
           )}
-          {e.text && <CopyButton text={e.text} />}
+          {e.text && <MessageActions text={e.text} at={e.at} align="right" />}
         </div>
       );
     }
@@ -11563,7 +11610,7 @@ function ChatPane({
               {e.text}
             </Markdown>
           </StreamingVisualContext.Provider>
-          <BrowserScreenshotGallery captures={e.screenshots ?? []} markdown={e.text} onPreviewImage={onPreviewImage} />
+          <BrowserScreenshotGallery captures={e.screenshots ?? []} markdown={e.text} onPreviewImage={onPreviewImage} pendingImageReveals={pendingImageReveals} />
           {e.interrupted && <div style={{ color: colors.dim, fontSize: 12, marginTop: 4 }}>— stopped</div>}
           {/* Receipts sit between the answer and its action row: below the
               thing they are about, above the copy button — and outside the
@@ -11596,7 +11643,7 @@ function ChatPane({
           {/* Keep settled answers copyable during later turns, while hiding
               actions on the active turn's unfinished narration. */}
           {e.text && !nested && showActions && (!busy || block.key < (turnStartIndexRef.current ?? entries.length)) && (
-            <AssistantActions text={e.text} at={e.at} />
+            <MessageActions text={e.text} at={e.at} />
           )}
         </div>
       );
@@ -11612,7 +11659,7 @@ function ChatPane({
           initiallyOpen={openWorkEntriesRef.current.has(e)}
           onOpenChange={(open) => { if (open) openWorkEntriesRef.current.add(e); else openWorkEntriesRef.current.delete(e); }}
         />
-        {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(e.entries).filter(capture => !carried.has(capture.path))} markdown={next?.kind === "assistant" ? next.text : undefined} onPreviewImage={onPreviewImage} />}
+        {!nested && <BrowserScreenshotGallery captures={collectBrowserCaptures(e.entries).filter(capture => !carried.has(capture.path))} markdown={next?.kind === "assistant" ? next.text : undefined} onPreviewImage={onPreviewImage} pendingImageReveals={pendingImageReveals} />}
       </Fragment>;
     }
     return null;
@@ -19101,19 +19148,19 @@ function IconButton({
   );
 }
 
-/** The final response's action row: copy, plus the settled time revealed
- *  when the pointer is anywhere over the row (Codex behavior). */
-function AssistantActions({ text, at }: { text: string; at?: number }) {
+/** Both speakers share the same hover timestamp and copy behavior. */
+function MessageActions({ text, at, align = "left" }: { text: string; at?: number; align?: "left" | "right" }) {
   const [hover, setHover] = useState(false);
   return (
     <span
+      data-message-actions={align === "right" ? "user" : "assistant"}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 10 }}
+      style={{ display: "inline-flex", flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center", gap: 10 }}
     >
       <CopyButton text={text} />
       {at !== undefined && (
-        <span
+        <time dateTime={new Date(at).toISOString()}
           style={{
             color: colors.dim,
             fontSize: 12.5,
@@ -19123,7 +19170,7 @@ function AssistantActions({ text, at }: { text: string; at?: number }) {
           }}
         >
           {formatConversationTime(at)}
-        </span>
+        </time>
       )}
     </span>
   );
@@ -21037,6 +21084,7 @@ function stepIcon(e: CommandEntry): React.ReactNode {
  *  card asking whether it may. */
 function stepRowText(e: CommandEntry): string {
   const c = e.command ?? "";
+  if (e.source === "image-generation") return c.replace(/^Create image\s*·\s*/, "");
   if (!isShellStep(e)) return c;
   if (e.status === "awaitingApproval") return `Run ${c}`;
   if (e.status === "inProgress") return `Running ${c}`;
@@ -21131,10 +21179,14 @@ function StepsGroup({
   items,
   statusLabel,
   decide,
+  onPreviewImage,
+  pendingImageReveals,
 }: {
   items: CommandEntry[];
   statusLabel: (e: CommandEntry) => { text: string; color: string };
   decide: (itemId: string, requestId: string, decision: ApprovalDecision) => Promise<void>;
+  onPreviewImage?: (image: Attachment) => void;
+  pendingImageReveals?: Set<string>;
 }) {
   const [open, setOpen] = useState(false);
   const [openItems, setOpenItems] = useState<Set<string>>(new Set());
@@ -21160,14 +21212,14 @@ function StepsGroup({
   useEffect(() => {
     const previouslyAutoOpened = new Set(autoOpenedItems.current);
     const fresh = items
-      .filter((e) => e.status === "inProgress" && isShellStep(e) && !previouslyAutoOpened.has(e.itemId))
+      .filter((e) => e.status === "inProgress" && (isShellStep(e) || e.source === "image-generation") && !previouslyAutoOpened.has(e.itemId))
       .map((e) => e.itemId);
     const finished = items
       .filter((e) => e.status !== "inProgress" && previouslyAutoOpened.has(e.itemId))
       .map((e) => e.itemId);
     if (!fresh.length && !finished.length) return;
     setOpenItems((current) => {
-      const next = closeFinishedAutoOpenedPanels(items, current, previouslyAutoOpened, manuallyOpenedItems.current);
+      const next = closeFinishedAutoOpenedPanels(items.filter(item => item.source !== "image-generation"), current, previouslyAutoOpened, manuallyOpenedItems.current);
       fresh.forEach((id) => next.add(id));
       return next.size === current.size && [...next].every((id) => current.has(id)) ? current : next;
     });
@@ -21314,7 +21366,7 @@ function StepsGroup({
       {expanded &&
         items.map((e) => {
           const label = statusLabel(e);
-          const hasOutputPanel = showsCommandOutputPanel(e, isShellStep(e));
+          const hasOutputPanel = e.source === "image-generation" || showsCommandOutputPanel(e, isShellStep(e));
           const itemOpen = openItems.has(e.itemId);
           const awaiting = e.status === "awaitingApproval" && e.approval && !e.approval.decision;
           const failed = e.status === "failed" || (e.exitCode ?? 0) !== 0;
@@ -21347,7 +21399,7 @@ function StepsGroup({
                   // full: they cannot consent to what an ellipsis hid, and it
                   // has no output panel to reveal the rest. Everything else
                   // stays one tidy line, with the full text on hover.
-                  title={e.command}
+                  title={e.source === "image-generation" ? stepRowText(e) : e.command}
                   style={{
                     minWidth: 0,
                     ...(awaiting
@@ -21380,7 +21432,16 @@ function StepsGroup({
                     onDecide={(d) => void decide(e.itemId, e.approval!.requestId, d)}
                   />
                 ))}
-              {hasOutputPanel && itemOpen && <CommandOutputPanel entry={e} />}
+              {hasOutputPanel && itemOpen && (e.source === "image-generation" ? <div style={{ margin: "6px 0 8px 24px" }}>
+                {(e.status === "inProgress" || (e.screenshots?.length ?? 0) > 0) && <ImageGenerationPreview
+                  running={e.status === "inProgress"} path={e.screenshots?.[0]?.path}
+                  reveal={e.screenshots?.[0] ? pendingImageReveals?.has(e.screenshots[0].path) : false}
+                  onRevealed={() => { if (e.screenshots?.[0]) pendingImageReveals?.delete(e.screenshots[0].path); }}
+                  onOpen={onPreviewImage && e.screenshots?.[0] ? () => onPreviewImage({ ...e.screenshots![0], kind: "image" }) : undefined} />}
+                {(e.screenshots ?? []).slice(1).map(capture => <ImageGenerationPreview key={capture.path} path={capture.path}
+                  reveal={pendingImageReveals?.has(capture.path)} onRevealed={() => pendingImageReveals?.delete(capture.path)}
+                  onOpen={onPreviewImage ? () => onPreviewImage({ ...capture, kind: "image" }) : undefined} />)}
+              </div> : <CommandOutputPanel entry={e} />)}
             </div>
           );
         })}

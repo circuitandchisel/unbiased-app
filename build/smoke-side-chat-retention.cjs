@@ -122,7 +122,10 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     // Preserve a live side turn, the same DOM/composer and a non-default width.
     await ev(`window.qaEmit('onTurnStarted',{paneId:'${paneId}',turnId:'live-side'});window.qaEmit('onDelta',{paneId:'${paneId}',delta:'Live side reply.'})`);
     await until(`document.querySelector('[data-chat-pane-id="${paneId}"]').innerText.includes('Live side reply.')`);
+    const fractionBefore=await ev(`document.querySelector('[aria-label="Resize side panel"]').getAttribute('aria-valuenow')`);
     await ev(`document.querySelector('[aria-label="Resize side panel"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))`);
+    await until(`document.querySelector('[aria-label="Resize side panel"]').getAttribute('aria-valuenow')!==${JSON.stringify(fractionBefore)}`);
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
     const width = await ev(`${panel}.getBoundingClientRect().width`);
     const resets = await ev(`window.qaCalls.filter(c=>c[0]==='resetSideChat').length`);
     await mosaic(); assert.equal(await ev(`${panel}.dataset.open`), 'false');
@@ -134,6 +137,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     assert.ok(await ev(`document.querySelector('[data-chat-pane-id="${paneId}"]').innerText.includes('More while in Mosaic.')`));
     assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='resetSideChat').length`), resets, 'same conversation does not close its engine side pane');
     assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='reopenSideChat').length`), 0, 'returning needs no recovery RPC');
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
     assert.ok(Math.abs(await ev(`${panel}.getBoundingClientRect().width`)-width)<1, 'panel width is retained');
     // A deliberately closed panel stays closed through another round trip.
     await ev(`document.querySelector('[title="Close side panel"]').click()`); await mosaic(); await open('chat-one');
@@ -169,7 +173,41 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await until(`typeof window.qaReleaseRecovery==='function'&&document.querySelector('[data-chat-pane-id="main"]').innerText.includes('Completed answer chat-two')`);
     await ev(`window.qaReleaseRecovery()`);
     await until(`document.querySelector('[data-chat-pane-id="side:recovered"]')?.innerText.includes('Recovered side answer.')&&${panel}.dataset.open==='true'`);
+    // Approved scoped browser activity reopens a retained but closed mirror.
+    await ev(`window.qaEmit('onAgentMirrorActivity',{tool:'browser_open',threadId:'chat-two'})`);
+    await until(`${panel}.dataset.open==='true'&&window.qaCalls.some(c=>c[0]==='agentMirrorStart'&&c[1].threadId==='chat-two')`);
+    await ev(`document.querySelector('[title="Close side panel"]').click()`);
+    await until(`${panel}.dataset.open==='false'`);
+    await ev(`window.qaEmit('onAgentMirrorActivity',{tool:'browser_open',threadId:'other-chat'});window.qaEmit('onAgentMirrorActivity',{tool:'launch'})`);
+    await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await ev(`${panel}.dataset.open`),'false','foreign and unscoped launch events stay quiet');
+    const mirrorStarts=await ev(`window.qaCalls.filter(c=>c[0]==='agentMirrorStart').length`);
+    await ev(`window.qaEmit('onAgentMirrorActivity',{tool:'browser_read',threadId:'chat-two'})`);
+    await until(`${panel}.dataset.open==='true'&&window.qaCalls.filter(c=>c[0]==='agentMirrorStart').length>${mirrorStarts}`);
+    // Already-visible work in another tab keeps its focus and custom width.
+    await browser();
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
+    const widthBeforeResize=await ev(`${panel}.getBoundingClientRect().width`);
+    await ev(`document.querySelector('[aria-label="Resize side panel"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}))`);
+    await until(`Math.abs(${panel}.getBoundingClientRect().width-${widthBeforeResize})>1`);
+    await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
+    const browserWidth=await ev(`${panel}.getBoundingClientRect().width`);
+    const beforeActivity=await ev(`window.qaCalls.filter(c=>c[0]==='agentMirrorStart').length`);
+    await ev(`window.qaEmit('onAgentMirrorActivity',{tool:'browser_snapshot',threadId:'chat-two'})`);
+    await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='agentMirrorStart').length`),beforeActivity,'do not steal an already visible browser tab');
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
+    assert.ok(Math.abs(await ev(`${panel}.getBoundingClientRect().width`)-browserWidth)<1);
+    // First-turn activity can precede adoption of the newly created thread.
+    await ev(`window.qaEmit('onAppCommand','new-chat')`);
+    await until(`window.qaCalls.some(c=>c[0]==='detachThread')&&!document.querySelector('[data-chat-pane-id="main"]').innerText.includes('Completed answer chat-two')&&${panel}.dataset.open==='false'`);
+    await ev(`window.qaEmit('onAgentMirrorActivity',{tool:'browser_open',threadId:'fresh-browser-chat'})`);
+    await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+    assert.equal(await ev(`${panel}.dataset.open`),'false','wait for the new thread ID rather than opening a foreign panel');
+    await open('fresh-browser-chat');
+    await until(`${panel}.dataset.open==='true'&&window.qaCalls.some(c=>c[0]==='agentMirrorStart'&&c[1].threadId==='fresh-browser-chat')`);
     assert.deepEqual(errors.filter(e=>!e.includes('Electron Security Warning')),[]);
-    console.log('PASS: Mosaic retains live side chat, stream, draft, DOM, panel width and closed preference without recovery RPC; Recents progress, duplicate suppression, restore and navigation isolation.');
+    console.log('PASS: Mosaic retains live side chat, stream, draft, DOM, panel width and closed preference without recovery RPC; Recents progress, duplicate suppression, restore and navigation isolation; scoped Agent Browser reopening, background isolation, first-turn adoption and visible-tab/width retention.');
   } finally { win.destroy(); fs.rmSync(fixture,{recursive:true,force:true}); }
 })().then(()=>app.exit(0),error=>{console.error(error);app.exit(1)});

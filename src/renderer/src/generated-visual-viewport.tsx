@@ -3,13 +3,22 @@ import { Maximize2, Minimize2, Minus, Plus } from "lucide-react";
 
 const ZOOM_LEVELS = [0.75, 1, 1.15, 1.35, 1.6, 2];
 
-export function GeneratedVisualViewport({ children }: { children: ReactNode }) {
+export function GeneratedVisualViewport({ children, initiallyExpanded = false, onClose, className = "", label }: {
+  children: ReactNode;
+  initiallyExpanded?: boolean;
+  onClose?: () => void;
+  className?: string;
+  label?: string;
+}) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const scrollPositionRef = useRef<{ element: HTMLElement; top: number } | null>(null);
   const restoreFrameRef = useRef<number | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [zoom, setZoom] = useState<number | null>(null);
+  const autoExpandedRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const changeZoom = (direction: -1 | 1) => {
     const current = zoom ?? 1;
@@ -38,6 +47,7 @@ export function GeneratedVisualViewport({ children }: { children: ReactNode }) {
             scrollPositionRef.current = null;
           });
         }
+        onCloseRef.current?.();
       }
     };
     viewport.addEventListener("toggle", sync);
@@ -69,8 +79,16 @@ export function GeneratedVisualViewport({ children }: { children: ReactNode }) {
     }
   };
 
+  useEffect(() => {
+    if (initiallyExpanded && !autoExpandedRef.current) {
+      autoExpandedRef.current = true;
+      toggleExpanded();
+      buttonRef.current?.focus({ preventScroll: true });
+    }
+  }, [initiallyExpanded]);
+
   return (
-    <div ref={viewportRef} className="app-generated-visual-viewport">
+    <div ref={viewportRef} className={`app-generated-visual-viewport ${className}`.trim()} role={label ? "dialog" : undefined} aria-label={label}>
       <div className="app-generated-visual-viewport__toolbar">
         {expanded && <>
           <button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom === ZOOM_LEVELS[0]}

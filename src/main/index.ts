@@ -1,5 +1,5 @@
-import { ServerToolsClient, ServerToolSessions, offeredServerTools } from "./server-tools";
-import { SERVER_TOOL_NAMES, serverToolDirective, type ServerToolName } from "../shared/server-tools";
+import { ServerToolsClient, ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
+import { SERVER_TOOL_NAMES, serverToolDirective, type ServerToolName, type ServerToolCapabilities } from "../shared/server-tools";
 import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
 import { retainBrowserCapture, readBrowserCapturesForItem, readBrowserCaptureTurns, removeBrowserCaptures } from "./browser-captures";
 import { collectBrowserCaptures } from "../shared/browser-capture";
@@ -526,15 +526,17 @@ const APP_DEVELOPER_INSTRUCTIONS = [
   // profile, outside every gate and invisible to the Agent browser pane.
   // Naming the capability is what stops that.
   "You have a real browser: the browser_* tools drive a Chrome this app manages, and the user watches it",
-  "in the app's Agent browser tab. Reach for it on your own initiative whenever a task involves the web —",
-  "browser_search for anything public, and browser_connect FIRST for anything behind the user's own login",
+  "in the app's Agent browser tab. Use web_search for public web research whenever it is offered; it",
+  "runs on the server and returns sources without opening a browser. Only use browser_search when",
+  "web_search is unavailable. Use browser tools for page interaction or inspecting a specific page,",
+  "and browser_connect FIRST for anything behind the user's own login",
   "(their Slack, email, dashboards, admin panels). Never shell out to `agent-browser`, curl, or any other",
   "command to browse: those run outside the app's permission and mirroring, so the user cannot see or",
   "approve them. If a browser tool is genuinely absent from your tools, say the Agent browser is",
   "unavailable rather than substituting a shell command for it.",
   "For pages already open in the in-app browser, use browser_side_list and browser_side_use. Full access allows controlling existing tabs without another permission prompt. In other modes, obtain approval before reading or acting through their signed-in session. For a new page, browser_side_open creates a background tab with its own conversation session. Use its returned tabId for snapshots, clicks, filling, scrolling, and screenshots; browser_side_navigate keeps an existing tab and its signed-in session when changing URLs; do not guess tab IDs or use shell scripts to attach to Electron.",
   "Browser screenshots are saved and attached to the chat automatically. Describe the captured page accurately; never claim an attachment exists if saving failed. Do not substitute a description for calling the screenshot tool when the user requests an image.",
-  "Keep browser work in the background unless the user asks to watch it. When sign-in, 2FA, CAPTCHA, a decision, or missing information needs the user, call browser_side_request_help with a precise request. That reveals the tab and pauses all agent access. Stop the turn and wait for the user to click Continue agent. Never resume yourself, interact with the app's approval UI, solve CAPTCHA, or request passwords in chat. After the user's continuation message, inspect the current page before continuing, and leave its tab open.",
+  "Keep in-app browser work in the background unless the user asks to watch it. When sign-in, 2FA, CAPTCHA, a decision, or missing information needs the user, call browser_side_request_help with a precise request. That reveals the tab and pauses all agent access. Stop the turn and wait for the user to click Continue agent. Never resume yourself, interact with the app's approval UI, solve CAPTCHA, or request passwords in chat. After the user's continuation message, inspect the current page before continuing, and leave its tab open.",
   // Delegation. The collaboration tools are available on every turn, but models
   // rarely reach for them unprompted — Claude Code and codex get "automatic"
   // sub-agents purely by saying when to delegate, so this does the same. The
@@ -1322,13 +1324,14 @@ const serverTools = new ServerToolsClient(() => readStoredKey()?.key ?? null, fe
 const serverToolSessions = new ServerToolSessions();
 function resetServerTools(): void { serverTools.reset(); serverToolSessions.clear(); }
 
-async function threadDynamicTools(): Promise<Record<string, unknown>[] | undefined> {
+async function threadDynamicTools(capabilities?: ServerToolCapabilities): Promise<Record<string, unknown>[] | undefined> {
   // The same value decides what is on the menu and what handleComputerUseCall
   // will actually run, so a withheld verb cannot come back through the door.
   const screenshots = screenshotToolsOffered({ axAlive: ax?.alive === true });
+  const available = capabilities ?? await serverTools.capabilities();
   const tools = [
     ASK_USER_TOOL,
-    ...offeredServerTools(await serverTools.capabilities()),
+    ...offeredServerTools(available),
     ...(ax?.alive ? AX_TOOLS.map((t) => withSpaceGuidance(t, ax!.crossSpace)) : []),
     ...COMPUTER_USE_TOOLS
       .filter((t) => coordinateToolAllowed(t.name, screenshots))
@@ -1337,7 +1340,7 @@ async function threadDynamicTools(): Promise<Record<string, unknown>[] | undefin
     ...MEMORY_TOOLS,
     ...CHECKPOINT_TOOLS,
     IMAGE_OUTLINE_TOOL,
-    ...((await agentBrowserTools()) ?? []),
+    ...browserToolsForAccount((await agentBrowserTools()) ?? [], available),
   ];
   return tools.length ? (tools as Record<string, unknown>[]) : undefined;
 }
@@ -7964,13 +7967,17 @@ app.whenReady().then(async () => {
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
     if (payload.userRequests !== undefined && (!Array.isArray(payload.userRequests) || !payload.userRequests.every(part => typeof part === "string"))) throw new Error("Invalid user request.");
-    if (payload.serverTool !== undefined && (!SERVER_TOOL_NAMES.includes(payload.serverTool) || !(await serverTools.capabilities())[payload.serverTool])) throw new Error("This server tool is unavailable for your account or workload.");
+    if (payload.serverTool !== undefined && !SERVER_TOOL_NAMES.includes(payload.serverTool)) throw new Error("This server tool is unavailable for your account or workload.");
+    const serverCapabilitiesPending = serverTools.capabilities();
     const previousThread = panes[paneId]?.threadId;
     if (previousThread) {
       turnContinuation.cancel(previousThread);
       // A new user request must not race a canceled automatic turn/start RPC.
       await automaticTurnStarts.get(previousThread)?.catch(() => {});
     }
+    // Eligibility discovery must not delay canceling a superseded continuation.
+    const serverCapabilities = await serverCapabilitiesPending;
+    if (payload.serverTool !== undefined && !serverCapabilities[payload.serverTool]) throw new Error("This server tool is unavailable for your account or workload.");
     for (const attachment of attachments ?? []) {
       if (!isAbsolute(attachment.path)) throw new Error(`Invalid attachment path: ${attachment.name}`);
       const info = statSync(attachment.path);
@@ -8018,7 +8025,7 @@ app.whenReady().then(async () => {
         started = (await engine.request(target.method, {
           ...target.params,
           ...threadPolicy(),
-          dynamicTools: await threadDynamicTools(),
+          dynamicTools: await threadDynamicTools(serverCapabilities),
           developerInstructions: `${developerInstructionsFor(sideCwd, parentId)}\n\n` +
             "This is a side chat. Inherited parent history is background context, not an active task. " +
             "Follow this side chat's current request; do not continue parent work unless the user explicitly asks.",
@@ -8048,7 +8055,7 @@ app.whenReady().then(async () => {
           cwd,
           // Model-driven browser automation (agent-browser CLI), when
           // installed — the calls come back as item/tool/call requests.
-          dynamicTools: await threadDynamicTools(),
+          dynamicTools: await threadDynamicTools(serverCapabilities),
           developerInstructions: developerInstructionsFor(cwd, null, selectedProjectId),
           // Raw response items feed the sub-agent viewer (task text + spawn
           // instructions). Sub-threads inherit this from their parent.
@@ -8121,11 +8128,13 @@ app.whenReady().then(async () => {
       }
       threadAccessModes.set(started.thread.id, accessMode);
       created = true;
-      serverToolSessions.remember(pane.threadId!, await serverTools.capabilities());
+      serverToolSessions.remember(pane.threadId!, serverCapabilities);
     }
-    if (payload.serverTool) await serverToolSessions.prepare(pane.threadId!, payload.serverTool, await serverTools.capabilities(), runningTurns.has(pane.threadId!), async () => {
+    // Natural-language requests get the same eligible tool catalog as menu
+    // selections. Refresh a stale/old idle session once, never on every turn.
+    await serverToolSessions.prepareAvailable(pane.threadId!, serverCapabilities, runningTurns.has(pane.threadId!), async () => {
       await engine.request("thread/unsubscribe", { threadId: pane.threadId });
-      await engine.request("thread/resume", { ...await resumeParamsFor(pane.threadId!), dynamicTools: await threadDynamicTools() });
+      await engine.request("thread/resume", { ...await resumeParamsFor(pane.threadId!), dynamicTools: await threadDynamicTools(serverCapabilities) });
     });
     // Mentions preserve attachment metadata in thread history, but local
     // paths in mentions do not reach the model. Supply readable files (or an

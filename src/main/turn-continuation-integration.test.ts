@@ -4,8 +4,10 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
+import { ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
+import type { ServerToolCapabilities } from "../shared/server-tools";
 
-function sendFixture() {
+function sendFixture(capabilities: ServerToolCapabilities = { web_search: false, image_generation: false }) {
   const guard = new TurnContinuation(), sender = {};
   const calls: Array<{ method: string; params: any }> = [];
   let handler!: (event: any, input: any) => Promise<unknown>;
@@ -20,9 +22,18 @@ function sendFixture() {
     threadCwds: new Map([["chat", "/repo"]]), loadWorktrees: () => ({}), bundledSkillsDir: () => "/skills",
     resolveSlashSkill: async () => null, configuredProjectContext: () => null, fileAttachmentContext: () => "",
     pinTurnEnvironment: () => {}, turnEnvironments: { end: () => {} },
+    serverTools: { capabilities: async () => capabilities }, serverToolSessions: new ServerToolSessions(), runningTurns: new Map(),
+    resumeParamsFor: async (threadId: string) => ({ threadId }),
+    screenshotToolsOffered: () => ({}), ax: null, ASK_USER_TOOL: { name: "ask_user" },
+    offeredServerTools, browserToolsForAccount, COMPUTER_USE_TOOLS: [], SCHEDULE_TOOLS: [], MEMORY_TOOLS: [], CHECKPOINT_TOOLS: [], IMAGE_OUTLINE_TOOL: { name: "image_outline" },
+    agentBrowserTools: async () => [{ name: "browser_search" }, { name: "browser_open" }, { name: "browser_side_open" }],
     threadPolicy: () => ({ approvalPolicy: "on-request" }), turnSandbox: () => ({ type: "readOnly" }),
     engine: { request: async (method: string, params: any) => { calls.push({ method, params }); return { turn: { id: "user-turn" } }; } },
   };
+  const toolsAt = source.indexOf("async function threadDynamicTools(");
+  const toolsEnd = source.indexOf("/** Consent gate.", toolsAt);
+  assert.ok(toolsAt > 0 && toolsEnd > toolsAt);
+  runInNewContext(transformSync(source.slice(toolsAt, toolsEnd), { loader: "ts" }).code, context);
   runInNewContext(transformSync(source.slice(startAt, endAt), { loader: "ts" }).code, context);
   // Exercise the actual preload serialization as well as the production host handler.
   const preload = readFileSync(new URL("../preload/index.ts", import.meta.url), "utf8");
@@ -30,8 +41,21 @@ function sendFixture() {
   const fieldEnd = preload.indexOf("  continueUnfinished:", fieldAt);
   const bridge: any = { ipcRenderer: { invoke: (_method: string, payload: any) => handler({ sender }, payload) } };
   runInNewContext(transformSync(`globalThis.api = ({${preload.slice(fieldAt, fieldEnd)}})`, { loader: "ts" }).code, bridge);
-  return { guard, calls, send: (wire: string, userRequests?: unknown) => bridge.api.sendMessage("main", wire, [], { userRequests }) };
+  return { guard, calls, pane, send: (wire: string, userRequests?: unknown) => bridge.api.sendMessage("main", wire, [], { userRequests }) };
 }
+
+test("plain user sends install the eligible native catalog before automatic tool selection", async () => {
+  const f = sendFixture({ web_search: true, image_generation: true });
+  await f.send("Can you do a web search about realtime voice replies?");
+  assert.deepEqual(f.calls.map(call => call.method), ["thread/unsubscribe", "thread/resume", "turn/start"]);
+  const catalog = f.calls[1].params.dynamicTools.map((tool: { name: string }) => tool.name);
+  assert.ok(catalog.includes("web_search") && catalog.includes("image_generation"));
+  assert.ok(!catalog.includes("browser_search"));
+  assert.ok(catalog.includes("browser_open") && catalog.includes("browser_side_open"), "page verification and browser interaction remain available");
+  f.pane.turnId = null;
+  await f.send("Follow up with another current source.");
+  assert.equal(f.calls.filter(call => call.method === "thread/resume").length, 1, "unchanged natural-language turns do not reload the engine again");
+});
 
 test("annotation Proceed reaches the host through the preload without treating quoted text as authorization", async () => {
   const wire = "Regarding this excerpt from the conversation:\n\n> But first, let me address the immediate EC2 E2E failure.\nComment: Proceed";

@@ -16,6 +16,13 @@ JavaScript dependencies retain their package metadata and license files in
 the packaged application. See `package-lock.json` for the exact dependency
 versions used by a release.
 
+## Image generation effects
+
+Image-generation previews use [img-fx](https://github.com/Jakubantalik/img-fx),
+Copyright (c) 2026 Jakub Antalik, and [Three.js](https://github.com/mrdoob/three.js),
+Copyright (c) 2010-2026 three.js authors. Both are licensed under MIT; their
+license files are retained in the packaged npm dependencies.
+
 ## Playwright
 
 The application includes `playwright-core` from
