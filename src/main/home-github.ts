@@ -1,3 +1,4 @@
+import { readGithubActivity } from "./home-github-activity";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { HomeGithubInput, HomeGithubResult, HomePullRequest } from "../shared/home-github";
@@ -20,11 +21,26 @@ const query = `query($opened:String!,$merged:String!){viewer{login} opened:searc
 export class HomeGithub {
   private cache = new Map<string, { at: number; result: HomeGithubResult }>();
   private pending = new Map<string, Promise<HomeGithubResult>>();
-  constructor(private execute: Run = run, private now = Date.now) {}
+  constructor(private execute: Run = run, private now = Date.now, private activityFile?: () => string) {}
   async get(input: HomeGithubInput, folders?: string[]): Promise<HomeGithubResult> {
     let window: ReturnType<typeof githubWindow>;
     try { window = githubWindow(input); } catch { return { ok: false, error: "Choose a valid activity date." }; }
     const gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].find(path => existsSync(path)) ?? "gh";
+    if (input.includeActivity) {
+      const base = await this.get({ ...input, includeActivity: false }, folders);
+      if (!base.ok) return base;
+      const key = JSON.stringify(["activity", base.login, window, base.repositories]);
+      const cached = this.cache.get(key); if (cached && this.now() - cached.at < 60_000) return { ...base, ...cached.result };
+      const pending = this.pending.get(key); if (pending) return pending;
+      const task = readGithubActivity(this.execute, gh, base.login, window, base.repositories ?? [], this.activityFile?.()).then(activity => {
+        const result = { ...base, activity };
+        this.cache.set(key, { at: this.now(), result });
+        while (this.cache.size > 32) this.cache.delete(this.cache.keys().next().value!);
+        return result;
+      }).finally(() => this.pending.delete(key));
+      this.pending.set(key, task); return task;
+    }
+
     try {
       // Resolve identity before serving cache, so changing CLI accounts cannot reuse another user's PRs.
       const login = (await this.execute(gh, ["api", "--hostname", "github.com", "user", "--jq", ".login"])).trim();
@@ -51,7 +67,7 @@ export class HomeGithub {
           if (!pr?.repository?.nameWithOwner || typeof pr.title !== "string" || !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(pr.url)) continue;
           prs.set(pr.url, { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository.nameWithOwner, createdAt: pr.createdAt, mergedAt: pr.mergedAt, state: pr.state });
         }
-        const result: HomeGithubResult = { ok: true, login, opened: data.opened.issueCount, merged: data.merged.issueCount, pullRequests: [...prs.values()], partial: data.opened.pageInfo.hasNextPage || data.merged.pageInfo.hasNextPage };
+        const result: HomeGithubResult = { ok: true, login, opened: data.opened.issueCount, merged: data.merged.issueCount, pullRequests: [...prs.values()], partial: data.opened.pageInfo.hasNextPage || data.merged.pageInfo.hasNextPage, repositories: repos };
         this.cache.set(key, { at: this.now(), result });
         while (this.cache.size > 32) this.cache.delete(this.cache.keys().next().value!);
         return result;

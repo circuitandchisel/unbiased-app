@@ -8361,7 +8361,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("usage:billing", () => readBilling());
-  const homeGithub = new HomeGithub();
+  const homeGithub = new HomeGithub(undefined, undefined, () => join(app.getPath("userData"), "home-github-events.json"));
   ipcMain.handle("home:github", (_e, input: import("../shared/home-github").HomeGithubInput) => {
     const project = input?.projectId ? loadProjects().find(project => project.id === input.projectId) : null;
     if (input?.projectId && !project) return { ok: false, error: "Project is no longer available." };

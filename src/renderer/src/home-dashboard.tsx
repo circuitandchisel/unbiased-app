@@ -1,3 +1,4 @@
+import { HomeGithubActivity } from "./home-github-activity";
 import type { HomeGithubResult } from "../../shared/home-github";
 import { LiquidMenuSurface } from "./liquid-menu";
 import { RefreshCWIcon, type RefreshCWIconHandle } from "./refresh-cw-icon";
@@ -233,7 +234,7 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
       {selectedDate && <>
         <div className="home-day-heading"><div><h2>Activity</h2><p>{selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p></div><button type="button" aria-label="Clear selected activity date" onClick={() => { calendar.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus(); setSelectedDay(null); }}><X size={15} /></button></div>
         <p className="home-day-summary" role="status">{dayChats.length ? `Started ${dayChats.length} chat${dayChats.length === 1 ? "" : "s"}${dayGroups.size > 1 ? ` across ${dayGroups.size} groups` : ""}.` : "No chats were started on this date in the available history."}</p>
-        <div className="home-day-pull-requests"><h3>Pull requests</h3>{github === null ? <p className="home-empty">Loading GitHub activity…</p> : !github.ok ? <p className="home-empty">{github.error}</p> : <>{prEvents.length ? <div className="home-pr-list home-pr-list-details" role="region" aria-label="Pull requests on selected date" tabIndex={0}>{renderPullRequests(200)}</div> : <p className="home-empty">No pull requests opened or merged on this date.</p>}<p className="home-usage-scope">@{github.login} · Your PRs{github.partial ? " · Showing a partial list; totals include all matching PRs" : ""}</p></>}</div>
+        <HomeGithubActivity input={JSON.parse(githubKey)} github={github} pullRequests={prEvents.map(({pr,action,at}) => ({ id: `${pr.url}-${action}`, kind: "prs", action, at, title: pr.title, repository: pr.repository, url: pr.url }))} onOpenLink={onOpenLink} />
         {[...dayGroups].map(([key, group]) => {
           const project = projects.find(project => project.id === key);
           return <div key={key} className="home-day-group" data-project-id={key}><div className="home-day-group-heading"><span className="home-activity-icon">{project ? <ProjectIcon icon={project.icon} color={project.color} size={14} /> : <MessageCircleMoreIcon size={14} />}</span><h3>{group[0].projectName ?? "Chat"}</h3><span>{group.length} chat{group.length === 1 ? "" : "s"}</span></div>
