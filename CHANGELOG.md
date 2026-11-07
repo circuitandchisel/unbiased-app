@@ -16,11 +16,13 @@ Write for the person using the app, not the person who wrote the code.
 ### Improved
 
 - **Clearer reply text.** Assistant replies use your theme’s primary text color for stronger contrast.
+- **Automatic Web Search.** Eligible chats use the server search for public research without requiring a menu selection. Browser tools remain available for visiting and checking pages.
 
 ### Fixed
 
 - **Compact transcript spacing.** Replies and command rows use their earlier spacing while keeping scrolling steady.
 - **Keep side chats through Mosaic.** Returning to the same conversation restores its open side panel, draft and live reply. Reopening a closed side chat from browser Recents shows progress while it loads.
+- **Agent browser availability.** Dev and production use separate browser ports, and browser activity reopens a closed Agent browser panel. Hidden mirrors stop streaming until shown again.
 - **Use new tools in existing chats.** Eligible chats can gain tool access without starting over or losing their history.
 
 ## 1.13.32 — November 6, 2026

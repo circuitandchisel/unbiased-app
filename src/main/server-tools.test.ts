@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ServerToolsClient, ServerToolSessions, parseServerToolAnswer, offeredServerTools } from "./server-tools";
+import { ServerToolsClient, ServerToolSessions, parseServerToolAnswer, offeredServerTools, browserToolsForAccount } from "./server-tools";
 
 const eligibleIdentity = { ok: true, organization: { id: "org", name: "Account" }, workload: { id: "work", name: "Desktop" },
   keyName: "Desktop", accessStatus: "granted", accountType: "personal", chatEligibility: { allowed: true, reason: "eligible" } };
@@ -161,19 +161,48 @@ test("Stop also refuses later queued tool calls until the next turn begins", asy
   assert.equal(posts, 1);
 });
 
-test("existing engine sessions refresh once when a newly eligible tool is selected", async () => {
+test("natural-language turns refresh unknown and changed eligible catalogs once", async () => {
   const sessions = new ServerToolSessions(); let refreshes = 0;
   const refresh = async () => { refreshes++; };
-  sessions.remember("chat", { web_search: true, image_generation: false });
-  await sessions.prepare("chat", "web_search", { web_search: true, image_generation: true }, false, refresh);
-  assert.equal(refreshes, 0);
-  await assert.rejects(sessions.prepare("chat", "image_generation", { web_search: true, image_generation: true }, true, refresh), /current turn/);
-  await sessions.prepare("chat", "image_generation", { web_search: true, image_generation: true }, false, refresh);
-  await sessions.prepare("chat", "image_generation", { web_search: true, image_generation: true }, false, refresh);
+  const both = { web_search: true, image_generation: true };
+  // No explicit tool selection: an older resumed thread gains both tools.
+  await sessions.prepareAvailable("old-chat", both, false, refresh);
+  await sessions.prepareAvailable("old-chat", both, false, refresh);
   assert.equal(refreshes, 1);
-  sessions.invalidate("chat");
-  await sessions.prepare("chat", "web_search", { web_search: true, image_generation: false }, false, refresh);
+  sessions.remember("fresh-chat", both);
+  await sessions.prepareAvailable("fresh-chat", both, false, refresh);
+  assert.equal(refreshes, 1, "new and unchanged sessions avoid a resume round trip");
+  sessions.remember("search-only", { web_search: true, image_generation: false });
+  await assert.rejects(sessions.prepareAvailable("search-only", both, true, refresh), /current turn/);
+  assert.equal(refreshes, 1, "never unload a running turn");
+  await sessions.prepareAvailable("search-only", both, false, refresh);
   assert.equal(refreshes, 2);
-  await assert.rejects(sessions.prepare("chat", "image_generation", { web_search: true, image_generation: false }, false, refresh), /subscription or organization grant/);
-  assert.equal(refreshes, 2);
+  sessions.invalidate("old-chat");
+  await sessions.prepareAvailable("old-chat", both, false, refresh);
+  assert.equal(refreshes, 3, "resumed threads refresh before an automatic tool choice");
+});
+
+test("catalog refresh handles revoked eligibility and retries after a failed reload", async () => {
+  const sessions = new ServerToolSessions(); let refreshes = 0;
+  const none = { web_search: false, image_generation: false };
+  const both = { web_search: true, image_generation: true };
+  const refresh = async () => { refreshes++; };
+  await sessions.prepareAvailable("unknown-ineligible", none, false, refresh);
+  assert.equal(refreshes, 0, "accounts with no native tools need no cold refresh");
+  sessions.remember("chat", both);
+  await sessions.prepareAvailable("chat", none, false, refresh);
+  await sessions.prepareAvailable("chat", none, false, refresh);
+  assert.equal(refreshes, 1, "drop withdrawn tools once");
+  await assert.rejects(sessions.prepareAvailable("chat", both, false, async () => { throw Error("reload failed"); }), /reload failed/);
+  await sessions.prepareAvailable("chat", both, false, refresh);
+  assert.equal(refreshes, 2, "failed reload does not claim the new catalog is installed");
+});
+
+test("eligible research offers native search without the competing browser search", () => {
+  const browser = ["browser_search", "browser_open", "browser_read", "browser_connect", "browser_side_open"].map(name => ({ name }));
+  const eligible = { web_search: true, image_generation: true };
+  const catalog = [...offeredServerTools(eligible), ...browserToolsForAccount(browser, eligible)];
+  assert.deepEqual(catalog.map(tool => tool.name), ["web_search", "image_generation", "browser_open", "browser_read", "browser_connect", "browser_side_open"]);
+  assert.deepEqual(browserToolsForAccount(browser, { web_search: false, image_generation: false }), browser);
+  assert.equal(browser[0].name, "browser_search", "do not mutate the browser runtime's catalog");
 });

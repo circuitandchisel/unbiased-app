@@ -25,15 +25,11 @@ async function main() {
     res.end('<!doctype html><title>Mirror fixture</title><style>body{min-width:3000px;min-height:3000px}</style><h1>Mirroring works</h1><label>Name<input aria-label="Name"></label><script>onscroll=()=>fetch(`/scroll?x=${scrollX}&y=${scrollY}`)</script>');
   });
   await new Promise(done => fixture.listen(0, "127.0.0.1", done));
-  const portServer = require("node:net").createServer();
-  await new Promise(done => portServer.listen(0, "127.0.0.1", done));
-  const port = portServer.address().port;
-  await new Promise(done => portServer.close(done));
   const win = new BrowserWindow({ show: false, width: 1000, height: 750, webPreferences: {
     preload: resolve("out/preload/index.js"), contextIsolation: true, sandbox: true,
   } });
   const runtime = new BrowserRuntimeClient({ entry: resolve("build/browser-runtime/main.js"),
-    options: { browserRoot: resolve("build/browser-bundle"), home, tempDir: home, osVersion: "13.0", port },
+    options: { browserRoot: resolve("build/browser-bundle"), home, tempDir: home, osVersion: "13.0" },
     onEvent: (event, payload) => { if (!win.isDestroyed()) win.webContents.send(event, payload); },
   });
   let rejectStart = true;

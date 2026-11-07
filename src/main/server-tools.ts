@@ -134,16 +134,22 @@ export function offeredServerTools(capabilities: ServerToolCapabilities): Record
   });
 }
 
+/** Prefer the native search when eligible; keep browser interaction tools. */
+export function browserToolsForAccount(tools: Record<string, unknown>[], capabilities: ServerToolCapabilities): Record<string, unknown>[] {
+  return capabilities.web_search ? tools.filter(tool => tool.name !== "browser_search") : tools;
+}
+
 /** Loaded engine sessions keep their original tool declarations. */
 export class ServerToolSessions {
   private tools = new Map<string, Set<ServerToolName>>();
   invalidate(thread: string): void { this.tools.delete(thread); }
   clear(): void { this.tools.clear(); }
   remember(thread: string, capabilities: ServerToolCapabilities): void { this.tools.set(thread, new Set(SERVER_TOOL_NAMES.filter(name => capabilities[name]))); }
-  async prepare(thread: string, tool: ServerToolName, capabilities: ServerToolCapabilities, running: boolean, refresh: () => Promise<void>): Promise<void> {
-    if (!capabilities[tool]) throw new ServerToolError("This server tool requires an active Chat subscription or organization grant.");
-    if (this.tools.get(thread)?.has(tool)) return;
-    if (running) throw new ServerToolError("Wait for the current turn to finish before selecting this server tool.");
+  async prepareAvailable(thread: string, capabilities: ServerToolCapabilities, running: boolean, refresh: () => Promise<void>): Promise<void> {
+    const desired = SERVER_TOOL_NAMES.filter(name => capabilities[name]);
+    const current = this.tools.get(thread);
+    if (current ? current.size === desired.length && desired.every(name => current.has(name)) : desired.length === 0) return;
+    if (running) throw new ServerToolError("Wait for the current turn to finish before refreshing server tools.");
     await refresh();
     this.remember(thread, capabilities);
   }

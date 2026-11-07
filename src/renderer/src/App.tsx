@@ -932,7 +932,7 @@ declare global {
       onAgentMirrorState: (
         cb: (p: { connected: boolean; url?: string; title?: string; reason?: string; error?: string }) => void,
       ) => () => void;
-      onAgentMirrorActivity: (cb: (p: { tool: string }) => void) => () => void;
+      onAgentMirrorActivity: (cb: (p: { tool: string; threadId?: string | null }) => void) => () => void;
       changelogReleases: () => Promise<{ releases: ChangelogRelease[] }>;
       updatePrefs: () => Promise<{ autoDownload: boolean; version: string; lastCheckedAt: number | null }>;
       setUpdatePrefs: (p: { autoDownload: boolean }) => Promise<{ ok: boolean }>;
@@ -1812,6 +1812,8 @@ export function App() {
   }, [authed]);
   // The panel starts closed; closed side chats can be reopened from Recents.
   const [sideOpen, setSideOpen] = useState(false);
+  const sideOpenRef = useRef(sideOpen);
+  sideOpenRef.current = sideOpen;
   const [imageLightbox, setImageLightbox] = useState<{ name: string; path: string; returnFocus: HTMLElement | null } | null>(null);
   const [sideHiddenForMosaic, setSideHiddenForMosaic] = useState(false);
   const sidePanelRef = useRef<HTMLDivElement>(null);
@@ -1899,7 +1901,8 @@ export function App() {
   }
 
   function setSideOpenPersisted(open: boolean) {
-    if (open && !sideOpen) setSideFrac(0.5);
+    if (open && !sideOpenRef.current) setSideFrac(0.5);
+    sideOpenRef.current = open;
     if (open) setSideHiddenForMosaic(false);
     setSideOpen(open);
   }
@@ -2540,10 +2543,31 @@ export function App() {
   const [terminalTabs, setTerminalTabs] = useState<number[]>([]);
   // Singleton: one Chrome, one mirror — like the terminal, a LIVE tab.
   const [agentMirrorOpen, setAgentMirrorOpen] = useState(false);
+  const agentMirrorOpenRef = useRef(agentMirrorOpen);
+  agentMirrorOpenRef.current = agentMirrorOpen;
   // The activity subscription below is mounted once, so it cannot close over
   // activeThreadId — it would compare against the value at mount forever.
   const activeThreadIdRef = useRef<string | null>(null);
   activeThreadIdRef.current = activeThreadId;
+  const pendingAgentMirrorActivityRef = useRef<string | null>(null);
+  const revealAgentMirrorActivityRef = useRef(() => {});
+  revealAgentMirrorActivityRef.current = () => {
+    const already = agentMirrorOpenRef.current;
+    agentMirrorOpenRef.current = true;
+    setAgentMirrorOpen(true);
+    // A retained tab is not necessarily visible. Reopen a closed panel,
+    // while leaving another already visible tab in focus.
+    if (!already || !sideOpenRef.current) {
+      setPanelMode("agentmirror");
+      setSideOpenPersisted(true);
+    }
+  };
+  useEffect(() => {
+    const pending = pendingAgentMirrorActivityRef.current;
+    if (!activeThreadId || !pending) return;
+    pendingAgentMirrorActivityRef.current = null;
+    if (pending === activeThreadId) revealAgentMirrorActivityRef.current();
+  }, [activeThreadId]);
   useEffect(
     () =>
       window.unbiased.onAgentMirrorActivity((p) => {
@@ -2555,17 +2579,17 @@ export function App() {
         // must not open a pane here: with one tab per conversation that pane
         // would be showing work the user did not ask to watch, in a chat that
         // is not doing it. Its own pane is restored when they switch to it.
-        const from = (p as { threadId?: string | null } | null)?.threadId ?? null;
-        if (from && activeThreadIdRef.current && from !== activeThreadIdRef.current) return;
-        setAgentMirrorOpen((already) => {
-          // Don't yank focus away from a tab the user is reading if the pane
-          // is already there; just make sure it exists.
-          if (!already) {
-            setPanelMode("agentmirror");
-            setSideOpenPersisted(true);
-          }
-          return true;
-        });
+        const from = p?.threadId;
+        // Unscoped Chrome launch events cannot identify the owning chat.
+        if (!from) return;
+        if (!activeThreadIdRef.current) {
+          // A first-turn tool may arrive before sendMessage returns the new
+          // thread ID. Wait for adoption rather than opening a foreign pane.
+          pendingAgentMirrorActivityRef.current = from;
+          return;
+        }
+        if (from !== activeThreadIdRef.current) return;
+        revealAgentMirrorActivityRef.current();
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -5445,7 +5469,7 @@ export function App() {
                   to watch — otherwise it picks by URL and can show a different
                   chat browsing. */}
               <AgentMirrorPane
-                active={panelMode === "agentmirror"}
+                active={sideVisible && panelMode === "agentmirror" && !imageLightbox && !showSettings && !showChangelog}
                 threadId={scheduledOpen ? (runningScheduledThread ?? activeThreadId) : activeThreadId}
               />
             </div>
