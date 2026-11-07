@@ -11494,7 +11494,7 @@ function ChatPane({
               <UserMessageMarkdown text={e.text} onOpenLink={onOpenLink} />
             </div>
           )}
-          {e.text && <CopyButton text={e.text} />}
+          {e.text && <MessageActions text={e.text} at={e.at} align="right" />}
         </div>
       );
     }
@@ -11643,7 +11643,7 @@ function ChatPane({
           {/* Keep settled answers copyable during later turns, while hiding
               actions on the active turn's unfinished narration. */}
           {e.text && !nested && showActions && (!busy || block.key < (turnStartIndexRef.current ?? entries.length)) && (
-            <AssistantActions text={e.text} at={e.at} />
+            <MessageActions text={e.text} at={e.at} />
           )}
         </div>
       );
@@ -19148,19 +19148,19 @@ function IconButton({
   );
 }
 
-/** The final response's action row: copy, plus the settled time revealed
- *  when the pointer is anywhere over the row (Codex behavior). */
-function AssistantActions({ text, at }: { text: string; at?: number }) {
+/** Both speakers share the same hover timestamp and copy behavior. */
+function MessageActions({ text, at, align = "left" }: { text: string; at?: number; align?: "left" | "right" }) {
   const [hover, setHover] = useState(false);
   return (
     <span
+      data-message-actions={align === "right" ? "user" : "assistant"}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 10 }}
+      style={{ display: "inline-flex", flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center", gap: 10 }}
     >
       <CopyButton text={text} />
       {at !== undefined && (
-        <span
+        <time dateTime={new Date(at).toISOString()}
           style={{
             color: colors.dim,
             fontSize: 12.5,
@@ -19170,7 +19170,7 @@ function AssistantActions({ text, at }: { text: string; at?: number }) {
           }}
         >
           {formatConversationTime(at)}
-        </span>
+        </time>
       )}
     </span>
   );

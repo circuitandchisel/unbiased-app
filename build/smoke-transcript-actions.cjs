@@ -21,7 +21,7 @@ const main={...side,persistTranscript:true,paneId:'main',onAskSideChat:text=>win
 const root=createRoot(document.getElementById('root'));
 const render=(reset=main.reset,key='main')=>root.render(<><section id="side"><ChatPane {...side}/></section><section id="main"><ChatPane key={key} {...main} reset={reset}/></section><section id="mosaic"><MultiViewTile key={window.qaMosaicKey??0} {...mosaic}/></section></>);
 window.qaRestoreMain=(seconds,nonce,key='main',compacting=false)=>render({...main.reset,nonce,compacting,resume:seconds===null?null:{running:true},runningTurnStart:0,runningTurnStartedAt:seconds===null?null:Date.now()-seconds*1000},key);
-window.qaRunningCopy=()=>render({...main.reset,nonce:20,entries:[{kind:'user',text:'Earlier question'},{kind:'assistant',text:'Earlier completed answer'},{kind:'user',text:'Current question'},{kind:'assistant',text:'Current streaming answer'}],resume:{running:true,approvals:[],userInputs:[]},runningTurnStart:3,runningTurnStartedAt:Date.now()-1000},'copy-main');
+window.qaRunningCopy=()=>render({...main.reset,nonce:20,entries:[{kind:'user',text:'Earlier question',at:Date.now()-60000},{kind:'assistant',text:'Earlier completed answer',at:Date.now()},{kind:'user',text:'Current question'},{kind:'assistant',text:'Current streaming answer'}],resume:{running:true,approvals:[],userInputs:[]},runningTurnStart:3,runningTurnStartedAt:Date.now()-1000},'copy-main');
 window.qaPromptHistory=()=>root.render(<><section id="main"><ChatPane key="history-main" threadId="chat-one" {...main} reset={{nonce:40,entries:[{kind:'user',text:'First main prompt'},{kind:'assistant',text:'First answer'},{kind:'user',text:'Second main prompt'}]}}/></section><section id="side"><ChatPane key="history-side" {...side} reset={{nonce:40,entries:[{kind:'user',text:'Side-only prompt'}]}}/></section><section id="mosaic"><ChatPane key="history-mosaic" {...side} paneId="multi:qa-mosaic" reset={{nonce:40,entries:[{kind:'user',text:'Mosaic-only prompt'}]}}/></section></>);
 window.qaReopenMosaic=compacting=>{window.qaMosaicCompacting=compacting;window.qaMosaicKey=(window.qaMosaicKey??0)+1;render()};
 render();
@@ -220,11 +220,26 @@ render();
  await pause();
  assert.equal(await compactedCount('main'),1,'duplicate completion must not duplicate history');
  // Finished answers stay copyable while a later turn is still streaming.
- // Assistant actions wrap their copy button in a span; user copies are separate.
+ // Both speakers share timestamp actions; only settled assistant answers get them.
  await win.webContents.executeJavaScript('window.qaRunningCopy()');
- const copyCount=()=>win.webContents.executeJavaScript(`document.querySelectorAll('#main span > button[aria-label="Copy reply"]').length`);
+ const copyCount=()=>win.webContents.executeJavaScript(`document.querySelectorAll('#main [data-message-actions="assistant"] > button[aria-label="Copy reply"]').length`);
  await until(async()=>await copyCount()===1,'the earlier answer must retain its copy action during a running turn');
- await click('#main span > button[aria-label="Copy reply"]');
+ // User and assistant timestamps reveal on hover, without shifting the copy icon.
+ for (const speaker of ['user','assistant']) {
+   const selector=`#main [data-message-actions="${speaker}"]`;
+   const state=()=>win.webContents.executeJavaScript(`(()=>{const row=document.querySelector(${JSON.stringify(selector)});const time=row.querySelector('time');const button=row.querySelector('button');return {opacity:Number(getComputedStyle(time).opacity),date:time.dateTime,label:time.textContent,time:time.getBoundingClientRect().toJSON(),button:button.getBoundingClientRect().toJSON()}})()`);
+   const before=await state();
+   assert.equal(before.opacity,0,'timestamp is hidden before hover');
+   assert.ok(before.date&&before.label,'timestamp uses the recorded message time');
+   win.webContents.sendInputEvent({type:'mouseMove',x:Math.round(before.button.x+before.button.width/2),y:Math.round(before.button.y+before.button.height/2)});
+   await until(async()=> (await state()).opacity===1,speaker+' timestamp reveals near copy');
+   const after=await state();
+   assert.equal(after.button.x,before.button.x,'revealing time does not move copy');
+   if(speaker==='user')assert.ok(after.time.right<=after.button.x,'user copy stays on the right');
+   win.webContents.sendInputEvent({type:'mouseMove',x:1495,y:715});
+   await until(async()=> (await state()).opacity===0,speaker+' timestamp hides when leaving');
+ }
+ await click('#main [data-message-actions="assistant"] > button[aria-label="Copy reply"]');
  assert.equal(await win.webContents.executeJavaScript('window.qaCopied.at(-1)'),'Earlier completed answer','copy must target the finished answer, not the active response');
  await win.webContents.executeJavaScript("window.qaEmit('onDelta',{paneId:'main',delta:' — still working'})");
  await pause();
