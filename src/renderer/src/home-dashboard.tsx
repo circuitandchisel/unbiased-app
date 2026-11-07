@@ -1,3 +1,4 @@
+import type { HomeGithubResult } from "../../shared/home-github";
 import { LiquidMenuSurface } from "./liquid-menu";
 import { RefreshCWIcon, type RefreshCWIconHandle } from "./refresh-cw-icon";
 import { motion } from "motion/react";
@@ -116,6 +117,8 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
   const [billing, setBilling] = useState<Billing | null>(null);
   const [retry, setRetry] = useState(0);
   const refreshIcon = useRef<RefreshCWIconHandle>(null);
+  const [githubState, setGithubState] = useState<{ key: string; result: HomeGithubResult } | null>(null);
+  const [githubRetry, setGithubRetry] = useState(0);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [focusedDay, setFocusedDay] = useState(() => homeDayKey(new Date()));
   const calendar = useRef<HTMLDivElement>(null);
@@ -136,6 +139,27 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
   const recent = chats.slice(0, 3);
   const dayChats = selectedDay ? chatsOnHomeDay(chats, selectedDay) : [];
   const selectedDate = activity.days.find(day => homeDayKey(day.date) === selectedDay)?.date;
+  const rangeStart = selectedDate ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const rangeEnd = selectedDate ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate() + 1) : new Date(rangeStart.getFullYear(), rangeStart.getMonth() + 1, 1);
+  const githubKey = JSON.stringify({ start: rangeStart.toISOString(), end: rangeEnd.toISOString(), ...(scope ? { projectId: scope } : {}) });
+  const github = githubState?.key === githubKey ? githubState.result : null;
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void window.unbiased.homeGithub(JSON.parse(githubKey)).then(result => {
+        if (!cancelled) setGithubState({ key: githubKey, result });
+      }).catch(() => { if (!cancelled) setGithubState({ key: githubKey, result: { ok: false, error: "GitHub activity couldn’t load. Try again shortly." } }); });
+    }, 150);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [githubKey, githubRetry]);
+  const prEvents = github?.ok ? github.pullRequests.flatMap(pr => [
+    ...(Date.parse(pr.createdAt) >= rangeStart.getTime() && Date.parse(pr.createdAt) < rangeEnd.getTime() ? [{ pr, action: "Opened", at: pr.createdAt }] : []),
+    ...(pr.mergedAt && Date.parse(pr.mergedAt) >= rangeStart.getTime() && Date.parse(pr.mergedAt) < rangeEnd.getTime() ? [{ pr, action: "Merged", at: pr.mergedAt }] : []),
+  ]).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) : [];
+  const renderPullRequests = (limit: number) => prEvents.slice(0, limit).map(({ pr, action, at }) => <button key={`${pr.url}-${action}`} className="home-pr-event" onClick={() => void window.unbiased.openExternal(pr.url)}>
+    <GitPullRequest size={14} className={action === "Merged" ? "home-pr-merged" : "home-pr-opened"} />
+    <span><span>{pr.title}</span><small>{action} · {pr.repository} #{pr.number} · {selectedDate ? new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}</small></span><ArrowUpRight size={12} />
+  </button>);
   const dayGroups = new Map<string, typeof dayChats>();
   for (const chat of dayChats) {
     const key = chat.projectId ?? "";
@@ -195,14 +219,21 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
           <p className="home-usage-scope">{billing.organization.name || "Account"} · All projects{billing.spendSyncedAt && Number.isFinite(Date.parse(billing.spendSyncedAt)) ? ` · Updated ${formatConversationTime(Date.parse(billing.spendSyncedAt))}` : ""}</p>
         </>}
       </section>
-      <section className="home-card home-prs"><h2><GitPullRequest size={14} />Pull requests</h2><div className="home-github-empty"><GitPullRequest size={23} /><div>Keep your code reviews in view.</div><p>GitHub activity isn’t connected to Home yet. Pull requests and merge totals will appear here once it is available.</p></div></section>
-      <section className="home-card home-month"><h2><ChartNoAxesColumn size={14} />{month}</h2><div className="home-amount">{activity.monthCount}</div><p className="home-metric-label">Chats started</p><div className="home-amount home-unavailable">—</div><p className="home-metric-label">PRs merged · Not connected</p></section>
+      <section className="home-card home-prs"><h2><GitPullRequest size={14} />Pull requests<button aria-label="Refresh pull requests" onClick={() => { setGithubState(null); setGithubRetry(value => value + 1); }} disabled={github === null}><RefreshCWIcon size={12} /></button></h2>
+        {github === null ? <p className="home-empty" role="status">Loading GitHub activity…</p> : !github.ok ? <p className="home-empty" role="status">{github.error}</p> : <>
+          <p className="home-pr-counts">{github.opened} opened · {github.merged} merged<span>{selectedDate ? selectedDate.toLocaleDateString([], { month: "short", day: "numeric" }) : "This month"}</span></p>
+          {prEvents.length ? renderPullRequests(3) : <p className="home-empty">No pull requests opened or merged {selectedDate ? "on this date" : "this month"}.</p>}
+          <p className="home-usage-scope">@{github.login} · Your PRs · {scope ? "Project repositories" : "All repositories"}{github.partial ? " · Showing a partial list" : ""}</p>
+        </>}
+      </section>
+      <section className="home-card home-month"><h2><ChartNoAxesColumn size={14} />{selectedDate ? selectedDate.toLocaleDateString([], { month: "short", day: "numeric" }) : month}</h2><div className="home-amount">{selectedDate ? dayChats.length : activity.monthCount}</div><p className="home-metric-label">Chats started{selectedDate ? " this day" : " this month"}</p><div className={`home-amount${github?.ok ? "" : " home-unavailable"}`}>{github?.ok ? github.merged : "—"}</div><p className="home-metric-label">PRs merged{github && !github.ok ? " · Unavailable" : ""}</p></section>
     </div>
     <HomeWorkSnapshot chats={all} projects={projects} onOpenThread={onOpenThread} onProject={setScope} />
     <section id="home-day-activity" className="home-day-activity" aria-label="Activity on selected date" hidden={!selectedDate}>
       {selectedDate && <>
         <div className="home-day-heading"><div><h2>Activity</h2><p>{selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p></div><button type="button" aria-label="Clear selected activity date" onClick={() => { calendar.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus(); setSelectedDay(null); }}><X size={15} /></button></div>
         <p className="home-day-summary" role="status">{dayChats.length ? `Started ${dayChats.length} chat${dayChats.length === 1 ? "" : "s"}${dayGroups.size > 1 ? ` across ${dayGroups.size} groups` : ""}.` : "No chats were started on this date in the available history."}</p>
+        <div className="home-day-pull-requests"><h3>Pull requests</h3>{github === null ? <p className="home-empty">Loading GitHub activity…</p> : !github.ok ? <p className="home-empty">{github.error}</p> : <>{prEvents.length ? renderPullRequests(200) : <p className="home-empty">No pull requests opened or merged on this date.</p>}<p className="home-usage-scope">@{github.login} · Your PRs{github.partial ? " · Showing a partial list; totals include all matching PRs" : ""}</p></>}</div>
         {[...dayGroups].map(([key, group]) => {
           const project = projects.find(project => project.id === key);
           return <div key={key} className="home-day-group" data-project-id={key}><div className="home-day-group-heading"><span className="home-activity-icon">{project ? <ProjectIcon icon={project.icon} color={project.color} size={14} /> : <MessageCircleMoreIcon size={14} />}</span><h3>{group[0].projectName ?? "Chat"}</h3><span>{group.length} chat{group.length === 1 ? "" : "s"}</span></div>

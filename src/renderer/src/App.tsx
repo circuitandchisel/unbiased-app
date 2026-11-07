@@ -795,6 +795,7 @@ declare global {
         worktrees: { dir: string; project: string; branch: string; kb: number }[];
         engineHomeKB: number;
       }>;
+      homeGithub: (input: import("../../shared/home-github").HomeGithubInput) => Promise<import("../../shared/home-github").HomeGithubResult>;
       readBilling: () => Promise<BillingResult>;
       onConversationMetadata: (cb: (payload: { threadId: string }) => void) => () => void;
       onHomeRecapProgress: (cb: (payload: { requestId: string; text: string }) => void) => () => void;

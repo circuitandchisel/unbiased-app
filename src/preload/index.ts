@@ -168,6 +168,7 @@ contextBridge.exposeInMainWorld("unbiased", {
   onCommandOutput: (cb: (p: unknown) => void) => subscribe("chat:command-output", cb),
   onCompaction: (cb: (p: unknown) => void) => subscribe("chat:compaction", cb),
   onTokenUsage: (cb: (p: unknown) => void) => subscribe("chat:token-usage", cb),
+  homeGithub: (input: import("../shared/home-github").HomeGithubInput): Promise<import("../shared/home-github").HomeGithubResult> => ipcRenderer.invoke("home:github", input),
   readBilling: () => ipcRenderer.invoke("usage:billing"),
   onConversationMetadata: (cb: (payload: { threadId: string }) => void) => subscribe("home:metadata-updated", cb as (payload: unknown) => void),
   onHomeRecapProgress: (cb: (payload: { requestId: string; text: string }) => void) => subscribe("home:recap-progress", cb as (payload: unknown) => void),

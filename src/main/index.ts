@@ -1,3 +1,4 @@
+import { HomeGithub } from "./home-github";
 import { ConversationMetadataStore } from "./conversation-metadata";
 import { HomeRecaps, recapInput } from "./home-recap";
 import { ServerToolsClient, ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
@@ -8360,6 +8361,12 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("usage:billing", () => readBilling());
+  const homeGithub = new HomeGithub();
+  ipcMain.handle("home:github", (_e, input: import("../shared/home-github").HomeGithubInput) => {
+    const project = input?.projectId ? loadProjects().find(project => project.id === input.projectId) : null;
+    if (input?.projectId && !project) return { ok: false, error: "Project is no longer available." };
+    return homeGithub.get(input, project?.folders);
+  });
   const homeRecaps = new HomeRecaps(() => readStoredKey()?.key ?? null, () => join(app.getPath("userData"), "home-recaps.json"));
   ipcMain.handle("home:recap", (_e, raw: unknown, requestId?: unknown) => {
     const input = recapInput(raw);

@@ -11,6 +11,7 @@ Write for the person using the app, not the person who wrote the code.
 ### Added
 
 - **A home for your work.** Start a chat, revisit recent conversations, browse daily chat activity, and see account usage in one place. Project filters use your saved icons and colors.
+- **Daily pull request activity.** With GitHub CLI signed in, Home shows your PRs opened and merged on the selected date, with project repository filters and monthly totals.
 - **A more personal recap.** Home summarizes recent goals, decisions, progress, and next steps. Conversation context refreshes quietly in the background, updating the same record after every 25 meaningful completed turns.
 - **Web Search and Create image.** Find these in the + menu with an active Chat subscription or approved organization access. Search results include sources, and generated images stay with the conversation.
 - **Image generation previews.** Image requests expand to a live pixel mosaic that reveals the finished image. Click the result to view it full-screen with zoom controls. Reduced motion uses a static preview.
