@@ -1,25 +1,32 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ArrowUpRight, AtSign, CircleDot, GitPullRequest, MessageCircle } from "lucide-react";
 import type { GithubActivityEvent, GithubActivityKind, HomeGithubInput, HomeGithubResult } from "../../shared/home-github";
 
 const tabs = [{ id: "all", label: "All" }, { id: "prs", label: "PRs" }, { id: "issues", label: "Issues" }, { id: "comments", label: "Comments" }, { id: "mentions", label: "Mentions" }] as const;
 type Tab = "all" | GithubActivityKind;
 const icons = { prs: GitPullRequest, issues: CircleDot, comments: MessageCircle, mentions: AtSign };
-export function HomeGithubActivity({ input, github, pullRequests, onOpenLink }: {
-  input: HomeGithubInput; github: HomeGithubResult | null; pullRequests: GithubActivityEvent[]; onOpenLink: (url: string) => void;
+export function HomeGithubActivity({ input, github, pullRequests, onOpenLink, refreshVersion }: {
+  refreshVersion: number; input: HomeGithubInput; github: HomeGithubResult | null; pullRequests: GithubActivityEvent[]; onOpenLink: (url: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("all");
   const [loaded, setLoaded] = useState<{ key: string; result: HomeGithubResult } | null>(null);
-  const id = useId(), key = JSON.stringify(input);
+  const previousRefresh = useRef(refreshVersion);
+  const login = github?.ok ? github.login : null;
+  const id = useId(), source = JSON.stringify(input);
+  const key = JSON.stringify([source, login, refreshVersion]);
   useEffect(() => {
+    if (!login) return;
     let cancelled = false;
-    const timer = setTimeout(() => { void window.unbiased.homeGithub({ ...JSON.parse(key), includeActivity: true }).then(result => {
-      if (!cancelled) setLoaded({ key, result });
+    const refresh = previousRefresh.current !== refreshVersion;
+    previousRefresh.current = refreshVersion;
+    const timer = setTimeout(() => { void window.unbiased.homeGithub({ ...JSON.parse(source), includeActivity: true, expectedLogin: login, refresh }).then(result => {
+      if (!cancelled) setLoaded({ key, result: result.ok && result.login !== login
+        ? { ok: false, error: "The GitHub account changed. Refresh GitHub activity to continue." } : result });
     }).catch(() => { if (!cancelled) setLoaded({ key, result: { ok: false, error: "GitHub activity couldn’t load. Try another date or return shortly." } }); });
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [key]);
-  const result = loaded?.key === key ? loaded.result : null;
+  }, [key, source, login, refreshVersion]);
+  const result = github && !github.ok ? github : loaded?.key === key ? loaded.result : null;
   const details = result?.ok ? result.activity : null;
   const events = [...new Map([...pullRequests, ...(details?.events ?? [])].map(event => [event.id, event])).values()].sort((a,b) => Date.parse(b.at)-Date.parse(a.at));
   const visible = tab === "all" ? events : events.filter(event => event.kind === tab);

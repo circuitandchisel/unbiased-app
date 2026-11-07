@@ -60,3 +60,5 @@ only as supporting context. It does not invent a personal biography.
 The metadata tests cover cadence, in-place updates, persistence, duplicate and
 continuation handling, failure retry, concurrent status updates, deletion,
 owner/key isolation, bounded evidence and background concurrency.
+
+Recap requests deduplicate only identical source fingerprints. A changed source arriving during generation never subscribes to the old stream. After that generation finishes, the caller rechecks its own fingerprint; cached older text is marked stale and includes a retry deadline. Home quietly retries when the existing throttle expires, even if no further metadata event arrives, and cancels that timer when sources change or Home unmounts.

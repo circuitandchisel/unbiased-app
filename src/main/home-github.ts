@@ -30,7 +30,7 @@ export class HomeGithub {
       const base = await this.get({ ...input, includeActivity: false }, folders);
       if (!base.ok) return base;
       const key = JSON.stringify(["activity", base.login, window, base.repositories]);
-      const cached = this.cache.get(key); if (cached && this.now() - cached.at < 60_000) return { ...base, ...cached.result };
+      const cached = this.cache.get(key); if (!input.refresh && cached && this.now() - cached.at < 60_000 && cached.result.ok) return { ...base, activity: cached.result.activity };
       const pending = this.pending.get(key); if (pending) return pending;
       const task = readGithubActivity(this.execute, gh, base.login, window, base.repositories ?? [], this.activityFile?.()).then(activity => {
         const result = { ...base, activity };
@@ -45,12 +45,13 @@ export class HomeGithub {
       // Resolve identity before serving cache, so changing CLI accounts cannot reuse another user's PRs.
       const login = (await this.execute(gh, ["api", "--hostname", "github.com", "user", "--jq", ".login"])).trim();
       if (!/^[\w-]+$/.test(login)) throw new Error("Invalid GitHub account");
+      if (input.expectedLogin && input.expectedLogin !== login) return { ok: false, error: "The GitHub account changed. Refresh GitHub activity to continue." };
       const repos = folders ? [...new Set((await Promise.all(folders.map(async folder => {
         try { return githubRepository(await this.execute("git", ["config", "--get", "remote.origin.url"], folder)); } catch { return null; }
       }))).filter((repo): repo is string => !!repo))].sort() : [];
       if (folders && !repos.length) return { ok: false, error: "This project has no GitHub origin repository." };
       const key = JSON.stringify([login, window, repos]);
-      const cached = this.cache.get(key); if (cached && this.now() - cached.at < 60_000) return cached.result;
+      const cached = this.cache.get(key); if (!input.refresh && cached && this.now() - cached.at < 60_000) return cached.result;
       const pending = this.pending.get(key); if (pending) return pending;
       const base = `is:pr author:${login} ${repos.map(repo => `repo:${repo}`).join(" ")}`;
       // GitHub applies only one value for repeated date qualifiers. Use an inclusive

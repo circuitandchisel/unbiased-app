@@ -102,3 +102,35 @@ test("invalidating source context stops progress from the old stream", async () 
   const result = await client.get(sources, text => { seen.push(text); client.invalidate(); });
   assert.deepEqual(seen, ["First"]); assert.equal(result.ok, false);
 });
+
+test("new evidence arriving during generation does not receive the old stream as current", async () => {
+  let finish!: (response: Response) => void, now = 100000, calls = 0;
+  const client = new HomeRecaps(() => "key", () => null, (async () => {
+    calls++; return calls === 1 ? new Promise<Response>(resolve => { finish = resolve; }) : answer("New goal recap");
+  }) as typeof fetch, () => now);
+  const old = client.get(sources);
+  const changedSources = { chats: [{ title: "New goal", project: null }] };
+  const progress: string[] = [];
+  const newer = client.get(changedSources, text => progress.push(text));
+  finish(streamed([
+    { type: "response.output_text.delta", delta: "Old goal recap" },
+    { type: "response.completed", response: await answer("Old goal recap").json() },
+  ]));
+  await old; const stale = await newer;
+  assert.ok(stale.ok && stale.stale && stale.retryAfterMs);
+  assert.deepEqual(progress, [], "new evidence must not subscribe to the previous stream");
+  now += stale.retryAfterMs!;
+  const fresh = await client.get(changedSources);
+  assert.ok(fresh.ok && !fresh.stale && fresh.text === "New goal recap"); assert.equal(calls, 2);
+});
+test("changed cached context supplies a retry deadline instead of silently losing the update", async () => {
+  let now = 100000, calls = 0;
+  const client = new HomeRecaps(() => "key", () => null, (async () => answer(`recap ${++calls}`)) as typeof fetch, () => now);
+  const context = { goal: "Old goal", currentFocus: "Home", progress: [], decisions: [], pending: [], blockers: [] };
+  await client.get({ chats: [{ ...sources.chats[0], context }] }); now += 30000;
+  const changed = { chats: [{ ...sources.chats[0], context: { ...context, goal: "New goal" } }] };
+  const stale = await client.get(changed);
+  assert.ok(stale.ok && stale.stale); assert.equal(stale.retryAfterMs, 90000);
+  now += stale.retryAfterMs!;
+  const fresh = await client.get(changed); assert.ok(fresh.ok && !fresh.stale && fresh.text === "recap 2");
+});

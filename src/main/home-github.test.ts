@@ -46,3 +46,32 @@ test("CLI and GraphQL failures stay unavailable rather than showing zero activit
   const absent = new HomeGithub(async () => { throw new Error("sensitive stderr"); });
   const result = await absent.get(input); assert.ok(!result.ok && !result.error.includes("sensitive"));
 });
+
+test("manual refresh bypasses the cache and expected identity prevents mixed-account details", async () => {
+  let login = "alice", queries = 0;
+  const client = new HomeGithub(async (_command, args) => {
+    if (args.includes("user")) return login;
+    queries++; return response(login);
+  });
+  await client.get(input); await client.get(input); assert.equal(queries, 1);
+  await client.get({ ...input, refresh: true }); assert.equal(queries, 2);
+  login = "bob";
+  const mismatch = await client.get({ ...input, expectedLogin: "alice", includeActivity: true });
+  assert.ok(!mismatch.ok && mismatch.error.includes("account changed"));
+  assert.equal(queries, 2, "a mismatched account must not load private activity");
+});
+
+test("cached detail history cannot overwrite freshly refreshed PR totals", async () => {
+  let count = 1;
+  const client = new HomeGithub(async (_command, args) => {
+    if (args.includes("user")) return "alice";
+    if (args.some(arg => arg.startsWith("search="))) return JSON.stringify({ data: { viewer: { login: "alice" }, search: { nodes: [], pageInfo: { hasNextPage: false } } } });
+    if (!args.includes("graphql")) return "[]";
+    const result = JSON.parse(response("alice")); result.data.opened.issueCount = count;
+    return JSON.stringify(result);
+  });
+  const first = await client.get({ ...input, includeActivity: true }); assert.ok(first.ok && first.opened === 1);
+  count = 5; await client.get({ ...input, refresh: true });
+  const withCachedDetails = await client.get({ ...input, includeActivity: true });
+  assert.ok(withCachedDetails.ok && withCachedDetails.opened === 5);
+});

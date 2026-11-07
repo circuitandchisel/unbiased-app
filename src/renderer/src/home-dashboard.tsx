@@ -143,16 +143,20 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
   const rangeStart = selectedDate ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const rangeEnd = selectedDate ? new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate() + 1) : new Date(rangeStart.getFullYear(), rangeStart.getMonth() + 1, 1);
   const githubKey = JSON.stringify({ start: rangeStart.toISOString(), end: rangeEnd.toISOString(), ...(scope ? { projectId: scope } : {}) });
-  const github = githubState?.key === githubKey ? githubState.result : null;
+  const previousGithubRefresh = useRef(githubRetry);
+  const githubRequestKey = JSON.stringify([githubKey, githubRetry]);
+  const github = githubState?.key === githubRequestKey ? githubState.result : null;
   useEffect(() => {
     let cancelled = false;
+    const refresh = previousGithubRefresh.current !== githubRetry;
+    previousGithubRefresh.current = githubRetry;
     const timer = setTimeout(() => {
-      void window.unbiased.homeGithub(JSON.parse(githubKey)).then(result => {
-        if (!cancelled) setGithubState({ key: githubKey, result });
-      }).catch(() => { if (!cancelled) setGithubState({ key: githubKey, result: { ok: false, error: "GitHub activity couldn’t load. Try again shortly." } }); });
+      void window.unbiased.homeGithub({ ...JSON.parse(githubKey), refresh }).then(result => {
+        if (!cancelled) setGithubState({ key: githubRequestKey, result });
+      }).catch(() => { if (!cancelled) setGithubState({ key: githubRequestKey, result: { ok: false, error: "GitHub activity couldn’t load. Try again shortly." } }); });
     }, 150);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [githubKey, githubRetry]);
+  }, [githubKey, githubRequestKey, githubRetry]);
   const prEvents = github?.ok ? github.pullRequests.flatMap(pr => [
     ...(Date.parse(pr.createdAt) >= rangeStart.getTime() && Date.parse(pr.createdAt) < rangeEnd.getTime() ? [{ pr, action: "Opened", at: pr.createdAt }] : []),
     ...(pr.mergedAt && Date.parse(pr.mergedAt) >= rangeStart.getTime() && Date.parse(pr.mergedAt) < rangeEnd.getTime() ? [{ pr, action: "Merged", at: pr.mergedAt }] : []),
@@ -234,7 +238,7 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
       {selectedDate && <>
         <div className="home-day-heading"><div><h2>Activity</h2><p>{selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p></div><button type="button" aria-label="Clear selected activity date" onClick={() => { calendar.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus(); setSelectedDay(null); }}><X size={15} /></button></div>
         <p className="home-day-summary" role="status">{dayChats.length ? `Started ${dayChats.length} chat${dayChats.length === 1 ? "" : "s"}${dayGroups.size > 1 ? ` across ${dayGroups.size} groups` : ""}.` : "No chats were started on this date in the available history."}</p>
-        <HomeGithubActivity input={JSON.parse(githubKey)} github={github} pullRequests={prEvents.map(({pr,action,at}) => ({ id: `${pr.url}-${action}`, kind: "prs", action, at, title: pr.title, repository: pr.repository, url: pr.url }))} onOpenLink={onOpenLink} />
+        <HomeGithubActivity refreshVersion={githubRetry} input={JSON.parse(githubKey)} github={github} pullRequests={prEvents.map(({pr,action,at}) => ({ id: `${pr.url}-${action}`, kind: "prs", action, at, title: pr.title, repository: pr.repository, url: pr.url }))} onOpenLink={onOpenLink} />
         {[...dayGroups].map(([key, group]) => {
           const project = projects.find(project => project.id === key);
           return <div key={key} className="home-day-group" data-project-id={key}><div className="home-day-group-heading"><span className="home-activity-icon">{project ? <ProjectIcon icon={project.icon} color={project.color} size={14} /> : <MessageCircleMoreIcon size={14} />}</span><h3>{group[0].projectName ?? "Chat"}</h3><span>{group.length} chat{group.length === 1 ? "" : "s"}</span></div>

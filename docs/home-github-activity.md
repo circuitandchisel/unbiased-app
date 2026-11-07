@@ -10,7 +10,7 @@ All projects includes all repositories accessible to the CLI account. A project 
 
 Queries use local midnight boundaries converted to UTC, including DST day lengths, and GitHub's inclusive second-precision date range syntax. Separate creation and merge searches return total counts and up to 100 PRs each. Lists are deduplicated before deriving separate events; when a search has more pages, the UI explicitly marks the displayed list as partial while retaining the full matching counts.
 
-Results stay in memory for 60 seconds, keyed by CLI identity, repositories, and date range. CLI identity is checked before cached results are returned. Refresh reruns the request but still respects this cache window. Changing date or project ignores late results from the old selection. Missing CLI authentication, network errors, rate limits, and GraphQL errors show unavailable rather than zero activity. Project origin folders are re-resolved on each request.
+Results stay in memory for 60 seconds, keyed by CLI identity, repositories, and date range. CLI identity is checked before cached results are returned. Manual refresh bypasses this cache for both the PR cards and selected-day activity tabs. Changing date, project, CLI identity, or refresh generation hides old results and ignores late responses. Additional activity requests are bound to the identity shown by the PR cards. Missing CLI authentication, network errors, rate limits, and GraphQL errors show unavailable rather than zero activity. Project origin folders are re-resolved on each request.
 
 ## Selected-day activity tabs
 

@@ -26,6 +26,7 @@ export function HomeWorkSnapshot({ chats, projects, onOpenThread, onProject }: {
   }, [sources]);
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const requestId = crypto.randomUUID();
     setStreamText(null);
     const unsubscribe = window.unbiased.onHomeRecapProgress?.(event => {
@@ -35,9 +36,12 @@ export function HomeWorkSnapshot({ chats, projects, onOpenThread, onProject }: {
     previousSources.current = sources;
     setRecap(current => changed || !current?.ok ? null : current);
     if (JSON.parse(sources).chats.length) void Promise.resolve().then(() => window.unbiased.homeRecap(JSON.parse(sources), requestId)).then(result => {
-      if (!cancelled) { setStreamText(null); setRecap(current => result.ok || !current?.ok ? result : current); }
+      if (!cancelled) {
+        setStreamText(null); setRecap(current => result.ok || !current?.ok ? result : current);
+        if (result.retryAfterMs) retryTimer = setTimeout(() => setRetry(value => value + 1), Math.max(1000, Math.min(result.retryAfterMs, 60 * 60 * 1000)));
+      }
     }).catch(() => { if (!cancelled) { setStreamText(null); setRecap(current => current?.ok ? current : { ok: false, error: "Your recap couldn’t load." }); } });
-    return () => { cancelled = true; unsubscribe?.(); };
+    return () => { cancelled = true; clearTimeout(retryTimer); unsubscribe?.(); };
   }, [sources, retry]);
   return <section className="home-card home-work-snapshot" aria-label="About you lately">
     <h2><Sparkles size={14} />About you lately<span>Last 14 days</span></h2>

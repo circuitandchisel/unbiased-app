@@ -22,7 +22,7 @@ export function recapInput(value: unknown): HomeRecapInput {
 /** Small, account-scoped recent-work recaps. Never waits on the chat send path. */
 export class HomeRecaps {
   private cache = new Map<string, Cached>();
-  private pending = new Map<string, Promise<HomeRecapResult>>();
+  private pending = new Map<string, { fingerprint: string; epoch: number; task: Promise<HomeRecapResult> }>();
   private attempted = new Map<string, number>();
   private listeners = new Map<string, Set<(text: string) => void>>();
   private progress = new Map<string, string>();
@@ -51,11 +51,22 @@ export class HomeRecaps {
     }
     const previous = this.cache.get(account), now = this.now();
     if (previous && (!input.chats.some(chat => chat.context) || previous.hasContext) && (now - previous.generatedAt < (input.chats.some(chat => chat.context) ? 120_000 : HOUR) || (previous.fingerprint === fingerprint && now - previous.generatedAt < 24 * HOUR))) {
-      return { ok: true, text: previous.text, generatedAt: previous.generatedAt, stale: previous.fingerprint !== fingerprint };
+      const stale = previous.fingerprint !== fingerprint;
+      const interval = input.chats.some(chat => chat.context) ? 120_000 : HOUR;
+      return { ok: true, text: previous.text, generatedAt: previous.generatedAt, stale,
+        ...(stale ? { retryAfterMs: Math.max(1, interval - (now - previous.generatedAt)) } : {}) };
     }
     const pending = this.pending.get(account);
-    if (pending) return this.follow(account, pending, onProgress);
-    if (now - (this.attempted.get(account) ?? -Infinity) < 60_000 && !(previous && !previous.hasContext && input.chats.some(chat => chat.context))) return { ok: false, error: "Recap unavailable. Try again in a minute." };
+    if (pending) {
+      if (pending.fingerprint === fingerprint && pending.epoch === this.epoch) return this.follow(account, pending.task, onProgress);
+      // Never replay another evidence snapshot's stream into the newer request.
+      // Once it settles, re-evaluate the cache and return a bounded retry if needed.
+      const epoch = this.epoch;
+      await pending.task;
+      if (this.key() !== key || this.epoch !== epoch) return { ok: false, error: "The signed-in account changed." };
+      return this.get(input, onProgress);
+    }
+    if (now - (this.attempted.get(account) ?? -Infinity) < 60_000 && !(previous && !previous.hasContext && input.chats.some(chat => chat.context))) return { ok: false, error: "Recap unavailable. Try again in a minute.", retryAfterMs: Math.max(1, 60_000 - (now - this.attempted.get(account)!)) };
     this.attempted.set(account, now);
     const epoch = this.epoch;
     const task = this.generate(input, key, text => {
@@ -77,7 +88,7 @@ export class HomeRecaps {
       if (previous) return { ok: true as const, text: previous.text, generatedAt: previous.generatedAt, stale: true };
       return { ok: false as const, error: "Your recap couldn’t load. Try again shortly." };
     }).finally(() => { this.pending.delete(account); this.listeners.delete(account); this.progress.delete(account); });
-    this.pending.set(account, task);
+    this.pending.set(account, { fingerprint, epoch, task });
     return this.follow(account, task, onProgress);
   }
   private async follow(account: string, task: Promise<HomeRecapResult>, listener?: (text: string) => void): Promise<HomeRecapResult> {

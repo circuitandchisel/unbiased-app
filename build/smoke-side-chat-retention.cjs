@@ -1,3 +1,4 @@
+const { homeApiFixture } = require("./home-api-fixture.cjs");
 // Real App navigation, drafts and recovery UI; IPC is stubbed, no model calls.
 const { app, BrowserWindow } = require('electron');
 const { build, transformSync } = require('esbuild');
@@ -83,7 +84,7 @@ window.qaRecovery={threadId:'recovered-thread',entries:[{kind:'user',text:'Side 
 const snapshot=id=>({id,entries:[{kind:'user',text:'Prompt '+id},{kind:'assistant',text:'Completed answer '+id}],total:2,offset:0,sessionId:'session-'+id,running:false,approvals:[],userInputs:[]});
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const set=window.qaListeners.get(key)??new Set();set.add(cb);window.qaListeners.set(key,set);return()=>set.delete(cb)};
- return async(...args)=>{window.qaCalls.push([key,...args]);
+ return async(...args)=>{window.qaCalls.push([key,...args]);${homeApiFixture}
  if(key==='getEngineStatus')return {state:'connected'};
  if(key==='recentSideChats')return window.qaRecents;
  if(key==='sideBrowserTabs')return {root:args[0],tabs:window.qaBrowserTabs};
