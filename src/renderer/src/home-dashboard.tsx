@@ -109,9 +109,9 @@ function HomeProjectFilter({ projects, value, onChange }: { projects: HomeProjec
   </div>;
 }
 
-export function HomeDashboard({ projects, recents, selectedProjectId, running, readBilling, onOpenThread, onPick }: {
+export function HomeDashboard({ projects, recents, selectedProjectId, running, readBilling, onOpenThread, onOpenLink, onPick }: {
   projects: HomeProject[]; recents: HomeThread[]; selectedProjectId: string | null; running: ReadonlySet<string>;
-  readBilling: () => Promise<Billing>; onOpenThread: (id: string) => void; onPick: (text: string) => void;
+  readBilling: () => Promise<Billing>; onOpenThread: (id: string) => void; onOpenLink: (url: string) => void; onPick: (text: string) => void;
 }) {
   const [scope, setScope] = useState(selectedProjectId ?? "");
   const [billing, setBilling] = useState<Billing | null>(null);
@@ -156,7 +156,7 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
     ...(Date.parse(pr.createdAt) >= rangeStart.getTime() && Date.parse(pr.createdAt) < rangeEnd.getTime() ? [{ pr, action: "Opened", at: pr.createdAt }] : []),
     ...(pr.mergedAt && Date.parse(pr.mergedAt) >= rangeStart.getTime() && Date.parse(pr.mergedAt) < rangeEnd.getTime() ? [{ pr, action: "Merged", at: pr.mergedAt }] : []),
   ]).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)) : [];
-  const renderPullRequests = (limit: number) => prEvents.slice(0, limit).map(({ pr, action, at }) => <button key={`${pr.url}-${action}`} className="home-pr-event" onClick={() => void window.unbiased.openExternal(pr.url)}>
+  const renderPullRequests = (limit: number) => prEvents.slice(0, limit).map(({ pr, action, at }) => <button key={`${pr.url}-${action}`} className="home-pr-event" onClick={() => onOpenLink(pr.url)}>
     <GitPullRequest size={14} className={action === "Merged" ? "home-pr-merged" : "home-pr-opened"} />
     <span><span>{pr.title}</span><small>{action} · {pr.repository} #{pr.number} · {selectedDate ? new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}</small></span><ArrowUpRight size={12} />
   </button>);
@@ -222,7 +222,7 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
       <section className="home-card home-prs"><h2><GitPullRequest size={14} />Pull requests<button aria-label="Refresh pull requests" onClick={() => { setGithubState(null); setGithubRetry(value => value + 1); }} disabled={github === null}><RefreshCWIcon size={12} /></button></h2>
         {github === null ? <p className="home-empty" role="status">Loading GitHub activity…</p> : !github.ok ? <p className="home-empty" role="status">{github.error}</p> : <>
           <p className="home-pr-counts">{github.opened} opened · {github.merged} merged<span>{selectedDate ? selectedDate.toLocaleDateString([], { month: "short", day: "numeric" }) : "This month"}</span></p>
-          {prEvents.length ? renderPullRequests(3) : <p className="home-empty">No pull requests opened or merged {selectedDate ? "on this date" : "this month"}.</p>}
+          {prEvents.length ? <div className="home-pr-list" role="region" aria-label="Pull request activity" tabIndex={0}>{renderPullRequests(200)}</div> : <p className="home-empty">No pull requests opened or merged {selectedDate ? "on this date" : "this month"}.</p>}
           <p className="home-usage-scope">@{github.login} · Your PRs · {scope ? "Project repositories" : "All repositories"}{github.partial ? " · Showing a partial list" : ""}</p>
         </>}
       </section>
@@ -233,7 +233,7 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
       {selectedDate && <>
         <div className="home-day-heading"><div><h2>Activity</h2><p>{selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p></div><button type="button" aria-label="Clear selected activity date" onClick={() => { calendar.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus(); setSelectedDay(null); }}><X size={15} /></button></div>
         <p className="home-day-summary" role="status">{dayChats.length ? `Started ${dayChats.length} chat${dayChats.length === 1 ? "" : "s"}${dayGroups.size > 1 ? ` across ${dayGroups.size} groups` : ""}.` : "No chats were started on this date in the available history."}</p>
-        <div className="home-day-pull-requests"><h3>Pull requests</h3>{github === null ? <p className="home-empty">Loading GitHub activity…</p> : !github.ok ? <p className="home-empty">{github.error}</p> : <>{prEvents.length ? renderPullRequests(200) : <p className="home-empty">No pull requests opened or merged on this date.</p>}<p className="home-usage-scope">@{github.login} · Your PRs{github.partial ? " · Showing a partial list; totals include all matching PRs" : ""}</p></>}</div>
+        <div className="home-day-pull-requests"><h3>Pull requests</h3>{github === null ? <p className="home-empty">Loading GitHub activity…</p> : !github.ok ? <p className="home-empty">{github.error}</p> : <>{prEvents.length ? <div className="home-pr-list home-pr-list-details" role="region" aria-label="Pull requests on selected date" tabIndex={0}>{renderPullRequests(200)}</div> : <p className="home-empty">No pull requests opened or merged on this date.</p>}<p className="home-usage-scope">@{github.login} · Your PRs{github.partial ? " · Showing a partial list; totals include all matching PRs" : ""}</p></>}</div>
         {[...dayGroups].map(([key, group]) => {
           const project = projects.find(project => project.id === key);
           return <div key={key} className="home-day-group" data-project-id={key}><div className="home-day-group-heading"><span className="home-activity-icon">{project ? <ProjectIcon icon={project.icon} color={project.color} size={14} /> : <MessageCircleMoreIcon size={14} />}</span><h3>{group[0].projectName ?? "Chat"}</h3><span>{group.length} chat{group.length === 1 ? "" : "s"}</span></div>

@@ -2,7 +2,7 @@
 
 Home reads PR metadata through an existing GitHub CLI login on github.com. It makes no GitHub mutations, does not start a login flow, and does not read PR bodies or code. The GitHub identity is independent of the app account and is displayed as @login.
 
-With no calendar date selected, the cards show the current calendar month. Selecting a date switches the summary and PR cards to that local day and lists separate opened and merged events in the activity section below. Clearing the date restores the monthly view. Creation and merge timestamps determine the events; current PR state alone does not establish when an event happened. A PR can contribute to both counts.
+With no calendar date selected, the cards show the current calendar month. Selecting a date switches the summary and PR cards to that local day and lists separate opened and merged events in the activity section below. Clearing the date restores the monthly view. PR lists have bounded heights and scroll vertically, with the fetched events available inside the card. Clicking a PR opens the side in-app browser and reuses a matching tab without reloading; the existing browser-tab capacity fallback applies. Creation and merge timestamps determine the events; current PR state alone does not establish when an event happened. A PR can contribute to both counts.
 
 The scope is PRs authored by the GitHub user, including their PRs merged by someone else. This does not count merges of other authors' PRs, reviews, historical close/reopen events, or all organization activity. The chat heatmap continues to measure chat creation only.
 

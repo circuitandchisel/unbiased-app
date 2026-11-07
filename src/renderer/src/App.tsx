@@ -4731,7 +4731,7 @@ export function App() {
               />
             )
           }
-          homeDashboard={connected && !activeThreadId ? <HomeDashboard projects={sidebarView.projects} recents={sidebarView.recents} selectedProjectId={activeProjectId} running={runningThreads} readBilling={window.unbiased.readBilling} onOpenThread={id => void openThread(id)} onPick={text => setMainSeed({ text, nonce: seedNonceRef.current++ })} /> : undefined}
+          homeDashboard={connected && !activeThreadId ? <HomeDashboard projects={sidebarView.projects} recents={sidebarView.recents} selectedProjectId={activeProjectId} running={runningThreads} readBilling={window.unbiased.readBilling} onOpenLink={openInBrowser} onOpenThread={id => void openThread(id)} onPick={text => setMainSeed({ text, nonce: seedNonceRef.current++ })} /> : undefined}
           draftSeed={mainSeed}
           composerHeader={
             // Only before the chat exists — once active, the header's
