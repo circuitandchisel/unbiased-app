@@ -122,8 +122,15 @@ localStorage.setItem('unbiased.authed','1');createRoot(document.getElementById('
   // Use trusted pointer input: synthetic .click() misses native light-dismiss ordering.
   await win.webContents.debugger.attach('1.3');
   await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true});
-  await ev(`document.querySelector('.home-chat [data-message-circle-more]').scrollIntoView({block:'center'})`);
+  // Hosted macOS runners may inherit Reduce Motion from the machine profile.
+  // Test animation under an explicit preference, then test reduced motion below.
+  await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
+  await until(`!matchMedia('(prefers-reduced-motion: reduce)').matches`);
+  await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1});
+  await ev(`document.querySelector('.home-chat [data-message-circle-more]').scrollIntoView({block:'center',behavior:'instant'})`);
+  await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))`);
   const chatIconPoint=await ev(`(()=>{const r=document.querySelector('.home-chat [data-message-circle-more]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  assert.ok(await ev(`document.querySelector('.home-chat [data-message-circle-more]').contains(document.elementFromPoint(${chatIconPoint.x},${chatIconPoint.y}))`),'chat animation pointer target is visible and unobstructed');
   await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',...chatIconPoint});
   await until(`[...document.querySelectorAll('.home-chat [data-message-circle-more] svg path')].slice(1).some(dot=>Number(getComputedStyle(dot).opacity)<.9)`);
   await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:1,y:1});
