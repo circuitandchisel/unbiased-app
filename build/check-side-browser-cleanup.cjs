@@ -10,8 +10,8 @@ module.exports=async function checkCleanup(controller,views,front,background,url
   +take('async function releaseConversationTab(', 'function ensureBrowserView(')
   +take('async function pruneSideChatRecents(', 'function ensurePane(')
   +take('  ipcMain.handle("threads:delete",', '\n\n  createWindow();');
- const records=new Map([['side:test',{paneId:'side:test',threadId:'deleted-child'}]]),handlers=new Map(),released=[],cancelled=[],invalidated=[];
- const context={console,serverTools:{cancel:id=>cancelled.push(id)},serverToolSessions:{invalidate:id=>invalidated.push(id)},sideBrowser:controller,browserViews:views,browserVisibility:new Map(),browserViewBounds:new Map(),win:front,backgroundBrowserHost:background,
+ const records=new Map([['side:test',{paneId:'side:test',threadId:'deleted-child'}]]),handlers=new Map(),released=[],cancelled=[],invalidated=[],metadataRemoved=[];let recapInvalidations=0;
+ const context={console,conversationMetadata:{remove:id=>metadataRemoved.push(id)},homeRecaps:{invalidate:()=>recapInvalidations++},serverTools:{cancel:id=>cancelled.push(id)},serverToolSessions:{invalidate:id=>invalidated.push(id)},sideBrowser:controller,browserViews:views,browserVisibility:new Map(),browserViewBounds:new Map(),win:front,backgroundBrowserHost:background,
   ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},engine:{request:async()=>({})},browserRuntime:{request:async(_method,{sessionId})=>{released.push(sessionId)}},
   sideChatRecents:{recordsForParent:()=>[...records.values()],expired:()=>[...records.keys()],get:id=>records.get(id),remove:id=>records.delete(id)},
   cancelTurnContinuation:()=>{},dropSidePane:()=>{},forgetBrowserCaptures:()=>{},saveSideChatRecents:()=>{},saveThreadMcp:()=>{},sideChatTranscriptFile:id=>id,transcriptFile:id=>id,rmSync:()=>{},
@@ -29,6 +29,8 @@ module.exports=async function checkCleanup(controller,views,front,background,url
  assert.ok(released.includes('deleted-child'));
  assert.ok(cancelled.includes('deleted-parent'));assert.ok(invalidated.includes('deleted-parent'));
  assert.equal(cancelled.includes('unrelated'),false);
+ assert.deepEqual(metadataRemoved,['deleted-parent'],'deleting a conversation removes its metadata without removing unrelated records');
+ assert.equal(recapInvalidations,1,'deleting a conversation invalidates cached recaps');
  records.set('side:expired',{paneId:'side:expired',threadId:'expired-child'});
  const expired=await controller.open('expired-child',url);
  await context.pruneSideChatRecents();
