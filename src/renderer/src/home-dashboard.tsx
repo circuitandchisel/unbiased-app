@@ -129,6 +129,10 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
   const all = useMemo(() => homeChats(projects, recents), [projects, recents]);
   const chats = scope ? all.filter(chat => chat.projectId === scope) : all;
   const activity = homeActivity(chats);
+  const monthLabels = activity.days.flatMap(({ date, future }, index) => !future && (index === 0 || date.getDate() === 1)
+    ? [{ date, column: Math.floor(index / 7) + 1 }] : []);
+  // A very short partial month at the left edge should not crowd the next label.
+  const visibleMonths = monthLabels.filter((label, index) => !monthLabels[index + 1] || monthLabels[index + 1].column - label.column >= 3);
   const recent = chats.slice(0, 3);
   const dayChats = selectedDay ? chatsOnHomeDay(chats, selectedDay) : [];
   const selectedDate = activity.days.find(day => homeDayKey(day.date) === selectedDay)?.date;
@@ -168,6 +172,13 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
                 calendar.current?.querySelector<HTMLButtonElement>(`[data-home-day-index="${next}"]`)?.focus();
               }} />;
           })}
+        </div>
+        <div className="home-calendar-months" aria-label="Months in the activity calendar">
+          {visibleMonths.map(({ date, column }, index) => <span key={`${date.getFullYear()}-${date.getMonth()}`}
+            title={date.toLocaleDateString([], { month: "long", year: "numeric" })}
+            style={{ gridColumn: `${Math.min(column, 25)} / ${visibleMonths[index + 1]?.column ?? 27}`, textAlign: column > 24 ? "right" : undefined }}>
+            {date.toLocaleDateString([], { month: "short" })}
+          </span>)}
         </div><div className="home-activity-footer"><span><strong>{activity.total}</strong> chats started · <strong>{activity.activeDays}</strong> active days</span><span className="home-legend">Less{[0,1,2,3,4].map(level => <i key={level} className={`home-day level-${level}`} />)}More</span></div>
       </section>
       <section className="home-card home-recent"><h2><History size={14} />Recent chats</h2>
