@@ -27,6 +27,10 @@ localStorage.setItem('unbiased.authed','1');createRoot(document.getElementById('
   assert.equal(await ev(`document.querySelectorAll('[role="textbox"][contenteditable="true"]').length`),1,'home reuses exactly one real composer');
   assert.ok(await ev(`document.querySelector('.home-dashboard').innerText.includes('Loading account usage')`),'billing loads without blocking local dashboard');
   assert.equal(await ev(`document.querySelectorAll('.home-calendar .home-day').length`),182);
+  assert.ok(await ev(`!document.querySelector('#home-day-activity').hidden`),'daily activity is visible on first load without clicking a date');
+  assert.ok(await ev(`(()=>{const today=new Date(),key=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');return document.querySelector('.home-calendar [aria-pressed="true"]')?.dataset.homeDay===key})()`),'Home selects the local current date by default');
+  await until(`document.querySelector('.home-day-github-activity .home-github-tabs')&&document.querySelector('.home-day-chat')`);
+
   await until(`document.querySelector('.home-work-lead')?.textContent.includes('refining Home QA')`);
   assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='homeRecap').length`),1,'recap loads separately without repeated calls on render');
   assert.ok(await ev(`document.querySelector('.home-work-source').textContent.includes('AI-written')`));

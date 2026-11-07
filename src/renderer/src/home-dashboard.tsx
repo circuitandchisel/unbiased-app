@@ -120,7 +120,7 @@ export function HomeDashboard({ projects, recents, selectedProjectId, running, r
   const refreshIcon = useRef<RefreshCWIconHandle>(null);
   const [githubState, setGithubState] = useState<{ key: string; result: HomeGithubResult } | null>(null);
   const [githubRetry, setGithubRetry] = useState(0);
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(() => homeDayKey(new Date()));
   const [focusedDay, setFocusedDay] = useState(() => homeDayKey(new Date()));
   const calendar = useRef<HTMLDivElement>(null);
   useEffect(() => setScope(selectedProjectId ?? ""), [selectedProjectId]);
