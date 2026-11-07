@@ -8361,7 +8361,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("usage:billing", () => readBilling());
   const homeRecaps = new HomeRecaps(() => readStoredKey()?.key ?? null, () => join(app.getPath("userData"), "home-recaps.json"));
-  ipcMain.handle("home:recap", (_e, raw: unknown) => {
+  ipcMain.handle("home:recap", (_e, raw: unknown, requestId?: unknown) => {
     const input = recapInput(raw);
     const chats = input.chats.map(source => {
       // Context comes from the app-owned store, never a renderer-supplied claim.
@@ -8375,7 +8375,9 @@ app.whenReady().then(async () => {
       const failed = chats.some(chat => chat.id && conversationMetadata.failed(chat.id));
       return { ok: false, pending: !failed, error: failed ? "Conversation context couldn’t update. Try again shortly." : "Your recent-work recap will appear here as you chat." };
     }
-    return homeRecaps.get(redactSecrets({ chats }));
+    return homeRecaps.get(redactSecrets({ chats }), typeof requestId === "string" && requestId.length <= 100 ? text => {
+      if (!_e.sender.isDestroyed()) _e.sender.send("home:recap-progress", redactSecrets({ requestId, text }));
+    } : undefined);
   });
 
   // ── Scheduled tasks IPC ─────────────────────────────────────────────

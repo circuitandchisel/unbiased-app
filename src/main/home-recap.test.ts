@@ -13,7 +13,7 @@ test("recaps deduplicate requests, cache by account and throttle changed sources
   const client = new HomeRecaps(() => key, () => null, (async (_url, init) => {
     calls++;
     const request = JSON.parse(String(init?.body));
-    assert.equal(request.store, false); assert.equal(request.stream, false);
+    assert.equal(request.store, false); assert.equal(request.stream, true);
     assert.deepEqual(request.tools, []);
     assert.equal(request.input[0].role, "developer");
     assert.match(request.input[0].content, /untrusted/);
@@ -57,4 +57,48 @@ test("deleting source context invalidates even an in-flight recap", async () => 
   const client = new HomeRecaps(() => "key", () => null, (() => new Promise(resolve => { finish = resolve; })) as typeof fetch);
   const pending = client.get(sources); client.invalidate(); finish(answer());
   assert.equal((await pending).ok, false);
+});
+
+function streamed(events: unknown[], complete = true) {
+  const bytes = new TextEncoder().encode(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join("") + (complete ? "data: [DONE]\r\n\r\n" : ""));
+  return new Response(new ReadableStream({ start(controller) {
+    // Split UTF-8 and SSE boundaries across transport chunks.
+    for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7));
+    controller.close();
+  } }), { headers: { "Content-Type": "text/event-stream" } });
+}
+test("recap streams deltas and caches only the completed response", async () => {
+  const text = "You’ve been improving Home."; let calls = 0;
+  const client = new HomeRecaps(() => "key", () => null, (async () => {
+    calls++; return streamed([
+      { type: "response.output_text.delta", delta: "You’ve been " },
+      { type: "response.output_text.delta", delta: "improving Home." },
+      { type: "response.completed", response: await answer(text).json() },
+    ]);
+  }) as typeof fetch);
+  const progress: string[] = [], shared: string[] = [];
+  const [first, second] = await Promise.all([client.get(sources, text => progress.push(text)), client.get(sources, text => shared.push(text))]);
+  assert.deepEqual(progress, ["You’ve been ", text]); assert.deepEqual(shared, progress);
+  assert.ok(first.ok && first.text === text); assert.deepEqual(first, second);
+  const cachedProgress: string[] = []; await client.get(sources, text => cachedProgress.push(text));
+  assert.equal(calls, 1); assert.deepEqual(cachedProgress, []);
+});
+test("a truncated stream is not saved as a completed recap", async () => {
+  let now = 100000, calls = 0;
+  const client = new HomeRecaps(() => "key", () => null, (async () => {
+    calls++; return streamed([{ type: "response.output_text.delta", delta: "Incomplete" }], false);
+  }) as typeof fetch, () => now);
+  assert.equal((await client.get(sources)).ok, false);
+  now += 60001; await client.get(sources); assert.equal(calls, 2);
+});
+
+test("invalidating source context stops progress from the old stream", async () => {
+  const client = new HomeRecaps(() => "key", () => null, (async () => streamed([
+    { type: "response.output_text.delta", delta: "First" },
+    { type: "response.output_text.delta", delta: " old context" },
+    { type: "response.completed", response: await answer().json() },
+  ])) as typeof fetch);
+  const seen: string[] = [];
+  const result = await client.get(sources, text => { seen.push(text); client.invalidate(); });
+  assert.deepEqual(seen, ["First"]); assert.equal(result.ok, false);
 });

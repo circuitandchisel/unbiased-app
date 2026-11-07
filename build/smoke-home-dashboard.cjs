@@ -33,6 +33,11 @@ localStorage.setItem('unbiased.authed','1');createRoot(document.getElementById('
   await ev(`window.qaHoldRecap=true;window.qaEmit('onConversationMetadata',{threadId:'project-chat'})`);
   await until(`typeof window.qaResolveRecap==='function'`);
   assert.ok(await ev(`document.querySelector('.home-work-lead').textContent.includes('refining Home QA')`),'background refresh retains the visible recap without loading messages');
+  await ev(`window.qaEmit('onHomeRecapProgress',{requestId:'unrelated',text:'Wrong recap'})`);
+  assert.ok(await ev(`!document.querySelector('.home-work-lead').textContent.includes('Wrong recap')`),'other requests cannot replace this recap');
+  await ev(`window.qaEmit('onHomeRecapProgress',{requestId:window.qaCalls.filter(c=>c[0]==='homeRecap').at(-1)[2],text:'Your new recap is arriving'})`);
+  await until(`document.querySelector('.home-work-lead[aria-busy="true"]')?.textContent==='Your new recap is arriving'`);
+
   await ev(`window.qaHoldRecap=false;window.qaResolveRecap({ok:true,text:'Your updated recap is ready.',generatedAt:Date.now(),stale:false})`);
   await until(`document.querySelector('.home-work-lead').textContent==='Your updated recap is ready.'`);
   assert.ok(await ev(`document.querySelector('.home-chat-pane .home-composer-slot').getBoundingClientRect().bottom<=document.querySelector('.home-dashboard').getBoundingClientRect().top`),'composer precedes dashboard');

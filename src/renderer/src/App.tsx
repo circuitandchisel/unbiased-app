@@ -797,7 +797,8 @@ declare global {
       }>;
       readBilling: () => Promise<BillingResult>;
       onConversationMetadata: (cb: (payload: { threadId: string }) => void) => () => void;
-      homeRecap: (sources: import("../../shared/home-recap").HomeRecapInput) => Promise<import("../../shared/home-recap").HomeRecapResult>;
+      onHomeRecapProgress: (cb: (payload: { requestId: string; text: string }) => void) => () => void;
+      homeRecap: (sources: import("../../shared/home-recap").HomeRecapInput, requestId?: string) => Promise<import("../../shared/home-recap").HomeRecapResult>;
       listThreads: () => Promise<SidebarData>;
       searchThreads: (query: string, threads: { id: string; updatedAt?: string | number }[], includeSavedTranscripts?: boolean) => Promise<{ results: { id: string; snippet: string; title?: string }[]; failed: number }>;
       openThread: (id: string) => Promise<{
