@@ -23,6 +23,13 @@ Copyright (c) 2026 Jakub Antalik, and [Three.js](https://github.com/mrdoob/three
 Copyright (c) 2010-2026 three.js authors. Both are licensed under MIT; their
 license files are retained in the packaged npm dependencies.
 
+## Motion
+
+Animated conversation icons use [Motion](https://motion.dev), including
+`motion`, `motion-dom`, and `motion-utils`, Copyright (c) 2024 Motion B.V.,
+and `framer-motion`, Copyright (c) 2018 Framer B.V. These packages are MIT
+licensed; their license files are retained in the packaged npm dependencies.
+
 ## Playwright
 
 The application includes `playwright-core` from
@@ -90,3 +97,30 @@ Better Auth review guidance is independently written by Unbiased and links to
 official documentation; no material from the repository `better-auth/skills`
 is redistributed because that revision declares no license. See Code Review's
 `UPSTREAM.md` for the inspected revision.
+
+## Bencho Create menu
+
+The project selector's liquid motion adapts comments and animation parameters
+from the user-supplied Bencho Create menu component, provided as MIT licensed.
+Source and licence: https://bencho.dev/licence. The adaptation uses the app's
+own design tokens and project-selector behavior.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

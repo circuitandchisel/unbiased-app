@@ -1,3 +1,5 @@
+import { ConversationMetadataStore } from "./conversation-metadata";
+import { HomeRecaps, recapInput } from "./home-recap";
 import { ServerToolsClient, ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
 import { SERVER_TOOL_NAMES, serverToolDirective, type ServerToolName, type ServerToolCapabilities } from "../shared/server-tools";
 import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
@@ -3037,6 +3039,26 @@ function memoryDirForThread(threadId: string | null): string | null {
   return memoryDirForCwd(cwd, root);
 }
 
+// Conversation state is app-owned and separate from durable memory notes.
+const metadataTurns = new Map<string, { id: string; automatic: boolean; worked: boolean }>();
+const conversationMetadata = new ConversationMetadataStore({
+  root: () => join(app.getPath("userData"), "conversation-metadata"),
+  canRun: () => runningTurns.size === 0 && lastStatus.state === "connected",
+  owner: () => { const owner = currentScopedOwner(); return owner ? `${owner.organizationId}/${owner.memberId}` : null; },
+  key: () => readStoredKey()?.key ?? null,
+  redact: redactSecrets,
+  updated: threadId => send("home:metadata-updated", { threadId }),
+  history: async threadId => {
+    const result = await engine.request("thread/read", { threadId, includeTurns: true }) as { thread: WireThread };
+    const thread = result.thread;
+    const member = projectStore().membership(thread.id, thread.cwd, loadWorktrees());
+    const project = loadProjects().find(project => project.id === member.projectId);
+    return { id: thread.id, title: threadTitle(thread), project: project?.name ?? null,
+      excluded: !!thread.threadSource || subAgents.has(threadId) || runningTurns.has(threadId), turns: thread.turns ?? [] };
+  },
+});
+function metadataEligible(threadId: string) { return !subAgents.has(threadId) && !scheduledRuns.has(threadId); }
+
 const automaticMemoryRunning = new Set<string>();
 const completedTurnsSinceMemory = new Map<string, number>();
 
@@ -3385,7 +3407,7 @@ type WireThread = {
   /** Free-form classification the client set at thread/start, handed back
    *  unchanged. Used to keep scheduled runs out of the sidebar. */
   threadSource?: string | null;
-  turns?: { id?: string; items?: WireItem[]; startedAt?: number; durationMs?: number }[];
+  turns?: { id?: string; status?: string; items?: WireItem[]; startedAt?: number; durationMs?: number }[];
 };
 
 const threadSearchCache = new Map<string, { updatedAt?: string | number; sourceMtimeMs?: number; cachedAt: number; messages: string[] }>();
@@ -3825,6 +3847,8 @@ function pushStatus(status: EngineStatus): void {
     turnContinuation.reset();
     sideBrowser.finishWorker();
     for (const threadId of compactingThreads) updateThreadCompaction(threadId, "failed");
+    for (const threadId of metadataTurns.keys()) if (metadataEligible(threadId)) conversationMetadata.status(threadId, "interrupted");
+    metadataTurns.clear();
     if (petSettleTimer) clearTimeout(petSettleTimer);
     petSettleTimer = null;
     petActivity.reset();
@@ -5228,6 +5252,7 @@ let nextEngineApproval = 1;
 function deliverUserInput(request: UserInputRequest, pending: PendingUserInput): void {
   blockTurnContinuation(pending.threadId);
   pendingUserInputs.set(request.requestId, pending);
+  if (pending.threadId && metadataEligible(pending.threadId)) conversationMetadata.status(pending.threadId, "waiting");
   const sub = pending.threadId ? subAgents.get(pending.threadId) : undefined;
   const target = sub ? sub.parent : pending.threadId;
   const tagged = sub ? { ...request, agentName: sub.name } : request;
@@ -5834,6 +5859,10 @@ function wireNotifications(): void {
             sideBrowser.finishWorker(threadId);
             serverTools.cancel(threadId);
           } else { sideBrowser.beginWorker(threadId); serverTools.begin(threadId); }
+          if (metadataEligible(threadId)) {
+            metadataTurns.set(threadId, { id: turn.id, automatic: automaticContinuation, worked: false });
+            conversationMetadata.status(threadId, "running");
+          }
           runningTurns.set(threadId, turn.id);
           petReplies.set(threadId, { stream: "", last: "", final: "" });
           const petKey = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
@@ -5892,6 +5921,9 @@ function wireNotifications(): void {
           | { type?: string; id?: string; status?: string; changes?: { path?: string }[] }
           | undefined;
         const phase = msg.method === "item/started" ? "started" : "completed";
+        if (threadId && phase === "completed" && ["commandExecution", "dynamicToolCall", "mcpToolCall", "fileChange"].includes(item?.type ?? "")) {
+          const tracked = metadataTurns.get(threadId); if (tracked) tracked.worked = true;
+        }
         if (threadId && item?.id && ["commandExecution", "dynamicToolCall", "mcpToolCall", "fileChange"].includes(item.type ?? "")) {
           const key = petTurnActivityKey(threadId, scheduledRuns.get(threadId)?.key);
           const changed = key && (phase === "started"
@@ -6285,7 +6317,19 @@ function wireNotifications(): void {
           // Idle again: nothing of the user's is competing for the gateway.
           if (runningTurns.size <= 1) learning?.setIdle(true);
           runningTurns.delete(threadId);
+          conversationMetadata.wake();
           const reply = petReplies.get(threadId);
+          const tracked = metadataTurns.get(threadId);
+          metadataTurns.delete(threadId);
+          const completedTurnId = (turn as { id?: string } | undefined)?.id ?? tracked?.id;
+          if (completedTurnId && metadataEligible(threadId)) {
+            conversationMetadata.completed(threadId, completedTurnId, {
+              meaningful: !!(tracked?.worked || reply?.final?.trim() || reply?.last?.trim() || reply?.stream?.trim()),
+              automatic: tracked?.automatic ?? false,
+              status: turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "idle",
+              defer: !!continuation.offer,
+            });
+          }
           petReplies.delete(threadId);
           const scheduledKey = scheduledRuns.get(threadId)?.key;
           if (!scheduledKey) petFinished(`turn:${threadId}`, turn?.status === "failed" ? "failed" : turn?.status === "interrupted" ? "interrupted" : "completed");
@@ -6491,6 +6535,7 @@ function wireNotifications(): void {
       // the conversation is reopened. Auto-declining here would silently
       // reject work the user asked for.
       function deliverApproval(payload: Record<string, unknown>): void {
+        if (approvalThread && metadataEligible(approvalThread)) conversationMetadata.status(approvalThread, "waiting");
         blockTurnContinuation(typeof params.threadId === "string" ? params.threadId : null);
         // An app-only signal. Rollouts carry no record that the user was ever
         // asked, so the sidecar's approval_decline weight is unreachable from
@@ -7850,6 +7895,7 @@ app.whenReady().then(async () => {
       }
     }
     resetServerTools();
+    conversationMetadata.reset(); metadataTurns.clear();
     scopedIdentity.clear();
     const owner=who.user?.id && who.organization?.id && who.accessStatus === "granted" ? {organizationId:who.organization.id,memberId:who.user.id} : null;
     if(owner)scopedIdentity.remember(key,owner);
@@ -7923,6 +7969,7 @@ app.whenReady().then(async () => {
   // env-provided key can't be removed by us — report that so the UI can say so.
   ipcMain.handle("auth:logout", (_e, opts?: { removeKey?: boolean }) => {
     resetServerTools();
+    conversationMetadata.reset(); metadataTurns.clear();
     engine.stop();
     // Without this the timer keeps firing against a dead engine, turning
     // every scheduled task into a "engine not running" failure row.
@@ -8313,6 +8360,23 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("usage:billing", () => readBilling());
+  const homeRecaps = new HomeRecaps(() => readStoredKey()?.key ?? null, () => join(app.getPath("userData"), "home-recaps.json"));
+  ipcMain.handle("home:recap", (_e, raw: unknown) => {
+    const input = recapInput(raw);
+    const chats = input.chats.map(source => {
+      // Context comes from the app-owned store, never a renderer-supplied claim.
+      const chat = { id: source.id, title: source.title, project: source.project };
+      if (!chat.id) return chat;
+      const record = conversationMetadata.read(chat.id);
+      if (!record?.context) conversationMetadata.ensure(chat.id);
+      return record?.context ? { ...chat, context: record.context, contextUpdatedAt: record.summarizedAt ?? undefined, coverage: record.coverage } : chat;
+    });
+    if (!chats.some(chat => "context" in chat && chat.context)) {
+      const failed = chats.some(chat => chat.id && conversationMetadata.failed(chat.id));
+      return { ok: false, pending: !failed, error: failed ? "Conversation context couldn’t update. Try again shortly." : "Your recent-work recap will appear here as you chat." };
+    }
+    return homeRecaps.get(redactSecrets({ chats }));
+  });
 
   // ── Scheduled tasks IPC ─────────────────────────────────────────────
 
@@ -10613,6 +10677,7 @@ app.whenReady().then(async () => {
     if (checked && !checked.ok) return { ok: false, error: checked.error };
     const values = checked?.ok ? checked.values : null;
     pendingUserInputs.delete(payload.requestId);
+    if (pending.threadId && runningTurns.has(pending.threadId) && metadataEligible(pending.threadId)) conversationMetadata.status(pending.threadId, "running");
     if (pending.kind === "local") pending.settle(values);
     else if (pending.kind === "codex") engine.respond(pending.rpcId, codexInputResponse(pending.request.fields, values));
     else engine.respond(pending.rpcId, mcpInputResponse(values));
@@ -10641,6 +10706,7 @@ app.whenReady().then(async () => {
       { decision: payload.decision === "acceptForSession" ? "acceptForSession" : payload.decision },
     );
     pendingApprovals.delete(payload.requestId);
+    if (pending.threadId && runningTurns.has(pending.threadId) && metadataEligible(pending.threadId)) conversationMetadata.status(pending.threadId, "running");
     // No engine item stands behind a synthesized card, so nothing would ever
     // flip it off "running" — resolve it here. Shared by local approvals and
     // MCP elicitations, both of which raise a card of their own.
@@ -12021,6 +12087,7 @@ app.whenReady().then(async () => {
     heldApprovals.delete(id);
     heldErrors.delete(id);
     await engine.request("thread/delete", { threadId: id });
+    conversationMetadata.remove(id); homeRecaps.invalidate();
     forgetBrowserCaptures(id);
     multiMountLeases.delete(id);
     delete panes[`multi:${id}`];

@@ -1,0 +1,2 @@
+export type HomeRecapInput = { chats: { id?: string; title: string; project: string | null; context?: import("./conversation-metadata").ConversationContext; contextUpdatedAt?: number; coverage?: "complete" | "partial" }[] };
+export type HomeRecapResult = { ok: true; text: string; generatedAt: number; stale: boolean } | { ok: false; error: string; pending?: boolean };

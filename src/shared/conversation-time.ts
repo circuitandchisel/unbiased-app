@@ -87,3 +87,14 @@ export function formatConversationDayMarker(at: number, now = Date.now()): strin
   const label = formatConversationTime(at, now);
   return localDay(at) === localDay(now) ? `Today, ${label}` : label;
 }
+
+/** Recent-chat subtitles always include the local calendar day and time. */
+export function formatRecentConversationTime(at: number, now = Date.now()): string {
+  const date = new Date(at), today = new Date(now);
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  const day = localDay(at) === localDay(now) ? "Today"
+    : localDay(at) === localDay(yesterday.getTime()) ? "Yesterday"
+      : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) }).format(date);
+  const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(date);
+  return `${day}, ${time}`;
+}

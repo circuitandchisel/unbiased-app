@@ -169,6 +169,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   onCompaction: (cb: (p: unknown) => void) => subscribe("chat:compaction", cb),
   onTokenUsage: (cb: (p: unknown) => void) => subscribe("chat:token-usage", cb),
   readBilling: () => ipcRenderer.invoke("usage:billing"),
+  onConversationMetadata: (cb: (payload: { threadId: string }) => void) => subscribe("home:metadata-updated", cb as (payload: unknown) => void),
+  homeRecap: (sources: import("../shared/home-recap").HomeRecapInput): Promise<import("../shared/home-recap").HomeRecapResult> => ipcRenderer.invoke("home:recap", sources),
   contextUsage: (threadId: string) => ipcRenderer.invoke("usage:context", threadId),
   resourceStats: () => ipcRenderer.invoke("stats:resources"),
   storageStats: () => ipcRenderer.invoke("stats:storage"),
