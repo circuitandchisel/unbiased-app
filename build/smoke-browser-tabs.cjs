@@ -1,3 +1,4 @@
+const { homeApiFixture } = require("./home-api-fixture.cjs");
 // Real App routing with native-browser IPC stubbed; no engine or web traffic.
 const { app, BrowserWindow } = require('electron');
 const { build } = require('esbuild');
@@ -15,7 +16,7 @@ localStorage.setItem('unbiased.authed','1');window.qaCalls=[];window.qaListeners
 window.qaEmit=(name,payload)=>{for(const cb of window.qaListeners.get(name)??[])cb(payload)};
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const listeners=window.qaListeners.get(key)??new Set();listeners.add(cb);window.qaListeners.set(key,listeners);return ()=>listeners.delete(cb)};
- return async(...args)=>{window.qaCalls.push([key,...args]);if(key==='recentSideChats')return [];if(key==='getEngineStatus')return {state:'starting'};return {ok:true,hasKey:true,projects:[],recents:[],releases:[],tasks:[],memories:[],servers:[],commands:[],entries:[],enabled:[],pals:[],pets:[]}};
+ return async(...args)=>{window.qaCalls.push([key,...args]);${homeApiFixture}if(key==='recentSideChats')return [];if(key==='getEngineStatus')return {state:'starting'};return {ok:true,hasKey:true,projects:[],recents:[],releases:[],tasks:[],memories:[],servers:[],commands:[],entries:[],enabled:[],pals:[],pets:[]}};
 }});createRoot(document.getElementById('root')).render(<App/>);
 ` }, bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'import.meta.glob': '__qaGlob' }, banner: { js: 'var __qaGlob=()=>({});' }, loader: { '.svg': 'dataurl', '.png': 'dataurl', '.webp': 'dataurl' }, plugins: [{ name: 'qa', setup(b) {
     b.onLoad({ filter: /\.css$/ }, () => ({ contents: '', loader: 'js' }));

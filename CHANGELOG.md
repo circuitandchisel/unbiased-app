@@ -10,15 +10,23 @@ Write for the person using the app, not the person who wrote the code.
 
 ### Added
 
+- **A home for your work.** Start a chat, revisit recent conversations, browse daily chat activity, and see account usage in one place. Project filters use your saved icons and colors.
+- **More GitHub activity.** Switch between PRs, issues, comments, and mention-thread updates for a selected day, with links opening in the side browser and clear history-coverage notes.
+- **Daily pull request activity.** Home opens with today selected so chat and GitHub activity are visible immediately. With GitHub CLI signed in, Home shows your PRs opened and merged on the selected date, with project repository filters and monthly totals.
+- **A more personal recap.** Home summarizes recent goals, decisions, progress, and next steps. Conversation context refreshes quietly in the background, updating the same record after every 25 meaningful completed turns.
 - **Web Search and Create image.** Find these in the + menu with an active Chat subscription or approved organization access. Search results include sources, and generated images stay with the conversation.
 - **Image generation previews.** Image requests expand to a live pixel mosaic that reveals the finished image. Click the result to view it full-screen with zoom controls. Reduced motion uses a static preview.
 
 ### Improved
 
+- **Menus that fit.** Project selectors and the + menu open toward available space, with a consistent spring animation and reduced-motion support.
+- **Clearer recent-chat dates.** Recent chats show Today, Yesterday, or the date and time, with the project name when applicable.
 - **Clearer reply text.** Assistant replies use your theme’s primary text color for stronger contrast.
 - **Automatic Web Search.** Eligible chats use the server search for public research without requiring a menu selection. Browser tools remain available for visiting and checking pages.
 
 ### Fixed
+
+- **Visuals in hidden panes.** Generated visuals now become ready when their pane is revealed, even after a longer background load.
 
 - **Compact transcript spacing.** Replies and command rows use their earlier spacing while keeping scrolling steady.
 - **Keep side chats through Mosaic.** Returning to the same conversation restores its open side panel, draft and live reply. Reopening a closed side chat from browser Recents shows progress while it loads.

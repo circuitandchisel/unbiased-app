@@ -1,0 +1,23 @@
+# GitHub activity on Home
+
+Home reads PR metadata through an existing GitHub CLI login on github.com. It makes no GitHub mutations, does not start a login flow, and does not read PR bodies or code. The GitHub identity is independent of the app account and is displayed as @login.
+
+Home initially selects the current local date, so the daily chat and GitHub activity sections are visible immediately. Clearing the selection shows the current calendar month in the cards. Selecting a date switches the summary and PR cards to that local day and lists separate opened and merged events in the activity section below. Clearing the date restores the monthly view. PR lists have bounded heights and scroll vertically, with the fetched events available inside the card. Clicking a PR opens the side in-app browser and reuses a matching tab without reloading; the existing browser-tab capacity fallback applies. Creation and merge timestamps determine the events; current PR state alone does not establish when an event happened. A PR can contribute to both counts.
+
+The scope is PRs authored by the GitHub user, including their PRs merged by someone else. This does not count merges of other authors' PRs, reviews, historical close/reopen events, or all organization activity. The chat heatmap continues to measure chat creation only.
+
+All projects includes all repositories accessible to the CLI account. A project filter resolves GitHub origin remotes from the app-owned saved project folders. It never accepts a renderer-supplied repository or directory and never broadens an unlinked project to all repositories.
+
+Queries use local midnight boundaries converted to UTC, including DST day lengths, and GitHub's inclusive second-precision date range syntax. Separate creation and merge searches return total counts and up to 100 PRs each. Lists are deduplicated before deriving separate events; when a search has more pages, the UI explicitly marks the displayed list as partial while retaining the full matching counts.
+
+Results stay in memory for 60 seconds, keyed by CLI identity, repositories, and date range. CLI identity is checked before cached results are returned. Manual refresh bypasses this cache for both the PR cards and selected-day activity tabs. Changing date, project, CLI identity, or refresh generation hides old results and ignores late responses. Additional activity requests are bound to the identity shown by the PR cards. Missing CLI authentication, network errors, rate limits, and GraphQL errors show unavailable rather than zero activity. Project origin folders are re-resolved on each request.
+
+## Selected-day activity tabs
+
+The selected-day GitHub activity section has keyboard-accessible All, PRs, Issues, Comments, and Mentions tabs. The original PR cards load independently. Additional history is requested after a short debounce and cached for 60 seconds; tab changes filter locally without another request. All links use the existing side-browser route.
+
+A bounded GraphQL search discovers up to 40 issues/PRs involving the CLI user, updated since the selected window starts. It fetches up to 100 timeline entries per item, 20 reviews per PR, and 20 inline comments per review. Events are filtered by their own creation/submission timestamps, not the parent issue's update time. Authored issue openings, assignments to the user, issue closures/reopens by the user, authored discussion/inline comments, and submitted reviews are supported. Discovery can miss older items that no longer match involvement, and pagination limits are reported as partial history.
+
+The Mentions tab reads up to 100 notification threads (including read threads) for direct mentions, team mentions, and review requests. These are labeled as thread updates with their `updated_at` time. Notification reasons can survive subsequent unrelated updates; these rows never claim that a new mention or review request occurred at that time. Unsupported token permissions or request failures produce a source notice while preserving available PR/timeline data. No notification is marked read.
+
+Fetched event metadata is retained in `home-github-events.json` under the existing private user-data directory, partitioned by GitHub login. It stores titles, repositories, links, actions and timestamps, not comment bodies or code. Each user retains up to 5,000 events from the previous 186 days. Observed history accumulates when this section loads; there is no continuous poller or claim of a complete historical inbox. Current GitHub identity is checked again before saving or returning the additional history. Invalid saved records are ignored. Cached/observed events are filtered by the current project repositories and date window.

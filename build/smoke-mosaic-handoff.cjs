@@ -1,3 +1,4 @@
+const { homeApiFixture } = require("./home-api-fixture.cjs");
 // Real App navigation and live ChatPane state; mock IPC, no agent or network.
 const { app, BrowserWindow } = require('electron');
 const { build } = require('esbuild');
@@ -18,7 +19,7 @@ const base=[{kind:'user',text:'Earlier prompt'},{kind:'assistant',text:'Earlier 
 const snapshot=id=>{const approval=window.qaApproval[id];const entries=window.qaRunning[id]?[...base,{kind:'user',text:'Current request for '+id},...(approval?[{kind:'command',itemId:'qa-command',command:approval.command,status:'awaitingApproval',approval}]:[])]:base;return {id,entries,total:entries.length,offset:0,sessionId:'session-'+id,running:!!window.qaRunning[id],streamText:window.qaStream[id]??'',approvals:approval?[approval]:[],userInputs:[],runningTurnStart:window.qaRunning[id]?3:null,runningTurnStartedAt:window.qaRunning[id]?window.qaNow-45000:null}};
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const set=window.qaListeners.get(key)??new Set();set.add(cb);window.qaListeners.set(key,set);return()=>set.delete(cb)};
- return async(...args)=>{window.qaCalls.push([key,...args]);
+ return async(...args)=>{window.qaCalls.push([key,...args]);${homeApiFixture}
  if(key==='recentSideChats')return [];if(key==='getEngineStatus')return {state:'connected'};
  if(key==='sideBrowserTabs')return {root:args[0],tabs:[]};if(key==='contextUsage')return {usage:null};
  if(key==='liveApprovals')return {requestIds:['qa-approval']};if(key==='liveUserInputs')return {requestIds:[]};if(key==='subagentsList')return {agents:[]};

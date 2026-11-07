@@ -128,6 +128,25 @@ export function InteractiveHtmlVisual({ source, previewSource, incomplete = fals
     return () => window.removeEventListener("message", receive);
   }, []);
 
+  const checkFrameReadiness = () => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const bounds = frame.getBoundingClientRect();
+    if (bounds.width > 0 && bounds.height > 0) frame.contentWindow?.postMessage({ type: "unbiased-visual-check-readiness" }, "*");
+  };
+
+  useEffect(() => {
+    if (!url || ready || !frameRef.current) return;
+    // Ancestor style/class changes reveal Mosaic panes even when a background
+    // renderer has not delivered ResizeObserver notifications inside the frame.
+    const observer = new MutationObserver(checkFrameReadiness);
+    for (let ancestor = frameRef.current.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      observer.observe(ancestor, { attributes: true, attributeFilter: ["style", "class", "hidden", "open"] });
+    }
+    checkFrameReadiness();
+    return () => observer.disconnect();
+  }, [url, ready]);
+
   const sendTheme = () => {
     if (!frameRef.current) return;
     const source = visualThemeSource(frameRef.current);
@@ -176,6 +195,7 @@ export function InteractiveHtmlVisual({ source, previewSource, incomplete = fals
           referrerPolicy="no-referrer"
           src={url}
           onLoad={() => {
+            checkFrameReadiness();
             sendTheme();
             sendExpanded(Boolean(frameRef.current?.closest(".app-generated-visual-viewport:popover-open")));
           }}

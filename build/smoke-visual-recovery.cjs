@@ -16,6 +16,7 @@ const cases = {
   empty: '<div></div>',
   healthy: '<div><span id="stepStatus">Step 1</span><button id="next">Next</button></div><script>document.getElementById("next").onclick=()=>document.getElementById("stepStatus").textContent="Step 2";</script>',
   hidden: '<div>Hidden pane scene</div>',
+  hiddenEmpty: '<div id=hidden-empty-scene></div>',
   delayed: '<div id="scene"></div><script>setTimeout(()=>document.getElementById("scene").textContent="Delayed scene",50)</script>',
 };
 protocol.registerSchemesAsPrivileged([{ scheme: INTERACTIVE_VISUAL_SCHEME, privileges: { standard: true, secure: true } }]);
@@ -28,7 +29,7 @@ window.unbiased={registerVisual:async source=>{
  const key=Object.keys(cases).find(key=>cases[key]===source);window.registrations.push(key);
  return 'unbiased-visual://view/'+key;
 }};
-createRoot(document.getElementById('root')).render(<>{Object.entries(cases).map(([key,source])=><section id={key} key={key} style={key==='hidden'?{display:'none'}:undefined}><InteractiveHtmlVisual source={source}/></section>)}</>);
+createRoot(document.getElementById('root')).render(<>{Object.entries(cases).map(([key,source])=><section id={key} key={key} style={key.startsWith('hidden')?{display:'none'}:undefined}><InteractiveHtmlVisual source={source}/></section>)}</>);
 ` }, bundle: true, write: false, platform: 'browser', format: 'iife' }).outputFiles[0].text;
 const deadline=setTimeout(()=>{console.error('Visual recovery timed out');app.exit(1)},20000);deadline.unref();
 (async()=>{
@@ -39,7 +40,10 @@ const deadline=setTimeout(()=>{console.error('Visual recovery timed out');app.ex
    const nonce=randomBytes(16).toString('base64');
    return new Response(interactiveVisualPreviewDocument(nonce),{headers:{'Content-Type':'text/html','Content-Security-Policy':interactiveVisualPreviewCsp(nonce)}});
   }
-  const source=cases[url.pathname.slice(1)];
+  const name=url.pathname.slice(1);
+  // Model background-renderer behavior: recovering a revealed pane must not
+  // depend on resize notifications being delivered inside the sandbox.
+  const source=cases[name] && cases[name] + (name.startsWith('hidden') ? '<script>globalThis.ResizeObserver=class{observe(){}disconnect(){}};</script>' : '');
   return source?new Response(interactiveVisualDocument(source),{headers:{'Content-Type':'text/html','Content-Security-Policy':INTERACTIVE_VISUAL_CSP}}):new Response('Not found',{status:404});
  });
  const win=new BrowserWindow({show:false,width:1000,height:1500,webPreferences:{sandbox:true,nodeIntegration:false,backgroundThrottling:false}});
@@ -65,9 +69,16 @@ const deadline=setTimeout(()=>{console.error('Visual recovery timed out');app.ex
   await until(`document.querySelector('#delayed iframe[title="Interactive visual"]')?.style.visibility==='visible'`);
   assert.equal(await check(`!!document.querySelector('#delayed [role=alert]')`),false,'asynchronous scenes can initialize normally');
   assert.equal(await check(`!!document.querySelector('#healthy [role=alert]')`),false);
+  // Keep this pane hidden past the empty-render deadline. A fast local run
+  // previously revealed it before the timer, masking the hosted-runner failure.
+  await new Promise(resolve=>setTimeout(resolve,1200));
+  assert.equal(await check(`!!document.querySelector('#hidden [role=alert]')`),false,'a hidden pane is not misclassified as an empty visual');
+  assert.equal(await check(`!!document.querySelector('#hiddenEmpty [role=alert]')`),false,'an unmeasurable empty pane waits until reveal');
   await check(`document.getElementById('hidden').style.display='block'`);
   await until(`document.querySelector('#hidden iframe[title="Interactive visual"]')?.style.visibility==='visible'`);
   assert.equal(await check(`!!document.querySelector('#hidden [role=alert]')`),false,'a scene loaded in a hidden pane becomes ready when revealed');
+  await check(`document.getElementById('hiddenEmpty').style.display='block'`);
+  await until(`document.querySelector('#hiddenEmpty [role=alert]')?.textContent.includes('visual is empty')`);
   if(process.env.UNBIASED_VISUAL_RECOVERY_SCREENSHOT)writeFileSync(process.env.UNBIASED_VISUAL_RECOVERY_SCREENSHOT,(await win.webContents.capturePage()).toPNG());
   console.log('PASS: malformed HTML rejected, runtime failure preserves readable scene, empty output detected, healthy controls and asynchronous rendering work under the production sandbox/CSP.');
  }finally{win.destroy();clearTimeout(deadline);app.quit()}

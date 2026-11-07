@@ -1,3 +1,7 @@
+import { LiquidMenuSurface, useLiquidMenuPresence } from "./liquid-menu";
+import { MessageCircleMoreIcon } from "./message-circle-more-icon";
+import { ProjectIcon, PROJECT_ICON_PATHS } from "./project-icon";
+import { HomeDashboard } from "./home-dashboard";
 import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
 import { ImageGenerationPreview } from "./image-generation-preview";
 import { ImageLightbox, type ImageLightboxSource } from "./image-lightbox";
@@ -411,44 +415,6 @@ function mergePendingThreads(sidebar: SidebarData, pending: PendingThread[]): Si
 
 // Project identity: 8 colors + a compact icon set (Codex-style customizer).
 const PROJECT_COLORS = ["#E8E8E8", "#FF6B5E", "#FF9F43", "#FFD54F", "#66BB6A", "#42A5F5", "#AB7BF7", "#FF8AC2"];
-const PROJECT_ICON_PATHS: Record<string, React.ReactNode> = {
-  folder: <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9L9.2 3.9A2 2 0 0 0 7.5 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />,
-  code: <><path d="m8 8-4 4 4 4" /><path d="m16 8 4 4-4 4" /></>,
-  terminal: <><path d="m4 17 6-5-6-5" /><path d="M12 19h8" /></>,
-  book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" /></>,
-  pencil: <><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></>,
-  music: <><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></>,
-  palette: <><circle cx="13.5" cy="6.5" r=".5" /><circle cx="17.5" cy="10.5" r=".5" /><circle cx="8.5" cy="7.5" r=".5" /><circle cx="6.5" cy="12.5" r=".5" /><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.7-.7 1.7-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1.1a1.7 1.7 0 0 1 1.7-1.7H17a5 5 0 0 0 5-5c0-4.6-4.5-8.4-10-8.4Z" /></>,
-  flask: <><path d="M10 2v7.5L4.7 19a2 2 0 0 0 1.8 3h11a2 2 0 0 0 1.8-3L14 9.5V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>,
-  globe: <><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z" /></>,
-  plane: <><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2Z" /></>,
-  briefcase: <><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" /></>,
-  chart: <><path d="M3 3v16a2 2 0 0 0 2 2h16" /><path d="M7 16v-5" /><path d="M12 16V8" /><path d="M17 16v-3" /></>,
-  heart: <path d="M19 14c1.5-1.5 3-3.2 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.8 0-3 .5-4.5 2C10.5 3.5 9.3 3 7.5 3A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4 3 5.5l7 7Z" />,
-  star: <path d="m12 2 3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1Z" />,
-  wrench: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
-  paw: <><circle cx="11" cy="4" r="2" /><circle cx="18" cy="8" r="2" /><circle cx="4" cy="8" r="2" /><path d="M11 12a5 5 0 0 0-5 5c0 1.7 1.3 3 3 3 1 0 1.6-.5 2-1 .4.5 1 1 2 1 1.7 0 3-1.3 3-3a5 5 0 0 0-5-5Z" /></>,
-  brain: <><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44A2.5 2.5 0 0 1 4 17.5v-11A2.5 2.5 0 0 1 6.5 4 2.5 2.5 0 0 1 9.5 2Z" /><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44A2.5 2.5 0 0 0 20 17.5v-11A2.5 2.5 0 0 0 17.5 4 2.5 2.5 0 0 0 14.5 2Z" /></>,
-  leaf: <><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10Z" /><path d="M2 21c0-3 1.9-5.5 3.5-7" /></>,
-};
-function ProjectIcon({ icon, color, size = 16 }: { icon?: string; color?: string | null; size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color ?? "currentColor"}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={{ flexShrink: 0 }}
-    >
-      {PROJECT_ICON_PATHS[icon ?? "folder"] ?? PROJECT_ICON_PATHS.folder}
-    </svg>
-  );
-}
 
 type BillingResult =
   | {
@@ -829,7 +795,11 @@ declare global {
         worktrees: { dir: string; project: string; branch: string; kb: number }[];
         engineHomeKB: number;
       }>;
+      homeGithub: (input: import("../../shared/home-github").HomeGithubInput) => Promise<import("../../shared/home-github").HomeGithubResult>;
       readBilling: () => Promise<BillingResult>;
+      onConversationMetadata: (cb: (payload: { threadId: string }) => void) => () => void;
+      onHomeRecapProgress: (cb: (payload: { requestId: string; text: string }) => void) => () => void;
+      homeRecap: (sources: import("../../shared/home-recap").HomeRecapInput, requestId?: string) => Promise<import("../../shared/home-recap").HomeRecapResult>;
       listThreads: () => Promise<SidebarData>;
       searchThreads: (query: string, threads: { id: string; updatedAt?: string | number }[], includeSavedTranscripts?: boolean) => Promise<{ results: { id: string; snippet: string; title?: string }[]; failed: number }>;
       openThread: (id: string) => Promise<{
@@ -4761,6 +4731,7 @@ export function App() {
               />
             )
           }
+          homeDashboard={connected && !activeThreadId ? <HomeDashboard projects={sidebarView.projects} recents={sidebarView.recents} selectedProjectId={activeProjectId} running={runningThreads} readBilling={window.unbiased.readBilling} onOpenLink={openInBrowser} onOpenThread={id => void openThread(id)} onPick={text => setMainSeed({ text, nonce: seedNonceRef.current++ })} /> : undefined}
           draftSeed={mainSeed}
           composerHeader={
             // Only before the chat exists — once active, the header's
@@ -9311,6 +9282,7 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const mounted = useLiquidMenuPresence(open);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -9325,7 +9297,9 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
       const width = Math.min(360, window.innerWidth - 24);
       const above = bounds.top - 16;
       const below = window.innerHeight - bounds.bottom - 16;
-      const placeAbove = above >= 220 || above >= below;
+      // Home places its composer high; regular chats dock it at the bottom.
+      // Keep the menu on the roomier side, also while search changes its height.
+      const placeAbove = above >= below;
       const computed = getComputedStyle(ref.current!);
       const theme = Object.fromEntries(
         ["--panel", "--border", "--fg", "--dim", "--chip", "--accent"].map((key) => [key, computed.getPropertyValue(key)]),
@@ -9333,18 +9307,21 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
       setPosition({
         left: Math.max(12, Math.min(bounds.left, window.innerWidth - width - 12)),
         ...(placeAbove ? { bottom: window.innerHeight - bounds.top + 8 } : { top: bounds.bottom + 8 }),
-        maxHeight: Math.max(80, Math.min(360, placeAbove ? above : below)),
+        maxHeight: Math.max(40, Math.min(360, placeAbove ? above : below)),
         theme: { ...theme, fontFamily: computed.fontFamily },
       });
     };
     updatePosition();
+    const observer = new ResizeObserver(updatePosition);
+    if (menuRef.current) observer.observe(menuRef.current);
     window.addEventListener("resize", updatePosition);
     document.addEventListener("scroll", updatePosition, true);
     return () => {
+      observer.disconnect();
       window.removeEventListener("resize", updatePosition);
       document.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open]);
+  }, [open, projects.length]);
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
@@ -9373,12 +9350,14 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
   const showNone = !search || "none".includes(search);
   const selectedProject = projects.find((project) => project.id === selected?.id);
   return <span ref={ref} style={{ position: "relative", display: "flex", minWidth: 0, flexShrink: 0 }}>
-    <button type="button" title="Choose where this chat works" aria-label="Choose where this chat works" aria-expanded={open} aria-haspopup="dialog" disabled={disabled || busy} onClick={() => { setQuery(""); setError(null); setOpen((value) => !value); }} style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 220, padding: "3px 5px", border: 0, background: "transparent", color: selected ? colors.fg : colors.dim, fontSize: 13, fontFamily: "inherit", cursor: disabled || busy ? "default" : "pointer" }}>
-      {selected ? <ProjectIcon icon={selectedProject?.icon} color={selectedProject?.color} size={14} /> : <FolderOutlineIcon size={14} />}
+    <button type="button" className="u-liquid-menu-trigger" title="Choose where this chat works" aria-label="Choose where this chat works" aria-expanded={open} aria-haspopup="dialog" disabled={disabled || busy} onClick={() => { setQuery(""); setError(null); setOpen((value) => !value); }} style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 220, padding: "3px 5px", border: 0, background: "transparent", color: selected ? colors.fg : colors.dim, fontSize: 13, fontFamily: "inherit", cursor: disabled || busy ? "default" : "pointer" }}>
+      {selected ? <ProjectIcon icon={selectedProject?.icon} color={selectedProject?.color} size={14} /> : <ProjectIcon size={14} />}
       <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{selected?.name ?? "Choose a project"}</span>
       <ChevronDown size={13} />
     </button>
-    {open && createPortal(<div ref={menuRef} role="dialog" aria-label="Choose project" className="u-project-picker" style={{ ...position?.theme, visibility: position ? "visible" : "hidden", width: "min(360px, calc(100vw - 24px))", maxHeight: position?.maxHeight ?? 360, top: position?.top, bottom: position?.bottom, left: position?.left ?? 12 }}>
+    {mounted && createPortal(<div ref={menuRef} role="dialog" aria-label="Choose project" className="u-project-picker u-liquid-menu-shell" data-liquid-open={open} aria-hidden={!open} inert={!open} style={{ ...position?.theme, visibility: position ? "visible" : "hidden", width: "min(360px, calc(100vw - 24px))", maxHeight: position?.maxHeight ?? 360, top: position?.top, bottom: position?.bottom, left: position?.left ?? 12 }}>
+      <LiquidMenuSurface open={open} host={menuRef} anchor={ref} />
+      <div className="u-project-picker-ink u-liquid-menu-content">
       <div className="u-project-picker-search">
         <Search size={16} aria-hidden="true" />
         <input autoFocus aria-label="Search projects" placeholder="Search projects" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
@@ -9406,6 +9385,7 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
         <button type="button" className="u-project-picker-row" disabled={busy} onClick={() => { setOpen(false); onCreateProject(); }}><Plus size={18} aria-hidden="true" /><span>New project</span></button>
       </div>
       {error && <div role="alert" className="u-project-picker-error">{error}</div>}
+      </div>
     </div>, document.body)}
   </span>;
 }
@@ -9664,6 +9644,7 @@ function ChatPane({
   onTogglePlanMode,
   draftSeed,
   composerHeader,
+  homeDashboard,
   threadId,
   composerDrafts,
   mcpThreadId,
@@ -9719,6 +9700,7 @@ function ChatPane({
   draftSeed?: { text: string; nonce: number } | null;
   // Rendered above the composer box (the project/branch context strip).
   composerHeader?: React.ReactNode;
+  homeDashboard?: React.ReactNode;
   // The engine thread this pane shows (resumed threads); fresh chats learn
   // their id from the first send. Drives the transcript cache.
   threadId?: string | null;
@@ -9847,10 +9829,45 @@ function ChatPane({
   // Entry state for the + menu. See useEntryTransition: a mounted flag rather
   // than a keyframe, because this menu can be toggled fast.
   const plusShown = useEntryTransition(plusOpen);
+  const plusMounted = useLiquidMenuPresence(plusOpen);
   // The menu panel hangs off the composer box (full width), not the +
   // button, so outside-click must spare both.
   const plusRef = useRef<HTMLSpanElement>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!plusOpen) return;
+    const menu = plusMenuRef.current;
+    const composer = menu?.parentElement;
+    if (!menu || !composer) return;
+    // A top-layer surface escapes Home's scrolling container and Mosaic tiles.
+    // Measure the complete menu before choosing a side; constrain tall menus.
+    menu.showPopover();
+    const position = () => {
+      const rect = composer.getBoundingClientRect();
+      const margin = 8, gap = 8;
+      const width = Math.min(rect.width, window.innerWidth - margin * 2);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))}px`;
+      const above = Math.max(0, rect.top - gap - margin);
+      const below = Math.max(0, window.innerHeight - rect.bottom - gap - margin);
+      const height = (menu.querySelector<HTMLElement>(".u-composer-plus-ink")?.scrollHeight ?? menu.scrollHeight) + 2;
+      const down = above < height && (below >= height || below > above);
+      const available = down ? below : above;
+      menu.dataset.placement = down ? "bottom" : "top";
+      menu.style.maxHeight = `${available}px`;
+      menu.style.top = down ? `${rect.bottom + gap}px` : "auto";
+      menu.style.bottom = down ? "auto" : `${window.innerHeight - rect.top + gap}px`;
+      menu.style.transformOrigin = down ? "top left" : "bottom left";
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(composer); observer.observe(menu);
+    const scroll = (event: Event) => { if (!(event.target instanceof Node) || !menu.contains(event.target)) position(); };
+    window.addEventListener("resize", position);
+    document.addEventListener("scroll", scroll, true);
+    return () => { observer.disconnect(); window.removeEventListener("resize", position); document.removeEventListener("scroll", scroll, true); };
+  }, [plusOpen, serverCapabilities.web_search, serverCapabilities.image_generation]);
 
   useEffect(() => {
     if (!plusOpen) return;
@@ -11680,8 +11697,10 @@ function ChatPane({
         { key: "messages", label: "Messages + other", tokens: contextBreakdown.messageTokens, color: colors.accent },
       ]
     : [];
+  const showingHome = !!homeDashboard && entries.length === 0 && !busy && !compacting;
   return (
     <div
+      className={showingHome ? "home-chat-pane" : undefined}
       ref={paneRef}
       data-chat-pane-id={paneId}
       onDragEnter={onDragEnter}
@@ -11837,7 +11856,7 @@ function ChatPane({
         </div>
       )}
 
-      <div style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
+      <div className={showingHome ? "home-intro-slot" : undefined} style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column" }}>
         <div
           onMouseUp={handleMouseUp}
           onDoubleClick={handleMouseUp}
@@ -11867,7 +11886,7 @@ function ChatPane({
           style={{ flex: 1, minHeight: 0, position: "relative" }}
         >
           {entries.length === 0 && !busy && !compacting ? (
-            <div style={{ height: "100%", display: "grid", placeItems: "center" }}>{emptyState}</div>
+            <div style={showingHome ? undefined : { height: "100%", display: "grid", placeItems: "center" }}>{emptyState}</div>
           ) : (
             <Virtuoso
               key={reset.nonce}
@@ -11989,7 +12008,7 @@ function ChatPane({
         )}
       </div>
 
-      <div style={{ padding: "8px 16px 16px" }}>
+      <div className={showingHome ? "home-composer-slot" : undefined} style={{ padding: "8px 16px 16px" }}>
         {composerHeader}
         {queue.length > 0 && (
           <div style={{ maxWidth: 768, margin: "0 auto 8px", display: "flex", flexDirection: "column", gap: 6 }}>
@@ -12025,40 +12044,40 @@ function ChatPane({
             padding: "16px 18px 14px",
           }}
         >
-          {plusOpen && (
+          {plusMounted && (
             <div
               ref={plusMenuRef}
+              popover="manual"
               data-popover
+              aria-label="Add to chat"
+              className="u-composer-plus-menu u-liquid-menu-shell"
+              data-liquid-open={plusOpen && plusShown}
+              aria-hidden={!plusOpen}
+              inert={!plusOpen}
               style={{
-                position: "absolute",
-                bottom: "calc(100% + 8px)",
+                position: "fixed",
+                inset: "auto",
+                margin: 0,
+                boxSizing: "border-box",
+                overflow: "visible",
                 // Full composer width. Width on its own is what made this look
                 // sparse before — five short labels ragged across 700px — so
                 // the rows are given columns instead: a fixed icon gutter, a
                 // fixed label column, then descriptions all starting at the
                 // same x. Aligned columns are what makes a wide list read as
                 // structured rather than empty.
-                left: 0,
-                right: 0,
                 // Same surface as the composer box — Codex renders both at
                 // one elevation, not the popup a step lighter.
-                background: colors.panel,
-                border: `1px solid ${colors.border}`,
+                background: "transparent",
+                border: 0,
                 borderRadius: 14,
-                padding: 6,
+                padding: 0,
                 zIndex: 20,
-                boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
-                // Grows out of its trigger rather than its own centre, so the
-                // button and the menu read as one object. Starts at 0.96, not
-                // 0 — nothing in the real world appears from nothing.
-                transformOrigin: "bottom left",
-                opacity: plusShown ? 1 : 0,
-                transform: plusShown ? "scale(1)" : "scale(0.96)",
-                // 140ms: this menu is opened many times a day, and past about
-                // 200ms a frequently-used control starts to feel slow.
-                transition: "opacity 140ms var(--ease-out), transform 140ms var(--ease-out)",
+                boxShadow: "none",
               }}
             >
+              <LiquidMenuSurface open={plusOpen && plusShown} host={plusMenuRef} anchor={plusRef} corner={14} />
+              <div className="u-composer-plus-ink u-liquid-menu-content">
               <div
                 style={{
                   color: colors.dim,
@@ -12169,6 +12188,7 @@ function ChatPane({
                   onTogglePlanMode();
                 }}
               />
+              </div>
             </div>
           )}
           {slash.menu}
@@ -12425,6 +12445,7 @@ function ChatPane({
                   onClick={() => (plusOpen ? setPlusOpen(false) : void openPlusMenu())}
                   disabled={!connected}
                   title="Add"
+                  className="u-liquid-menu-trigger"
                   aria-label="Add"
                   aria-expanded={plusOpen}
                   style={{
@@ -12942,6 +12963,7 @@ function ChatPane({
           </div>
         </div>
       </div>
+      {showingHome && homeDashboard}
     </div>
   );
 }
@@ -18004,88 +18026,8 @@ function BrandMark({ size = 48 }: { size?: number } = {}) {
 
 /** Codex-style start page: brand mark, "What should we build in X?", and
  *  suggestion cards that seed the composer. */
-function StartPage({
-  projectName,
-  onPick,
-}: {
-  projectName: string | null;
-  onPick: (text: string) => void;
-}) {
-  const cards = [
-    {
-      icon: <TelescopeIcon />,
-      color: "var(--info)",
-      label: "Explore and understand code",
-      prompt: "Explore this codebase and explain how it works at a high level.",
-    },
-    {
-      icon: <HammerIcon />,
-      color: "var(--violet)",
-      label: "Build a new feature, app, or tool",
-      prompt: "Help me build a new feature: ",
-    },
-    {
-      icon: <ReviewIcon />,
-      color: colors.ok,
-      label: "Review code and suggest changes",
-      prompt: "Review the current changes and suggest improvements.",
-    },
-    {
-      icon: <BugIcon />,
-      color: colors.amber,
-      label: "Fix issues and failures",
-      prompt: "Help me find and fix issues or failing tests.",
-    },
-  ];
-  return (
-    <div style={{ textAlign: "center", padding: "0 24px" }}>
-      <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}>
-        <BrandMark size={32} />
-      </div>
-      <h1 style={{ fontSize: 26, fontWeight: 500, letterSpacing: -0.3, margin: 0, color: colors.fg }}>
-        {projectName ? (
-          <>
-            What should we build in{" "}
-            <span
-              style={{
-                // Keep the brand coral, with a readable variant for light profiles.
-                color: "var(--link)",
-                textDecoration: "underline dotted",
-                textUnderlineOffset: 7,
-                textDecorationColor: "var(--link)",
-              }}
-            >
-              {projectName}
-            </span>
-            <span style={{ color: "var(--link)" }}>?</span>
-          </>
-        ) : (
-          "What should we build?"
-        )}
-      </h1>
-      <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 30, flexWrap: "wrap" }}>
-        {cards.map((c) => (
-          <button
-            key={c.label}
-            onClick={() => onPick(c.prompt)}
-            style={{
-              width: 168,
-              textAlign: "left",
-              background: "transparent",
-              border: `1px solid ${colors.border}`,
-              borderRadius: 14,
-              padding: "14px 14px 16px",
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
-          >
-            <span style={{ color: c.color, display: "flex", marginBottom: 12 }}>{c.icon}</span>
-            <div style={{ fontSize: 13.5, color: colors.fg, lineHeight: 1.45 }}>{c.label}</div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+function StartPage({ projectName }: { projectName: string | null; onPick: (text: string) => void }) {
+  return <div className="home-heading"><div className="home-heading-label"><BrandMark size={22} />Your workspace, ready.</div><h1>{projectName ? <>What should we build in <span style={{ color: "var(--link)" }}>{projectName}</span>?</> : "What should we build?"}</h1></div>;
 }
 
 function TelescopeIcon() {
@@ -18611,7 +18553,7 @@ function ChatSearchDialog({
       label: thread.title,
       detail: projectName,
       snippet,
-      icon: <MessageSquare size={16} strokeWidth={1.8} />,
+      icon: <MessageCircleMoreIcon size={16} />,
       action: () => onOpenThread(thread.id),
     })),
     ...projects.map((project) => ({
@@ -18812,7 +18754,7 @@ function MosaicPreviewRow({
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", minWidth: 0, borderRadius: 8 }}>
-      <SidebarPreviewRow icon={<MessageSquare size={16} />} title={title} onClick={onFocus} />
+      <SidebarPreviewRow icon={<MessageCircleMoreIcon size={16} />} title={title} onClick={onFocus} />
       <button type="button" className="u-sidebar-icon-button" title={`Remove ${title} from Mosaic`} aria-label={`Remove ${title} from Mosaic`} onClick={onRemove} style={{ width: 30, height: 30, flexShrink: 0, display: "grid", placeItems: "center", border: 0, borderRadius: 8, background: "transparent", color: colors.dim, cursor: "pointer" }}>
         <CloseIcon size={15} />
       </button>
