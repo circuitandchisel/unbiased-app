@@ -26,6 +26,8 @@ Write for the person using the app, not the person who wrote the code.
 
 ### Fixed
 
+- **Visuals in hidden panes.** Generated visuals now become ready when their pane is revealed, even after a longer background load.
+
 - **Compact transcript spacing.** Replies and command rows use their earlier spacing while keeping scrolling steady.
 - **Keep side chats through Mosaic.** Returning to the same conversation restores its open side panel, draft and live reply. Reopening a closed side chat from browser Recents shows progress while it loads.
 - **Agent browser availability.** Dev and production use separate browser ports, and browser activity reopens a closed Agent browser panel. Hidden mirrors stop streaming until shown again.

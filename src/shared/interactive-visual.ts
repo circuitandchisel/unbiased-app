@@ -176,7 +176,11 @@ export function interactiveVisualDocument(source: string): string {
   }, { passive: false });
   addEventListener('DOMContentLoaded', () => {
     let lastHeight = -1;
+    let checkReadiness = () => {};
     const report = () => {
+      // A parent pane can become visible without mutating this document.
+      // ResizeObserver is also the signal to retry readiness after that reveal.
+      checkReadiness();
       const height = Math.ceil(document.body.scrollHeight);
       if (height === lastHeight) return;
       lastHeight = height;
@@ -203,19 +207,27 @@ export function interactiveVisualDocument(source: string): string {
     let visible = hasContent();
     parent.postMessage({ type: 'unbiased-visual-ready', hasContent: visible }, '*');
     if (!visible) {
-      const observer = new MutationObserver(() => {
-        if (!hasContent()) return;
-        visible = true; observer.disconnect();
-        parent.postMessage({ type: 'unbiased-visual-ready', hasContent: true }, '*');
-      });
+      let graceElapsed = false, emptyReported = false;
+      const observer = new MutationObserver(() => checkReadiness());
+      checkReadiness = () => {
+        if (visible) return;
+        if (hasContent()) {
+          visible = true; observer.disconnect();
+          parent.postMessage({ type: 'unbiased-visual-ready', hasContent: true }, '*');
+          return;
+        }
+        // Zero layout dimensions mean a hidden ancestor, not an empty scene.
+        const bounds = document.documentElement.getBoundingClientRect();
+        if (graceElapsed && !emptyReported && bounds.width > 0 && bounds.height > 0) {
+          emptyReported = true;
+          reportFailure('empty-render', 'The generated visual has no visible content.');
+        }
+      };
       observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
       // Permit asynchronous drawing, without delaying already-visible scenes.
       setTimeout(() => {
-        if (!visible && hasContent()) {
-          visible = true; observer.disconnect();
-          parent.postMessage({ type: 'unbiased-visual-ready', hasContent: true }, '*');
-        }
-        if (!visible) reportFailure('empty-render', 'The generated visual has no visible content.');
+        graceElapsed = true;
+        checkReadiness();
       }, 1000);
     }
   });
