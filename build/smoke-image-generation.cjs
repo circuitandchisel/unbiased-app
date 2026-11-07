@@ -50,11 +50,10 @@ function Fixture(){const [reset,setReset]=useState({entries:[{kind:'user',text:'
   await send('completed',{id:'image-one',source:'image-generation',status:'completed',screenshots:[{name:'Generated image',path:'/fixture/cow.png'}]});
   await until(`${ready}?.querySelector('img')?.naturalWidth>0`);
   assert.ok(Math.abs(await ev(`${ready}.getBoundingClientRect().height`)-before.height)<1,'completion keeps preview height stable');
-  await until(`${ready}.querySelector('canvas')!==null`);
   // Turn folding may remount the attachment. Its reveal survives outside Work.
   await ev(`window.qaEmit('onDelta',{paneId:'main',delta:'Here is your illustration.'});window.qaEmit('onTurnCompleted',{paneId:'main',status:'completed',narrated:false})`);
   await until(`document.querySelector('[aria-label="Generated images"] img')?.naturalWidth>0`);
-  await until(`document.querySelectorAll('[data-image-generation-preview] canvas').length===0`);
+  await until(`document.querySelector('[aria-label="Generated images"] [data-image-generation-reveal]:not([data-image-generation-reveal="pending"])')&&document.querySelectorAll('[data-image-generation-preview] canvas').length===0`);
   assert.equal(await ev('window.qaRevealTimeouts'),0,'the actual shader reveal completes without the safety timeout');
   assert.equal(await ev(`document.querySelectorAll('[aria-label="Open generated image"]').length`),1,'one durable generated image after folding');
   await ev(`document.querySelector('[aria-label="Open generated image"]').click()`);assert.equal(await ev(`window.qaOpened.path`),'/fixture/cow.png');
