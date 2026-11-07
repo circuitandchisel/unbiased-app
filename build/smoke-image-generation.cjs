@@ -87,7 +87,7 @@ function Fixture(){const [reset,setReset]=useState({entries:[{kind:'user',text:'
   const imageButton=`document.querySelector('[aria-label="Open generated image"]')`;
   await until(`getComputedStyle(${imageButton}).visibility==='visible'`);
   const scroll=await ev(`document.querySelector('[data-chat-pane-id="main"] [data-virtuoso-scroller]').scrollTop`);
-  await ev(`${imageButton}.focus();${imageButton}.click()`);
+  await ev(`${imageButton}.focus({preventScroll:true});${imageButton}.click()`);
   await until(`${expanded}?.querySelector('img')?.naturalWidth>0&&${expanded}.querySelector('img').getBoundingClientRect().width>300`);
   assert.equal(await ev(`${panel}.dataset.open`),'false','opening an image never opens the side panel');
   assert.ok(await ev(`${expanded}.getBoundingClientRect().width>window.innerWidth*.9`));
@@ -99,6 +99,7 @@ function Fixture(){const [reset,setReset]=useState({entries:[{kind:'user',text:'
   await ev(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`);
   await until(`!document.querySelector('.app-image-lightbox')`);
   await until(`document.activeElement===${imageButton}`);
+  await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
   assert.ok(Math.abs(await ev(`document.querySelector('[data-chat-pane-id="main"] [data-virtuoso-scroller]').scrollTop`)-scroll)<1);
   await ev(`document.querySelector('[title="Open side panel"]').click()`);await until(`${panel}?.dataset.open==='true'`);
   await ev(`${imageButton}.click()`);await until(`${expanded}?.querySelector('img')?.naturalWidth>0`);

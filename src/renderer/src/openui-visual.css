@@ -190,6 +190,12 @@
 }
 
 /* Image attachments share the Visualize top layer, toolbar and zoom variable. */
+.app-image-lightbox {
+  /* Stay out of flex layout even before promotion to the top layer. */
+  position: fixed;
+  inset: 0;
+}
+
 .app-generated-visual-viewport.app-image-lightbox:popover-open {
   width: calc(100vw - 32px);
   height: calc(100dvh - 32px);

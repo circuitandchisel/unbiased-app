@@ -1,6 +1,6 @@
 import { TranscriptRow, TranscriptSpacing } from "./transcript-row";
 import { ImageGenerationPreview } from "./image-generation-preview";
-import { ImageLightbox } from "./image-lightbox";
+import { ImageLightbox, type ImageLightboxSource } from "./image-lightbox";
 import { NO_SERVER_TOOLS, type ServerToolCapabilities, type ServerToolName } from "../../shared/server-tools";
 import { PromptHistory } from "./prompt-history";
 import { collectBrowserCaptures, type BrowserCapture } from "../../shared/browser-capture";
@@ -1814,7 +1814,7 @@ export function App() {
   const [sideOpen, setSideOpen] = useState(false);
   const sideOpenRef = useRef(sideOpen);
   sideOpenRef.current = sideOpen;
-  const [imageLightbox, setImageLightbox] = useState<{ name: string; path: string; returnFocus: HTMLElement | null } | null>(null);
+  const [imageLightbox, setImageLightbox] = useState<ImageLightboxSource | null>(null);
   const [sideHiddenForMosaic, setSideHiddenForMosaic] = useState(false);
   const sidePanelRef = useRef<HTMLDivElement>(null);
   // Side-chat tabs use distinct pane IDs; their engine threads are retained
@@ -3174,7 +3174,11 @@ export function App() {
 
   async function openImagePreview(a: { name: string; path: string }) {
     if (a.name === "Generated image") {
-      setImageLightbox({ ...a, returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null });
+      const origin = Array.from(document.querySelectorAll<HTMLElement>("[data-image-generation-path]"))
+        .find(node => node.dataset.imageGenerationPath === a.path && node.getClientRects().length)
+        ?.querySelector<HTMLButtonElement>("button") ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      const scroll = origin?.closest<HTMLElement>("[data-transcript-scroll], [data-virtuoso-scroller]");
+      setImageLightbox({ ...a, returnFocus: origin, scrollPosition: scroll ? { element: scroll, top: scroll.scrollTop } : null });
       return;
     }
     const result = await window.unbiased.readImage(a.path);
