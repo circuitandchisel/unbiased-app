@@ -87,3 +87,26 @@ test("a completed visual reserves its measured height while a remounted frame lo
     dom.window.close();
   }
 });
+
+test("revealing an ancestor asks an unready frame to recheck content without resize delivery", async () => {
+  const dom = new JSDOM("<!doctype html><section id='pane' style='display:none'><div id='root'></div></section>", { url: "http://localhost", pretendToBeVisual: true });
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, MutationObserver: dom.window.MutationObserver, IS_REACT_ACT_ENVIRONMENT: true });
+  Object.assign(dom.window, { unbiased: { registerVisual: async () => "about:blank" } });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  try {
+    await act(async () => root.render(<InteractiveHtmlVisual source="<div>Hidden scene</div>" />));
+    const pane = dom.window.document.getElementById("pane")!;
+    const frame = pane.querySelector<HTMLIFrameElement>('iframe[title="Interactive visual"]')!;
+    const messages: { type?: string }[] = [];
+    frame.contentWindow!.postMessage = (data: { type?: string }) => { messages.push(data); };
+    frame.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, bottom: 96, right: 320, width: pane.style.display === "none" ? 0 : 320, height: pane.style.display === "none" ? 0 : 96, toJSON: () => ({}) });
+    await act(async () => { pane.style.display = "block"; await new Promise(resolve => setTimeout(resolve, 0)); });
+    assert.ok(messages.some(message => message.type === "unbiased-visual-check-readiness"));
+    await act(async () => dom.window.dispatchEvent(new dom.window.MessageEvent("message", { source: frame.contentWindow, origin: "null", data: { type: "unbiased-visual-ready", hasContent: true } })));
+    messages.length = 0;
+    await act(async () => { pane.style.padding = "10px"; });
+    assert.equal(messages.length, 0, "ready frames stop observing ancestor attribute changes");
+  } finally {
+    await act(async () => root.unmount()); dom.window.close();
+  }
+});

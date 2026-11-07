@@ -40,7 +40,10 @@ const deadline=setTimeout(()=>{console.error('Visual recovery timed out');app.ex
    const nonce=randomBytes(16).toString('base64');
    return new Response(interactiveVisualPreviewDocument(nonce),{headers:{'Content-Type':'text/html','Content-Security-Policy':interactiveVisualPreviewCsp(nonce)}});
   }
-  const source=cases[url.pathname.slice(1)];
+  const name=url.pathname.slice(1);
+  // Model background-renderer behavior: recovering a revealed pane must not
+  // depend on resize notifications being delivered inside the sandbox.
+  const source=cases[name] && cases[name] + (name.startsWith('hidden') ? '<script>globalThis.ResizeObserver=class{observe(){}disconnect(){}};</script>' : '');
   return source?new Response(interactiveVisualDocument(source),{headers:{'Content-Type':'text/html','Content-Security-Policy':INTERACTIVE_VISUAL_CSP}}):new Response('Not found',{status:404});
  });
  const win=new BrowserWindow({show:false,width:1000,height:1500,webPreferences:{sandbox:true,nodeIntegration:false,backgroundThrottling:false}});

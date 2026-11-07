@@ -145,6 +145,7 @@ export function interactiveVisualDocument(source: string): string {
 <script>
   (() => {
   let expanded = false;
+  let checkReadiness = () => {};
   const reportFailure = (kind, detail) => {
     parent.postMessage({ type: 'unbiased-visual-error', kind, detail: String(detail || '').slice(0, 300) }, '*');
   };
@@ -152,6 +153,7 @@ export function interactiveVisualDocument(source: string): string {
   addEventListener('unhandledrejection', event => reportFailure('unhandled-rejection', event.reason));
   addEventListener('message', event => {
     if (event.source !== parent) return;
+    if (event.data?.type === 'unbiased-visual-check-readiness') { checkReadiness(); return; }
     if (event.data?.type === 'unbiased-visual-expanded') {
       expanded = event.data.expanded === true;
       return;
@@ -176,7 +178,6 @@ export function interactiveVisualDocument(source: string): string {
   }, { passive: false });
   addEventListener('DOMContentLoaded', () => {
     let lastHeight = -1;
-    let checkReadiness = () => {};
     const report = () => {
       // A parent pane can become visible without mutating this document.
       // ResizeObserver is also the signal to retry readiness after that reveal.
@@ -210,7 +211,7 @@ export function interactiveVisualDocument(source: string): string {
       let graceElapsed = false, emptyReported = false;
       const observer = new MutationObserver(() => checkReadiness());
       checkReadiness = () => {
-        if (visible) return;
+        if (visible || typeof document === 'undefined' || !document?.documentElement) return;
         if (hasContent()) {
           visible = true; observer.disconnect();
           parent.postMessage({ type: 'unbiased-visual-ready', hasContent: true }, '*');
