@@ -48,6 +48,8 @@ import { fileActionError, localFileForAction, saveLocalFileCopy } from "./file-a
 import { PetActivity, petTurnActivityKey } from "./pet-activity";
 import { clampPetPosition, initialPetPosition, PET_SCALES, petScale, petWindowSize, pointInPetWindow, type PetScale } from "./pet-layout";
 import { multiViewRecipients } from "./multi-view-routing";
+import { ConversationAccess } from "./conversation-access";
+import { isAccessMode, type AccessMode } from "../shared/access-mode";
 import { PET_NOTICE_DURATION_MS, PET_NOTICE_SIZE, latestPetResponse, petNoticeStackBounds, petResponseFirstLine } from "./pet-notice";
 import { savedPalSelection, type PalSelection } from "./pal-selection";
 import { shouldShowCompletedPetNotice } from "./pet-notice-visibility";
@@ -408,7 +410,6 @@ function dropSidePane(paneId: string): void {
       runningTurns.delete(threadId);
       petFinished(`turn:${threadId}`, "interrupted");
     }
-    threadAccessModes.delete(threadId);
   }
   delete panes[paneId];
   if (sideChatRecents.close(paneId)) {
@@ -449,10 +450,11 @@ function defaultChatDir(): string {
 // only in "ask" mode (auto and full already permit network work); attaching
 // to the user's own Chrome is gated in EVERY mode, because it hands the
 // agent their signed-in sessions rather than public pages.
-// The mode a thread STARTED under. codex takes approvalPolicy at thread/start,
-// so the browser gate must too — otherwise flipping the global toggle for one
-// conversation silently ungates a backgrounded one.
-const threadAccessModes = new Map<string, AccessMode>();
+const conversationAccessFile = join(app.getPath("userData"), "conversation-access.json");
+const conversationAccess = new ConversationAccess(readJson(conversationAccessFile, null));
+function saveConversationAccess(): void {
+  atomicJson(conversationAccessFile, conversationAccess.snapshot());
+}
 const browserNetGrants = new Set<string>();
 const browserConnectGrants = new Set<string>();
 const browserRuntime = new BrowserRuntimeClient({
@@ -1686,12 +1688,20 @@ const axRaised = new Map<string, string>();
  *  effect, so a second run after a refused grant opens it again. */
 let axSettingsOpened = false;
 
-/** The mode to gate a LOCAL desktop action by. threadAccessModes records what
- *  a thread started under, because codex fixes its own approvalPolicy at
- *  thread/start and cannot be changed after — but this app's own cards are not
- *  bound by that, and the pill the user just set is what they meant. */
+/** Local actions and engine turns use the same conversation-scoped choice.
+ * Side chats and sub-agents inherit their owning conversation's permissions. */
+function accessRootOf(root: string): string {
+  let id = root;
+  for (let hops = 0; hops < 16; hops++) {
+    const parent = subAgents.get(id)?.parent ?? sideChatRecents.forThread(id)?.parentThreadId;
+    if (!parent || parent === id) break;
+    id = parent;
+  }
+  return id;
+}
 function liveAccessMode(root: string): AccessMode {
-  return accessMode || threadAccessModes.get(root) || "ask";
+  const id = accessRootOf(root);
+  return id === "main" ? conversationAccess.defaultMode : conversationAccess.get(id);
 }
 
 /** Put back a raise that an approval card undid. Cheap when nothing was
@@ -2716,7 +2726,6 @@ function resetSubAgentState(): void {
   browserNetGrants.clear();
   axGrants.clear();
   browserConnectGrants.clear();
-  threadAccessModes.clear();
   void browserRuntime.request("session.reset", {}).catch(() => undefined);
 }
 
@@ -3103,8 +3112,6 @@ const projectContextSeen = new Map<string, string>();
 // User-selectable access mode (Codex-style). Applied to every new thread
 // AND sent as turn-level overrides, which per the protocol change "this
 // turn and subsequent turns" — so switching applies mid-conversation.
-type AccessMode = "ask" | "auto" | "full";
-let accessMode: AccessMode = "ask";
 
 const MODE_THREAD_POLICY: Record<AccessMode, { approvalPolicy: string; sandbox: string }> = {
   // NOT "untrusted": that policy forbids escalation outright — the model
@@ -3132,16 +3139,16 @@ const MODE_TURN_SANDBOX: Record<AccessMode, Record<string, unknown>> = {
   full: { type: "dangerFullAccess" },
 };
 
-function threadPolicy(): { approvalPolicy: string; sandbox: string } {
-  return MODE_THREAD_POLICY[accessMode];
+function threadPolicy(threadId?: string | null): { approvalPolicy: string; sandbox: string } {
+  return MODE_THREAD_POLICY[threadId ? liveAccessMode(threadId) : conversationAccess.defaultMode];
 }
 
 /** The turn's sandbox policy, worktree-aware: a git worktree's real repo
  *  data lives in the PARENT repo's .git, so without that as a writable
  *  root every `git commit`/`push` from a worktree conversation becomes
  *  an escalation prompt — defeating "Approve for me". */
-function turnSandbox(cwd: string | null): Record<string, unknown> {
-  const base = MODE_TURN_SANDBOX[accessMode];
+function turnSandbox(cwd: string | null, threadId: string): Record<string, unknown> {
+  const base = MODE_TURN_SANDBOX[liveAccessMode(threadId)];
   if (base.type !== "workspaceWrite" || !cwd) return base;
   const info = loadWorktrees()[cwd];
   if (!info) return base;
@@ -3585,7 +3592,7 @@ async function resumeParamsFor(id: string): Promise<Record<string, unknown>> {
   serverToolSessions.invalidate(id);
   return {
     threadId: id,
-    ...threadPolicy(),
+    ...threadPolicy(id),
     // A cold reopen can safely recover thread-private notes by ID. Project
     // memory still needs a known cwd; never substitute the previous chat's.
     developerInstructions: developerInstructionsFor(threadCwds.get(id) ?? null, id),
@@ -8043,6 +8050,7 @@ app.whenReady().then(async () => {
     if (!pane.threadId) {
       let started: { thread: { id: string } };
       const sideParentId = paneId.startsWith("side:") ? panes.main.threadId : null;
+      const startingAccessMode = sideParentId ? liveAccessMode(sideParentId) : conversationAccess.defaultMode;
       let startedCwd: string;
       const selectedProjectId = sideParentId ? threadProject(sideParentId, mainCwd)?.id ?? null : pendingProjectId;
       if (paneId.startsWith("side")) {
@@ -8072,7 +8080,7 @@ app.whenReady().then(async () => {
         );
         started = (await engine.request(target.method, {
           ...target.params,
-          ...threadPolicy(),
+          ...MODE_THREAD_POLICY[startingAccessMode],
           dynamicTools: await threadDynamicTools(serverCapabilities),
           developerInstructions: `${developerInstructionsFor(sideCwd, parentId)}\n\n` +
             "This is a side chat. Inherited parent history is background context, not an active task. " +
@@ -8099,7 +8107,7 @@ app.whenReady().then(async () => {
           }
         }
         started = (await engine.request("thread/start", {
-          ...threadPolicy(),
+          ...MODE_THREAD_POLICY[startingAccessMode],
           cwd,
           // Model-driven browser automation (agent-browser CLI), when
           // installed — the calls come back as item/tool/call requests.
@@ -8174,7 +8182,8 @@ app.whenReady().then(async () => {
           }),
         );
       }
-      threadAccessModes.set(started.thread.id, accessMode);
+      conversationAccess.set(startingAccessMode, started.thread.id);
+      saveConversationAccess();
       created = true;
       serverToolSessions.remember(pane.threadId!, serverCapabilities);
     }
@@ -8220,8 +8229,8 @@ app.whenReady().then(async () => {
       // Turn-level overrides apply "this turn and subsequent turns", so a
       // mode switched mid-conversation takes effect immediately. Plan mode
       // hard-forces read-only regardless of the access mode.
-      approvalPolicy: planMode ? "on-request" : threadPolicy().approvalPolicy,
-      sandboxPolicy: planMode ? { type: "readOnly" } : turnSandbox(turnCwd),
+      approvalPolicy: planMode ? "on-request" : threadPolicy(pane.threadId).approvalPolicy,
+      sandboxPolicy: planMode ? { type: "readOnly" } : turnSandbox(turnCwd, pane.threadId!),
     })) as { turn?: { id?: string } };
     if (paneId.startsWith("side:") && panes[paneId] !== pane) {
       if (result.turn?.id) void engine.request("turn/interrupt", { threadId: pane.threadId, turnId: result.turn.id }).catch(() => undefined);
@@ -8252,7 +8261,7 @@ app.whenReady().then(async () => {
         const cwd = threadCwds.get(p.threadId) ?? null;
         const result = await engine.request("turn/start", { threadId: p.threadId,
           input: [{ type: "text", text: CONTINUATION_INPUT }],
-          approvalPolicy: threadPolicy().approvalPolicy, sandboxPolicy: turnSandbox(cwd),
+          approvalPolicy: threadPolicy(p.threadId).approvalPolicy, sandboxPolicy: turnSandbox(cwd, p.threadId),
         }) as { turn?: { id?: string } };
         if (claim.signal.aborted || panes[p.paneId] !== pane || pane.threadId !== p.threadId) {
           if (result.turn?.id) await engine.request("turn/interrupt", { threadId: p.threadId, turnId: result.turn.id }).catch(() => {});
@@ -8879,18 +8888,24 @@ app.whenReady().then(async () => {
     };
   });
 
-  ipcMain.handle("policy:set-mode", (_e, mode: string) => {
-    if (mode === "ask" || mode === "auto" || mode === "full") accessMode = mode;
-    // The engine's own approvalPolicy is fixed at thread/start and cannot
-    // follow, but this app's local cards can and should: a user who sets Full
-    // access mid-conversation means it now, not in the next conversation.
-    // Clearing session grants with it, so tightening the mode really tightens.
-    if (accessMode === "ask") {
-      axGrants.clear();
-      browserNetGrants.clear();
-      browserConnectGrants.clear();
+  ipcMain.handle("policy:get-modes", (_e, threadIds: string[]) => {
+    if (!Array.isArray(threadIds) || !threadIds.every(id => typeof id === "string")) throw new Error("Invalid conversations");
+    for (const id of threadIds) liveAccessMode(id);
+    saveConversationAccess();
+    return conversationAccess.snapshot();
+  });
+  ipcMain.handle("policy:set-mode", (_e, mode: unknown, threadId?: string | null) => {
+    if (!isAccessMode(mode) || (threadId != null && (typeof threadId !== "string" || !threadId))) throw new Error("Invalid access mode");
+    const root = threadId ? accessRootOf(threadId) : null;
+    conversationAccess.set(mode, root);
+    saveConversationAccess();
+    // Tightening one conversation must not revoke another's session grants.
+    if (mode === "ask") {
+      for (const grants of [axGrants, browserNetGrants, browserConnectGrants]) {
+        for (const id of grants) if (accessRootOf(id) === (root ?? "main")) grants.delete(id);
+      }
     }
-    return { mode: accessMode };
+    return { mode };
   });
 
   ipcMain.handle("chat:interrupt", async (_e, paneId: PaneId) => {
@@ -11025,8 +11040,9 @@ app.whenReady().then(async () => {
       if (!dir) throw new Error("Could not create a worktree");
       cwd = dir;
     }
+    const startingAccessMode = oldId ? liveAccessMode(oldId) : conversationAccess.defaultMode;
     const started = (await engine.request("thread/start", {
-      ...threadPolicy(),
+      ...MODE_THREAD_POLICY[startingAccessMode],
       cwd,
       dynamicTools: await threadDynamicTools(),
       developerInstructions: developerInstructionsFor(cwd, null, project?.id ?? null),
@@ -11036,13 +11052,14 @@ app.whenReady().then(async () => {
     const id = started.thread.id;
     projectStore().assign(id, project?.id ?? null);
     threadCwds.set(id, cwd);
-    threadAccessModes.set(id, accessMode);
+    conversationAccess.set(startingAccessMode, id);
     ensurePane(`multi:${id}`).threadId = id;
     if (oldId) {
       delete panes[`multi:${oldId}`];
       threadCwds.delete(oldId);
-      threadAccessModes.delete(oldId);
+      conversationAccess.delete(oldId);
     }
+    saveConversationAccess();
     return { id, cwd, branch: loadWorktrees()[cwd]?.branch ?? null };
   });
 
@@ -12091,7 +12108,8 @@ app.whenReady().then(async () => {
     saveThreadMcp();
     browserNetGrants.delete(id);
     browserConnectGrants.delete(id);
-    threadAccessModes.delete(id);
+    conversationAccess.delete(id);
+    saveConversationAccess();
     bgStream.delete(id);
     heldApprovals.delete(id);
     heldErrors.delete(id);

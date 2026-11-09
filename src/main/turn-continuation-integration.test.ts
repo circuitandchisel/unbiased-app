@@ -27,7 +27,8 @@ function sendFixture(capabilities: ServerToolCapabilities = { web_search: false,
     screenshotToolsOffered: () => ({}), ax: null, ASK_USER_TOOL: { name: "ask_user" },
     offeredServerTools, browserToolsForAccount, COMPUTER_USE_TOOLS: [], SCHEDULE_TOOLS: [], MEMORY_TOOLS: [], CHECKPOINT_TOOLS: [], IMAGE_OUTLINE_TOOL: { name: "image_outline" },
     agentBrowserTools: async () => [{ name: "browser_search" }, { name: "browser_open" }, { name: "browser_side_open" }],
-    threadPolicy: () => ({ approvalPolicy: "on-request" }), turnSandbox: () => ({ type: "readOnly" }),
+    threadPolicy: (id: string) => { assert.equal(id, "chat"); return { approvalPolicy: "on-request" }; },
+    turnSandbox: (_cwd: string, id: string) => { assert.equal(id, "chat"); return { type: "readOnly" }; },
     engine: { request: async (method: string, params: any) => { calls.push({ method, params }); return { turn: { id: "user-turn" } }; } },
   };
   const toolsAt = source.indexOf("async function threadDynamicTools(");
@@ -93,7 +94,8 @@ function fixture(start?: () => Promise<unknown>) {
     win: { webContents: sender }, panes: { main: pane }, runningTurns: new Map(), planMode: false,
     lastStatus: { state: "connected" }, turnContinuation: guard, automaticTurnStarts: new Map(),
     pinTurnEnvironment: () => {}, turnEnvironments: { end: () => {} }, threadCwds: new Map([["chat", "/repo"]]),
-    threadPolicy: () => ({ approvalPolicy: "on-request" }), turnSandbox: () => ({ type: "readOnly" }), CONTINUATION_INPUT,
+    threadPolicy: (id: string) => { assert.equal(id, "chat"); return { approvalPolicy: "on-request" }; },
+    turnSandbox: (_cwd: string, id: string) => { assert.equal(id, "chat"); return { type: "readOnly" }; }, CONTINUATION_INPUT,
     engine: { request: async (method: string, params: any) => { calls.push({ method, params }); return method === "turn/start" ? start ? start() : { turn: { id: "auto-turn" } } : {}; } },
   };
   runInNewContext(transformSync(source.slice(startAt, endAt), { loader: "ts" }).code, context);
