@@ -65,8 +65,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: circuitandchisel/unbiased-app-engine
-          # Merged engine PR #17 pins app-server 0.1.6, allowing existing
-          # chats to receive newly eligible server-tool declarations.
+          # Merged engine PR #18 pins app-server 0.1.7 with malformed-tool-call
+          # recovery and the stable pareto model default.
           ref: 152686d223f50da8085ae8b3c5945acb4495380d
           token: ${{ steps.app-token.outputs.token }}
           path: unbiased-app-engine
