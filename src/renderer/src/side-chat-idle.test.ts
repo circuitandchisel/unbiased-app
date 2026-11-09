@@ -16,8 +16,10 @@ test("running turns stay open and completion starts a fresh idle window", () => 
   const tracker = new SideChatIdleTracker();
   tracker.use("side:1", 0);
   tracker.setBusy("side:1", true, 1);
+  assert.equal(tracker.isBusy("side:1"), true);
   assert.deepEqual(tracker.expired(SIDE_CHAT_IDLE_MS * 2), []);
   tracker.setBusy("side:1", false, SIDE_CHAT_IDLE_MS * 2);
+  assert.equal(tracker.isBusy("side:1"), false);
   assert.deepEqual(tracker.expired(SIDE_CHAT_IDLE_MS * 3 - 1), []);
   assert.deepEqual(tracker.expired(SIDE_CHAT_IDLE_MS * 3), ["side:1"]);
 });

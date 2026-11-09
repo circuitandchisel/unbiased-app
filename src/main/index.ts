@@ -418,9 +418,9 @@ function dropSidePane(paneId: string): void {
   }
 }
 
-function resetSidePanes(): void {
+function resetSidePanes(parentId?: string): void {
   for (const k of Object.keys(panes)) {
-    if (k.startsWith("side:")) dropSidePane(k);
+    if (k.startsWith("side:") && (!parentId || sideChatRecents.get(k)?.parentThreadId === parentId)) dropSidePane(k);
   }
 }
 
@@ -7656,7 +7656,7 @@ app.whenReady().then(async () => {
     conversationLineage.register(record.threadId, record.parentThreadId);
   }
   void pruneSideChatRecents();
-  app.on("before-quit", resetSidePanes);
+  app.on("before-quit", () => resetSidePanes());
   const sideChatHeartbeat = setInterval(() => {
     if (sideChatRecents.touchOpen()) saveSideChatRecents();
   }, 60_000);
@@ -8019,8 +8019,14 @@ app.whenReady().then(async () => {
     skillPath?: string;
     commandText?: string;
     userRequests?: string[];
+    parentThreadId?: string | null;
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
+    const sideParentAtSend = paneId.startsWith("side:")
+      ? sideChatRecents.get(paneId)?.parentThreadId ?? payload.parentThreadId ?? panes.main.threadId
+      : null;
+    if (sideParentAtSend !== null && typeof sideParentAtSend !== "string") throw new Error("Invalid side chat parent");
+    const sidePaneAtSend = paneId.startsWith("side:") ? ensurePane(paneId) : null;
     if (payload.userRequests !== undefined && (!Array.isArray(payload.userRequests) || !payload.userRequests.every(part => typeof part === "string"))) throw new Error("Invalid user request.");
     if (payload.serverTool !== undefined && !SERVER_TOOL_NAMES.includes(payload.serverTool)) throw new Error("This server tool is unavailable for your account or workload.");
     const serverCapabilitiesPending = serverTools.capabilities();
@@ -8044,21 +8050,22 @@ app.whenReady().then(async () => {
     const authScope = readJson<SignIn | null>(signInFile(),null);
     if (authScope?.owner && authScope.keyFingerprint === keyFingerprint(readStoredKey()?.key ?? "")) await verifiedOwner();
 
-    const pane = ensurePane(paneId);
+    const pane = sidePaneAtSend ?? ensurePane(paneId);
+    if (sidePaneAtSend && panes[paneId] !== pane) throw new Error("This side chat was closed while starting");
     const commandSourceCwd = !pane.threadId && paneId === "main" ? pendingCwd : null;
     let created = false;
     if (!pane.threadId) {
       let started: { thread: { id: string } };
-      const sideParentId = paneId.startsWith("side:") ? panes.main.threadId : null;
+      const sideParentId = sideParentAtSend;
       const startingAccessMode = sideParentId ? liveAccessMode(sideParentId) : conversationAccess.defaultMode;
       let startedCwd: string;
-      const selectedProjectId = sideParentId ? threadProject(sideParentId, mainCwd)?.id ?? null : pendingProjectId;
+      const selectedProjectId = sideParentId ? threadProject(sideParentId, threadCwds.get(sideParentId) ?? null)?.id ?? null : pendingProjectId;
       if (paneId.startsWith("side")) {
         const parentId = sideParentId;
         if (!parentId) throw new Error("Start a main chat before using a side chat");
-        const sideCwd = mainCwd ?? pendingCwd ?? defaultChatDir();
+        const sideCwd = threadCwds.get(parentId) ?? (panes.main.threadId === parentId ? mainCwd : null) ?? defaultChatDir();
         startedCwd = sideCwd;
-        const activeTurnId = parentId ? panes.main.turnId ?? runningTurns.get(parentId) ?? null : null;
+        const activeTurnId = runningTurns.get(parentId) ?? (panes.main.threadId === parentId ? panes.main.turnId : null);
         let lastFinishedTurnId: string | null = null;
         if (parentId && activeTurnId) {
           try {
@@ -8173,7 +8180,7 @@ app.whenReady().then(async () => {
       // this — cwd cannot tell /a/api from /b/api, and it has no worktree
       // knowledge at all — so the app declares it.
       if (learning?.isReady) {
-        const at = mainCwd ?? defaultChatDir();
+        const at = startedCwd;
         learning.observe(
           buildTaskMeta({
             threadId: started.thread.id,
@@ -10869,10 +10876,10 @@ app.whenReady().then(async () => {
     const targets = threads.filter((t) => projectStore().projectFor(t.id, t.cwd ?? null, worktrees)?.id === projectId);
     for (const t of targets) {
       await engine.request("thread/archive", { threadId: t.id });
+      resetSidePanes(t.id);
       if (panes.main.threadId === t.id) {
         panes.main.threadId = null;
         panes.main.turnId = null;
-        resetSidePanes();
       }
     }
     return { archived: targets.length };
@@ -10974,7 +10981,6 @@ app.whenReady().then(async () => {
       mainCwd = primary;
       panes.main.threadId = null;
       panes.main.turnId = null;
-      resetSidePanes();
       return { id, path: primary, name };
     },
   );
@@ -11011,7 +11017,6 @@ app.whenReady().then(async () => {
     mainCwd = project.primary;
     panes.main.threadId = null;
     panes.main.turnId = null;
-    resetSidePanes();
     return { id: project.id, path: project.primary, name: project.name };
   });
 
@@ -11145,8 +11150,7 @@ app.whenReady().then(async () => {
     if (changingConversation && (!panes.main.threadId || !panes[`multi:${panes.main.threadId}`])) settleLocalApprovals(panes.main.threadId);
     panes.main.threadId = id;
     panes.main.turnId = runningTurns.get(id) ?? null;
-    // Closing the previous context retains its side chats for recovery.
-    if (changingConversation) resetSidePanes();
+    // Side panes stay parked under their original parent while it is away.
     // Everything that happened while this thread was backgrounded: the
     // partial assistant stream, approval requests the agent is blocked
     // on, and a turn failure nobody saw. Held items are consumed here.
@@ -11213,7 +11217,6 @@ app.whenReady().then(async () => {
     mainTranscriptSession = null;
     panes.main.threadId = null;
     panes.main.turnId = null;
-    resetSidePanes();
     pendingCwd = cwd ?? null;
     mainCwd = cwd ?? null;
     return { ok: true };
@@ -12127,7 +12130,7 @@ app.whenReady().then(async () => {
     if (panes.main.threadId === id) {
       panes.main.threadId = null;
       panes.main.turnId = null;
-      resetSidePanes();
+      resetSidePanes(id);
     }
     return { ok: true };
   });

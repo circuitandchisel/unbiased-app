@@ -617,7 +617,7 @@ declare global {
         paneId: PaneId,
         text: string,
         attachments?: Attachment[],
-        options?: { computer?: boolean; visualize?: boolean; serverTool?: ServerToolName; skillPath?: string; commandText?: string; userRequests?: string[] },
+        options?: { computer?: boolean; visualize?: boolean; serverTool?: ServerToolName; skillPath?: string; commandText?: string; userRequests?: string[]; parentThreadId?: string | null },
       ) => Promise<{ turnId: string | null; threadId: string; created: boolean }>;
       continueUnfinished: (p: { paneId: string; threadId: string; token: string }) => Promise<{ ok: boolean }>;
       serverToolCapabilities: () => Promise<ServerToolCapabilities>;
@@ -1449,7 +1449,7 @@ export function App() {
       setActiveThreadId(null);
       setMainStarted(false);
       setMainReset((r2) => ({ entries: [], nonce: r2.nonce + 1 }));
-      resetSideView();
+      resetSideView(true);
       void refreshThreads();
       return;
     }
@@ -1519,6 +1519,7 @@ export function App() {
     if (kind === "archive") {
       await window.unbiased.archiveProjectChats(id);
       const archived = new Set(sidebar.projects.find((p) => p.id === id)?.threads.map((t) => t.id) ?? []);
+      for (const threadId of archived) discardSideSnapshot(threadId);
       setUnreadCompletedThreads((current) => new Set([...current].filter((id) => !archived.has(id))));
       // The active conversation may have just been archived.
       const wasActive = sidebar.projects.some(
@@ -1797,7 +1798,6 @@ export function App() {
   const sideRestorePendingRef = useRef(new Set<string>());
   const [sideChatRecovering, setSideChatRecovering] = useState<string[]>([]);
   const [sideContexts, setSideContexts] = useState<Record<string, string | null>>({});
-  const [sideNonce, setSideNonce] = useState(0);
   const sideChatIdleRef = useRef(new SideChatIdleTracker());
   useEffect(() => {
     let mounted = true;
@@ -2168,11 +2168,8 @@ export function App() {
     });
   }, []);
 
-  // The side chat is attached to the main conversation (it forks from it),
-  // so every main-context switch discards the side pane's transcript too —
-  // and any open file, which resolved against the previous conversation.
   // The side panel's composition belongs to the conversation it was built
-  // for — leaving and returning should find the same tabs. Snapshots are
+  // for — leaving parks its tabs without closing their sessions. Snapshots are
   // keyed by thread id; terminals are excluded (their PTYs die on unmount,
   // and a silently respawned shell is worse than a closed tab).
   const sidePanelSnapshots = useRef(
@@ -2184,6 +2181,11 @@ export function App() {
         filesTabs: number[];
         treeFiles: Record<number, OpenFileInfo | null>;
         reviewOpen: boolean;
+        sideChats: string[];
+        browserTabs: number[];
+        sideBrowserTabs: Record<number, SideBrowserTab>;
+        sideFrac: number;
+        tabOrder: Record<string, number>;
         // The Agent browser pane. It used to be the one side tab that was not
         // remembered per conversation, so switching away closed it: a chat
         // whose only pane was the browser failed the hasTabs check below, fell
@@ -2198,6 +2200,13 @@ export function App() {
   );
 
   const MAX_SIDE_SNAPSHOTS = 12;
+  function discardSideSnapshot(id: string): void {
+    const snap = sidePanelSnapshots.current.get(id);
+    if (!snap) return;
+    for (const paneId of snap.sideChats) closeSideChat(paneId);
+    for (const tabId of snap.browserTabs) if (!snap.sideBrowserTabs[tabId]?.controlled) closeBrowserTab(tabId);
+    sidePanelSnapshots.current.delete(id);
+  }
   function snapshotSideView(): void {
     if (!activeThreadId) return;
     // Each snapshot can hold several file contents, and conversations deleted
@@ -2205,9 +2214,11 @@ export function App() {
     // the least recently visited.
     sidePanelSnapshots.current.delete(activeThreadId);
     while (sidePanelSnapshots.current.size >= MAX_SIDE_SNAPSHOTS) {
-      const oldest = sidePanelSnapshots.current.keys().next().value;
+      const oldest = [...sidePanelSnapshots.current.keys()].find(key =>
+        !sidePanelSnapshots.current.get(key)!.sideChats.some(id => sideChatIdleRef.current.isBusy(id)),
+      );
       if (oldest === undefined) break;
-      sidePanelSnapshots.current.delete(oldest);
+      discardSideSnapshot(oldest);
     }
     sidePanelSnapshots.current.set(activeThreadId, {
       openAgents,
@@ -2215,11 +2226,18 @@ export function App() {
       filesTabs,
       treeFiles,
       reviewOpen,
+      sideChats: sideChatsRef.current,
+      browserTabs: browserTabsRef.current,
+      sideBrowserTabs: sideBrowserTabsRef.current,
+      sideFrac,
+      tabOrder: Object.fromEntries(tabKeys.map(key => [key, tabSeqRef.current.get(key) ?? 0])),
       agentMirrorOpen,
       panelMode,
       sideOpen,
     });
   }
+  const snapshotSideViewRef = useRef(snapshotSideView);
+  snapshotSideViewRef.current = snapshotSideView;
 
   /** Restore a conversation's saved side panel; false = nothing to restore. */
   function restoreSideView(id: string): boolean {
@@ -2230,10 +2248,8 @@ export function App() {
       snap.openFiles.length > 0 ||
       snap.filesTabs.length > 0 ||
       snap.reviewOpen ||
-      snap.agentMirrorOpen;
-    if (!hasTabs) return false;
-    setSideContexts({});
-    setSideNonce((n) => n + 1);
+      snap.agentMirrorOpen || snap.sideChats.length > 0 || snap.browserTabs.length > 0;
+    if (!hasTabs && !snap.sideOpen) return false;
     setSubAgentsList([]); // openThread refetches the live roster
     setTerminalTabs([]);
     setOpenAgents(snap.openAgents);
@@ -2241,20 +2257,30 @@ export function App() {
     setFilesTabs(snap.filesTabs);
     setTreeFiles(snap.treeFiles);
     setReviewOpen(snap.reviewOpen);
+    sideChatsRef.current = snap.sideChats;
+    setSideChats(snap.sideChats);
+    browserTabsRef.current = snap.browserTabs;
+    setBrowserTabs(snap.browserTabs);
+    sideBrowserTabsRef.current = snap.sideBrowserTabs;
+    setSideBrowserTabs(snap.sideBrowserTabs);
     setAgentMirrorOpen(snap.agentMirrorOpen);
     // A stale active key (e.g. a dropped terminal) falls back to the most
     // recent surviving tab via the strip's own effect.
     setPanelMode(snap.panelMode);
     setSideOpenPersisted(snap.sideOpen);
+    setSideFrac(snap.sideFrac);
+    for (const [key, order] of Object.entries(snap.tabOrder)) tabSeqRef.current.set(key, order);
     return true;
   }
 
-  /** Live terminal, side-chat and ordinary browser tabs close on conversation
-   *  changes. Controlled browsers are parked in their owning conversation. */
-  function resetSideView() {
-    setSideContexts({});
-    setSideChatRestores({});
-    setSideNonce((n) => n + 1);
+  /** Navigation parks sessions; explicit deletion/reset still closes them. */
+  function resetSideView(park = false) {
+    // A fresh, unsent chat has no owner key to restore these sessions under.
+    park = park && activeThreadId !== null;
+    if (!park) {
+      for (const id of sideChatsRef.current) closeSideChat(id);
+      if (activeThreadId) sidePanelSnapshots.current.delete(activeThreadId);
+    }
     setOpenFiles([]);
     setOpenAgents([]); // the agents belonged to the previous conversation
     setSubAgentsList([]);
@@ -2264,24 +2290,14 @@ export function App() {
     setReviewOpen(false); // the diff reviewed the previous conversation's cwd
     // Controlled tabs keep running in their owning conversation while it is away.
     for (const id of browserTabsRef.current) {
-      if (sideBrowserTabsRef.current[id]?.controlled) void window.unbiased.setBrowserVisible({ id, visible: false });
+      if (park || sideBrowserTabsRef.current[id]?.controlled) void window.unbiased.setBrowserVisible({ id, visible: false });
       else void window.unbiased.closeBrowser(id);
     }
     sideBrowserTabsRef.current = {};
     setSideBrowserTabs({});
     browserTabsRef.current = [];
     setBrowserTabs([]);
-    blankBrowserTabsRef.current.clear();
-    pendingBrowserUrlsRef.current.clear();
     setAgentMirrorOpen(false);
-    browserStatesRef.current = {};
-    setBrowserStates({});
-    lastRecordedBrowserUrl.current.clear();
-    // The main process closes these panes and retains their threads briefly.
-    for (const id of sideChatsRef.current) {
-      sideChatIdleRef.current.close(id);
-      void window.unbiased.resetSideChat(id);
-    }
     sideChatsRef.current = [];
     setSideChats([]);
     setPanelMode("launcher");
@@ -2300,12 +2316,13 @@ export function App() {
     snapshotSideView();
     await window.unbiased.detachThread(project?.id);
     if (openSeqRef.current !== seq) return;
+    snapshotSideViewRef.current();
     if (record) visit(project ? { kind: "project", id: project.id, path: project.path, name: project.name } : { kind: "home" });
     setActiveProject(project ?? null);
     setActiveThreadId(null);
     setMainStarted(false);
     setMainReset((r) => ({ entries: [], nonce: r.nonce + 1 }));
-    resetSideView();
+    resetSideView(true);
   }
 
   async function selectNewChatProject(project: ProjectSelection | null) {
@@ -2329,7 +2346,7 @@ export function App() {
     setActiveThreadId(null);
     setMainStarted(false);
     setMainReset((r) => ({ entries: [], nonce: r.nonce + 1 }));
-    resetSideView();
+    resetSideView(true);
     void refreshThreads(); // the project shows in the sidebar immediately
   }
 
@@ -2390,6 +2407,8 @@ export function App() {
     const stale = () => openSeqRef.current !== seq;
     const res = await window.unbiased.openThread(id);
     if (stale() || !res) return;
+    // Capture edits made while the destination history was loading.
+    snapshotSideViewRef.current();
     const sourceClock = readClock?.();
     const clock = sourceClock?.threadId === id && sourceClock.running && res.running ? sourceClock : null;
     setMultiOpen(false);
@@ -2427,7 +2446,7 @@ export function App() {
     // Returning from Mosaic refreshes the main transcript, but the same
     // conversation still owns its live side chats, drafts and panel layout.
     if (id !== activeThreadId) {
-      resetSideView();
+      resetSideView(true);
       restoreSideView(id);
     }
     // The engine may still be running spawns for this thread — pick up the
@@ -2464,7 +2483,7 @@ export function App() {
   }
 
   async function deleteThread(id: string) {
-    sidePanelSnapshots.current.delete(id);
+    discardSideSnapshot(id);
     await window.unbiased.deleteThread(id);
     setMultiIds((ids) => ids.filter((current) => current !== id));
     setPinnedThreads((current) => current.filter((t) => t.id !== id));
@@ -3223,6 +3242,7 @@ export function App() {
   // Closing a side chat frees its tab but retains its thread for two hours.
   function closeSideChat(id: string) {
     sideChatIdleRef.current.close(id);
+    for (const snap of sidePanelSnapshots.current.values()) snap.sideChats = snap.sideChats.filter(key => key !== id);
     setSideChats((cs) => cs.filter((x) => x !== id));
     setSideChatRestores((restores) => {
       const next = { ...restores };
@@ -3238,7 +3258,6 @@ export function App() {
   }
 
   useEffect(() => {
-    if (sideChats.length === 0) return;
     const closeIdleChats = () => {
       for (const id of sideChatIdleRef.current.expired()) closeSideChat(id);
     };
@@ -3253,6 +3272,18 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sideChats]);
+
+  // Keep parked composers mounted: their live reply, clock and unsent draft
+  // belong to the original parent, even while another chat is visible.
+  const retainedSideChats = new Map<string, string | null>();
+  const retainedBrowserTabs = new Set<number>();
+  for (const [parent, snap] of sidePanelSnapshots.current) {
+    if (parent === activeThreadId) continue;
+    for (const id of snap.sideChats) retainedSideChats.set(id, parent);
+    for (const id of snap.browserTabs) retainedBrowserTabs.add(id);
+  }
+  for (const id of sideChats) retainedSideChats.set(id, activeThreadId);
+  for (const id of browserTabs) retainedBrowserTabs.add(id);
 
   const connected = status.state === "connected";
   // The engine's list plus any thread it does not know about yet, so a chat
@@ -5466,13 +5497,13 @@ export function App() {
               />
             </div>
           )}
-          {browserTabs.map((id) => (
+          {[...retainedBrowserTabs].map((id) => (
             <div
               key={id}
               style={{
                 flex: 1,
                 minHeight: 0,
-                display: panelMode === `browser:${id}` ? "flex" : "none",
+                display: browserTabs.includes(id) && panelMode === `browser:${id}` ? "flex" : "none",
                 flexDirection: "column",
               }}
             >
@@ -5503,7 +5534,7 @@ export function App() {
               />
             </div>
           ))}
-          {sideChats.map((id) => (
+          {[...retainedSideChats].map(([id, parentId]) => (
           <div
             key={id}
             onPointerDown={() => sideChatIdleRef.current.use(id)}
@@ -5512,12 +5543,11 @@ export function App() {
             style={{
               flex: 1,
               minHeight: 0,
-              display: panelMode === id ? "flex" : "none",
+              display: sideChats.includes(id) && panelMode === id ? "flex" : "none",
               flexDirection: "column",
             }}
           >
           <ChatPane
-            key={sideNonce}
             paneId={id}
             canTypeToFocus={() => composerTypingAvailable && sideVisible && panelMode === id && typingPaneRef.current === id}
             connected={connected}
@@ -5526,15 +5556,15 @@ export function App() {
               ? { entries: sideChatRestores[id].entries, nonce: 1, sessionId: sideChatRestores[id].sessionId, offset: sideChatRestores[id].offset }
               : { entries: [], nonce: 0 }}
             persistTranscript
-            mcpThreadId={activeThreadId}
+            mcpThreadId={parentId}
             mcpPanelOpen={mcpOpen}
             contextChip={sideContexts[id] ?? null}
             onContextClear={() => setSideContexts((m) => ({ ...m, [id]: null }))}
             onPreviewImage={(a) => void openImagePreview(a)}
             onOpenLink={openInBrowser}
             onBusyChange={(busy) => sideChatIdleRef.current.setBusy(id, busy)}
-            accessMode={accessModeFor(activeThreadId)}
-            onAccessModeChange={changeAccessMode}
+            accessMode={accessModeFor(parentId)}
+            onAccessModeChange={(mode) => changeAccessMode(mode, parentId)}
             planMode={planMode}
             onTogglePlanMode={togglePlanMode}
             onOpenMcp={() => setMcpOpen(true)}
@@ -11035,7 +11065,7 @@ function ChatPane({
       // The wire message includes quoted excerpts. Only the composer and
       // user-authored comments express intent for automatic continuation.
       const userRequests = [q.text, ...(q.annotations ?? []).map(a => a.comment ?? "")].filter(s => s.trim());
-      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, serverTool: q.serverTool, skillPath: q.skillPath, commandText: q.commandText, userRequests });
+      const res = await window.unbiased.sendMessage(paneId, q.wire, q.attachments, { computer: q.computer, visualize: q.visualize, serverTool: q.serverTool, skillPath: q.skillPath, commandText: q.commandText, userRequests, ...(paneId.startsWith("side:") ? { parentThreadId: mcpThreadId } : {}) });
       threadIdRef.current = res.threadId;
       onThreadCreated?.(res.threadId, res.created, q.text);
     } catch (err) {

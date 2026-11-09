@@ -17,6 +17,7 @@ Write for the person using the app, not the person who wrote the code.
 - **Recover from malformed tool calls.** Invalid tool calls are blocked before execution, and Pareto gets a chance to correct them so work can continue.
 - **Security: Conversation permissions stay separate.** Changing approval settings in one Mosaic chat no longer changes the others. Each chat keeps its setting when reopened or viewed individually.
 - **Dialogs stay above the browser.** Skills, Connectors, and MCP dialogs no longer disappear behind the side browser. Closing a dialog restores the same browser tab without reloading it.
+- **Keep your side panel when switching chats.** Returning to a conversation restores its Side Chat, browser tabs, selected tab, and panel width, including unsent drafts and live side replies. A panel you deliberately close stays closed.
 
 ## 1.13.33 — November 6, 2026
 

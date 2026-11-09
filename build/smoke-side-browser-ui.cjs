@@ -91,6 +91,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await evaluate("document.querySelector('[title=\"Close side panel\"]').click()");
     await until(preview + '!==null');
     await until('!(' + active(-1) + ')');
+    await until("document.querySelector('[aria-label=\"Side panel\"]').getAnimations().every(animation=>animation.playState==='finished')");
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='openBrowser').length"), originalOpens, 'preview focuses and hides without reopening or reloading the native tab');
     const box = await evaluate(preview + '.getBoundingClientRect().toJSON()');
     win.webContents.debugger.attach('1.3');
@@ -157,6 +158,10 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-1'");
     await clickPreview(-2);
     await until("document.querySelector('[data-preview-front]').dataset.browserPreview==='-2'");
+    // Closing the side panel resizes the preview's parent. Measure the drag
+    // only after that layout transition finishes, so the 40px assertion
+    // measures pointer movement rather than movement plus pane animation.
+    await until("document.querySelector('[aria-label=\"Side panel\"]').getAnimations().every(animation=>animation.playState==='finished')");
     const beforeStackDrag = await evaluate("[...document.querySelectorAll('[data-browser-preview]')].map(b=>({id:b.dataset.browserPreview,x:b.getBoundingClientRect().x,y:b.getBoundingClientRect().y}))");
     const rearDrag = await evaluate("document.querySelector('[data-browser-preview=\"-5\"]').getBoundingClientRect().toJSON()");
     await pointer('mouseMoved',rearDrag.x+50,rearDrag.y+8);
@@ -203,7 +208,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='openBrowser'&&c[1]?.url).length"), 0, 'handoff does not reload the page');
     assert.equal(await evaluate("document.querySelector('[data-pane-id=main][role=textbox]').textContent"), 'Keep this unsent draft');
     await evaluate("window.qaEmit('onScheduledOpenRun',{threadId:'chat-two'})");
-    await until("window.qaCalls.some(c=>c[0]==='openThread'&&c[1]==='chat-two')&&!document.querySelector('[data-browser-host=\"-1\"]')");
+    await until("window.qaCalls.some(c=>c[0]==='openThread'&&c[1]==='chat-two')&&document.querySelector('[data-browser-host=\"-1\"]')?.offsetWidth===0");
     assert.equal(await evaluate("window.qaCalls.some(c=>c[0]==='closeBrowser'&&c[1]===-1)"), false, 'switching chats keeps controlled tabs alive');
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='setBrowserVisible'&&c[1].id===-1).at(-1)[1].visible"), false, 'old native page is hidden on chat switch');
     tab.help = {requestId:'request-two',message:'Please confirm the next step.'};
