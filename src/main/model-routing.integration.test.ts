@@ -54,16 +54,16 @@ createInterface({input: process.stdin}).on('line', line => {
 });
 
 // Opt-in local conformance check: real engine, isolated home, loopback API, no credentials or paid calls.
-test("real app-server resumes persisted user input on the fallback without duplicating it", { skip: !process.env.UNBIASED_TEST_APP_SERVER, timeout: 30000 }, async () => {
+test("real app-server retries pareto with persisted user input without duplicating it", { skip: !process.env.UNBIASED_TEST_APP_SERVER, timeout: 30000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "unbiased-routing-real-"));
   const requests: any[] = [];
   const server = createServer(async (req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/responses")) { res.writeHead(404); res.end(); return; }
     let body = ""; for await (const chunk of req) body += chunk;
     const request = JSON.parse(body); requests.push(request);
-    if (request.model === APP_MODEL) {
+    if (requests.length === 1) {
       res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: { type: "invalid_request_error", code: "model_not_found", message: "Preview model unavailable" } })); return;
+      res.end(JSON.stringify({ error: { type: "invalid_request_error", code: "model_not_found", message: "Model temporarily unavailable" } })); return;
     }
     const item = { type: "message", id: "msg_test", role: "assistant", status: "completed", content: [{ type: "output_text", text: "OK", annotations: [] }] };
     const response = { id: "resp_test", object: "response", model: FALLBACK_MODEL, status: "completed", output: [item], usage: { input_tokens: 20, output_tokens: 1, total_tokens: 21 } };

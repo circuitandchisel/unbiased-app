@@ -18,14 +18,14 @@ function fixture(send?: (method: string, params: Params, n: number) => Promise<u
   return { routing, calls, emitted };
 }
 
-test("conversation entry points explicitly request the preview, preserving other settings", async () => {
-  assert.equal(APP_MODEL, "pareto-26.10-preview");
+test("conversation entry points explicitly request pareto, preserving other settings", async () => {
+  assert.equal(APP_MODEL, "pareto");
   for (const method of ["thread/start", "thread/resume", "thread/fork", "turn/start"]) {
     const { routing, calls } = fixture();
-    const params = Object.freeze({ threadId: "thread", model: "pareto", config: { mcp_servers: {} }, approvalPolicy: "on-request" });
+    const params = Object.freeze({ threadId: "thread", model: "old-model", config: { mcp_servers: {} }, approvalPolicy: "on-request" });
     await routing.request(method, params);
     assert.deepEqual(calls[0].params, { ...params, model: APP_MODEL });
-    assert.equal(params.model, "pareto");
+    assert.equal(params.model, "old-model");
   }
 });
 
@@ -54,7 +54,7 @@ test("service errors qualify; auth, quota, context, local failures, and malforme
   assert(!canFallback({ message: "please retry model not found" }));
 });
 
-test("a failed preview turn continues once on pareto without duplicating input or one-shot context", async () => {
+test("a failed pareto turn continues once on pareto without duplicating input or one-shot context", async () => {
   const { routing, calls, emitted } = fixture();
   await routing.request("turn/start", {
     threadId: "thread", input: [{ type: "text", text: "Do the task" }],
@@ -75,7 +75,7 @@ test("a failed preview turn continues once on pareto without duplicating input o
   assert.equal(calls.length, 2, "the fallback cannot retry again");
   assert.equal(emitted.at(-1).params.turn.id, "turn-2");
   await routing.request("turn/start", { threadId: "thread", input: [] });
-  assert.equal(calls[2].params.model, APP_MODEL, "next user turn tries the preview again");
+  assert.equal(calls[2].params.model, APP_MODEL, "next user turn uses pareto");
 });
 
 test("all partial model output, tool activity, and approval requests disable automatic recovery", async () => {

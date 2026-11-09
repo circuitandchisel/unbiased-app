@@ -60,17 +60,17 @@ the embedded browser, the API key, and the child engine process.
 it spawns the engine, matches replies to requests, and forwards the
 engine's notifications onward.
 
-`src/main/model-routing.ts` explicitly selects `pareto-26.10-preview` for
+`src/main/model-routing.ts` explicitly selects `pareto` for
 thread creation, resume, fork, and every new turn. A saved conversation can
 retain an older model even after the supervisor's default changes, so new
 turns must carry the explicit model too.
 
-If a preview turn terminates with a service/transport failure before any
+If a turn terminates with a service/transport failure before any
 model output, reasoning, tool activity, or approval request, the app makes
-one continuation on the `pareto` alias. The engine has already saved the
+one continuation through the same `pareto` alias. The engine has already saved the
 user message; the continuation sends empty input rather than adding that
 message or its attachments twice. Approval, sandbox, and effort settings
-are preserved. A later user turn tries the preview again.
+are preserved. Later user turns also use `pareto`.
 
 Fallback is limited to structured connection/stream failures with HTTP
 404, 408, 500, 502, 503, or 504, a connection failure without an HTTP status,
