@@ -2851,7 +2851,7 @@ export function App() {
 
   // The browser is a native layer floating over the panel — it must hide
   // whenever its spot isn't showing: other tab active, panel closed, or
-  // Settings replacing the whole UI.
+  // an app dialog covering it (DOM z-index cannot cover a native view).
   // The Environment menu lives in the main pane and does not cover it.
   const selectedBrowserId = panelMode.startsWith("browser:") ? Number(panelMode.slice(8)) : null;
   const selectedBrowserUrl = selectedBrowserId !== null ? browserStates[selectedBrowserId]?.url : null;
@@ -2860,6 +2860,9 @@ export function App() {
     const clear =
       !showSettings &&
       !showChangelog &&
+      !skillsOpen &&
+      !connectorsPanelOpen &&
+      !mcpOpen &&
       !confirmDialog &&
       !fullAccessPrompt &&
       !branchSwitch &&
@@ -2893,7 +2896,7 @@ export function App() {
     };
     void sync();
     return () => { cancelled = true; };
-  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, imageLightbox, pageOpen]);
+  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, skillsOpen, connectorsPanelOpen, mcpOpen, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, imageLightbox, pageOpen]);
 
   function openSideChatTab(): string {
     if (sideChats.length >= MAX_TABS_PER_KIND) {
@@ -3354,7 +3357,7 @@ export function App() {
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && !(multiOpen && sideHiddenForMosaic) && (!pageOpen || multiOpen || panelMode === "agentmirror");
   const previewBrowserTabs = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-  const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
+  const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !skillsOpen && !connectorsPanelOpen && !mcpOpen && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
   const visibleThreadIds = authed !== "in" || showSettings || showChangelog ? []
     : multiOpen ? multiIds
       : !pageOpen && activeThreadId ? [activeThreadId] : [];

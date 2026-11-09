@@ -71,6 +71,20 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     const originalOpens = await evaluate("window.qaCalls.filter(c=>c[0]==='openBrowser').length");
     await evaluate(preview + '.click()'); await until(active(-1));
     await until('!' + preview);
+    // Native browser pages sit above every DOM z-index. Opening a composer
+    // dialog must hide the page, then restore the existing tab on dismissal.
+    for (const label of ['Skills', 'Connectors', 'MCP']) {
+      await evaluate("document.querySelector('[aria-label=\"Add\"]').click()");
+      const menuItem = `Array.from(document.querySelectorAll('.u-composer-plus-menu button')).find(b=>b.textContent.includes(${JSON.stringify(label)}))`;
+      await until(menuItem + '!==undefined');
+      await evaluate(menuItem + '.click()');
+      await until("Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='Close')");
+      await until("window.qaCalls.filter(c=>c[0]==='setBrowserVisible'&&c[1].id===-1).at(-1)?.[1].visible===false");
+      assert.equal(await evaluate('!!' + preview), false, label + ' also suppresses the floating browser preview');
+      await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Close').click()");
+      await until("window.qaCalls.filter(c=>c[0]==='setBrowserVisible'&&c[1].id===-1).at(-1)?.[1].visible===true");
+      assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='openBrowser').length"), originalOpens, label + ' restores without reopening or reloading');
+    }
     const capturesWhileVisible = await evaluate("window.qaCalls.filter(c=>c[0]==='previewSideBrowser').length");
     await new Promise(resolve => setTimeout(resolve, 750));
     assert.equal(await evaluate("window.qaCalls.filter(c=>c[0]==='previewSideBrowser').length"), capturesWhileVisible, 'preview capture stops while the actual page is visible');
