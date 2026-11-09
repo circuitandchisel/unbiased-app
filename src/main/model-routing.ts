@@ -1,5 +1,5 @@
-export const APP_MODEL = "pareto-26.10-preview";
-export const FALLBACK_MODEL = "pareto";
+export const APP_MODEL = "pareto";
+export const FALLBACK_MODEL = APP_MODEL;
 
 type Params = Record<string, unknown>;
 type Message = { method?: unknown; params?: unknown; [key: string]: unknown };

@@ -77,7 +77,8 @@ contextBridge.exposeInMainWorld("unbiased", {
   onThreadActivity: (cb: (p: unknown) => void) => subscribe("chat:thread-activity", cb),
   setVisibleChats: (threadIds: string[], paneIds: string[]) => ipcRenderer.send("pet:visible-chats", { threadIds, paneIds }),
 
-  setAccessMode: (mode: string) => ipcRenderer.invoke("policy:set-mode", mode),
+  setAccessMode: (mode: string, threadId?: string | null) => ipcRenderer.invoke("policy:set-mode", mode, threadId),
+  getAccessModes: (threadIds: string[]) => ipcRenderer.invoke("policy:get-modes", threadIds),
   setWorkMode: (mode: string, dir?: string) => ipcRenderer.invoke("workmode:set", { mode, dir }),
   setPlanMode: (on: boolean) => ipcRenderer.invoke("planmode:set", on),
   onPlan: (cb: (p: unknown) => void) => subscribe("chat:plan", cb),

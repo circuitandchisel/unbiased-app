@@ -67,7 +67,7 @@ jobs:
           repository: circuitandchisel/unbiased-app-engine
           # Merged engine PR #17 pins app-server 0.1.6, allowing existing
           # chats to receive newly eligible server-tool declarations.
-          ref: b54c68a26d016994b035fb7683ba2781b51e6eca
+          ref: 152686d223f50da8085ae8b3c5945acb4495380d
           token: ${{ steps.app-token.outputs.token }}
           path: unbiased-app-engine
 

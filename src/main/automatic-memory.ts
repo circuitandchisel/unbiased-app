@@ -1,3 +1,4 @@
+import { APP_MODEL } from "./model-routing";
 import { loadMemoryNotes, saveMemoryNote, validateMemory, type MemoryNote } from "./memory";
 
 type HistoryItem = { type?: string; role?: string; phase?: string | null; text?: string; content?: unknown };
@@ -86,7 +87,7 @@ export async function proposeAutomaticMemory(
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "pareto-26.10-preview",
+      model: APP_MODEL,
       store: false,
       stream: false,
       input: [

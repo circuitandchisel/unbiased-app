@@ -32,7 +32,7 @@ test("a durable fact yields a validated note with an exact evidence quote", asyn
   const fetcher = (async (_url: string, init?: RequestInit) => {
     calls++;
     if (calls === 2) {
-      assert.equal(JSON.parse(String(init?.body)).model, "pareto-26.10-preview");
+      assert.equal(JSON.parse(String(init?.body)).model, "pareto");
     }
     return new Response(JSON.stringify(calls === 1
       ? { answers: { durable: { noul: 0.81 } } }

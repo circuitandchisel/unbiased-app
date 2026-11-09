@@ -1,4 +1,5 @@
 import { LiquidMenuSurface, useLiquidMenuPresence } from "./liquid-menu";
+import type { AccessMode, AccessModesSnapshot } from "../../shared/access-mode";
 import { MessageCircleMoreIcon } from "./message-circle-more-icon";
 import { ProjectIcon, PROJECT_ICON_PATHS } from "./project-icon";
 import { HomeDashboard } from "./home-dashboard";
@@ -211,7 +212,6 @@ type DirEntry = { name: string; dir: boolean };
 type BrowserState = { id: number; url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean };
 // How agent actions get approved — maps to engine approvalPolicy+sandbox
 // pairs in the main process.
-type AccessMode = "ask" | "auto" | "full";
 const ACCESS_MODES: { id: AccessMode; name: string; desc: string; danger?: boolean }[] = [
   { id: "ask", name: "Ask for approval", desc: "Read-only — every command needs your approval" },
   { id: "auto", name: "Approve for me", desc: "Can edit project files and use the network; asks before writing elsewhere" },
@@ -634,7 +634,8 @@ declare global {
       ) => () => void;
       onThreadActivity: (cb: (p: { threadId: string; running: boolean; completed?: boolean }) => void) => () => void;
       setVisibleChats: (threadIds: string[], paneIds: string[]) => void;
-      setAccessMode: (mode: AccessMode) => Promise<{ mode: string }>;
+      setAccessMode: (mode: AccessMode, threadId?: string | null) => Promise<{ mode: string }>;
+      getAccessModes: (threadIds: string[]) => Promise<AccessModesSnapshot>;
       setWorkMode: (mode: string, dir?: string) => Promise<{ ok: boolean }>;
       setPlanMode: (on: boolean) => Promise<{ planMode: boolean }>;
       onPlan: (cb: (p: { paneId: PaneId; text: string }) => void) => () => void;
@@ -1821,35 +1822,48 @@ export function App() {
 
   useEffect(() => window.unbiased.onBrowserAnnotate((p) => setMainContext(p)), []);
 
-  // Access mode is app-global: persisted here, enforced in the main
-  // process (thread policies + per-turn overrides).
+  // The legacy preference is only the default for a new conversation.
+  // Existing conversations keep independent choices in the main process.
   const [accessMode, setAccessModeState] = useState<AccessMode>(() => {
     const stored = localStorage.getItem("accessMode");
     return stored === "auto" || stored === "full" ? stored : "ask";
   });
+  const [conversationAccessModes, setConversationAccessModes] = useState<Record<string, AccessMode>>({});
+  const accessModeFor = (id: string | null) => id ? conversationAccessModes[id] ?? accessMode : accessMode;
 
   useEffect(() => {
     void window.unbiased.setAccessMode(accessMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void window.unbiased.getAccessModes([...new Set([...multiIds, ...(activeThreadId ? [activeThreadId] : [])])]).then(snapshot => {
+      if (!cancelled && snapshot.threads) setConversationAccessModes(current => ({ ...snapshot.threads, ...current }));
+    });
+    return () => { cancelled = true; };
+  }, [multiIds, activeThreadId]);
+
   // Turning Full Access ON demands an explicit confirmation (capability
   // disclosure modal) — every other transition applies immediately.
-  const [fullAccessPrompt, setFullAccessPrompt] = useState(false);
+  const [fullAccessPrompt, setFullAccessPrompt] = useState<{ threadId: string | null } | null>(null);
 
   useEffect(() => {
     if (!fullAccessPrompt) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setFullAccessPrompt(false);
+      if (e.key === "Escape") setFullAccessPrompt(null);
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [fullAccessPrompt]);
 
-  function applyAccessMode(mode: AccessMode) {
-    localStorage.setItem("accessMode", mode);
-    setAccessModeState(mode);
-    void window.unbiased.setAccessMode(mode);
+  function applyAccessMode(mode: AccessMode, threadId: string | null) {
+    if (threadId) setConversationAccessModes(current => ({ ...current, [threadId]: mode }));
+    else {
+      localStorage.setItem("accessMode", mode);
+      setAccessModeState(mode);
+    }
+    void window.unbiased.setAccessMode(mode, threadId);
   }
 
   // Plan mode: research-and-propose, hard read-only. Session-scoped.
@@ -1862,12 +1876,12 @@ export function App() {
     });
   }
 
-  function changeAccessMode(mode: AccessMode) {
-    if (mode === "full" && accessMode !== "full") {
-      setFullAccessPrompt(true);
+  function changeAccessMode(mode: AccessMode, threadId: string | null = activeThreadId) {
+    if (mode === "full" && accessModeFor(threadId) !== "full") {
+      setFullAccessPrompt({ threadId });
       return;
     }
-    applyAccessMode(mode);
+    applyAccessMode(mode, threadId);
   }
 
   function setSideOpenPersisted(open: boolean) {
@@ -2851,7 +2865,7 @@ export function App() {
 
   // The browser is a native layer floating over the panel — it must hide
   // whenever its spot isn't showing: other tab active, panel closed, or
-  // Settings replacing the whole UI.
+  // an app dialog covering it (DOM z-index cannot cover a native view).
   // The Environment menu lives in the main pane and does not cover it.
   const selectedBrowserId = panelMode.startsWith("browser:") ? Number(panelMode.slice(8)) : null;
   const selectedBrowserUrl = selectedBrowserId !== null ? browserStates[selectedBrowserId]?.url : null;
@@ -2860,6 +2874,9 @@ export function App() {
     const clear =
       !showSettings &&
       !showChangelog &&
+      !skillsOpen &&
+      !connectorsPanelOpen &&
+      !mcpOpen &&
       !confirmDialog &&
       !fullAccessPrompt &&
       !branchSwitch &&
@@ -2893,7 +2910,7 @@ export function App() {
     };
     void sync();
     return () => { cancelled = true; };
-  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, imageLightbox, pageOpen]);
+  }, [browserTabs, selectedBrowserId, selectedBrowserHasPage, sideOpen, showSettings, showChangelog, skillsOpen, connectorsPanelOpen, mcpOpen, confirmDialog, fullAccessPrompt, branchSwitch, branchCreate, renameDialog, moveDialog, editProj, imageLightbox, pageOpen]);
 
   function openSideChatTab(): string {
     if (sideChats.length >= MAX_TABS_PER_KIND) {
@@ -3354,7 +3371,7 @@ export function App() {
    *  all (the mirror is already wired to the running task's thread). */
   const sideVisible = sideOpen && !(multiOpen && sideHiddenForMosaic) && (!pageOpen || multiOpen || panelMode === "agentmirror");
   const previewBrowserTabs = Object.values(sideBrowserTabs).filter(tab => tab.root === (activeThreadId ?? "main") && tab.controlled && tab.working && !tab.help).sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-  const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
+  const browserPreviewVisible = connected && authed === "in" && !pageOpen && !showSettings && !showChangelog && !skillsOpen && !connectorsPanelOpen && !mcpOpen && !confirmDialog && !fullAccessPrompt && !branchSwitch && !branchCreate && !renameDialog && !moveDialog && !editProj;
   const visibleThreadIds = authed !== "in" || showSettings || showChangelog ? []
     : multiOpen ? multiIds
       : !pageOpen && activeThreadId ? [activeThreadId] : [];
@@ -4303,7 +4320,7 @@ export function App() {
               threads={mosaicChats}
               width={windowWidth - (navOpen ? sidebarWidth : NAV_RAIL_WIDTH)}
               connected={connected}
-              accessMode={accessMode}
+              accessModeFor={accessModeFor}
               onAccessModeChange={changeAccessMode}
               planMode={planMode}
               onTogglePlanMode={togglePlanMode}
@@ -5085,7 +5102,7 @@ export function App() {
           onOpenFile={(p) => void openFileInPanel(p)}
           onPreviewImage={(a) => void openImagePreview(a)}
           onOpenLink={openInBrowser}
-          accessMode={accessMode}
+          accessMode={accessModeFor(activeThreadId)}
           onAccessModeChange={changeAccessMode}
         />
           </>
@@ -5516,7 +5533,7 @@ export function App() {
             onPreviewImage={(a) => void openImagePreview(a)}
             onOpenLink={openInBrowser}
             onBusyChange={(busy) => sideChatIdleRef.current.setBusy(id, busy)}
-            accessMode={accessMode}
+            accessMode={accessModeFor(activeThreadId)}
             onAccessModeChange={changeAccessMode}
             planMode={planMode}
             onTogglePlanMode={togglePlanMode}
@@ -5854,7 +5871,7 @@ export function App() {
       {fullAccessPrompt && (
         <div
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setFullAccessPrompt(false);
+            if (e.target === e.currentTarget) setFullAccessPrompt(null);
           }}
           style={{
             position: "fixed",
@@ -5935,7 +5952,7 @@ export function App() {
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 20 }}>
               <button
-                onClick={() => setFullAccessPrompt(false)}
+                onClick={() => setFullAccessPrompt(null)}
                 style={{
                   background: "var(--chip)",
                   border: "none",
@@ -5951,8 +5968,8 @@ export function App() {
               </button>
               <button
                 onClick={() => {
-                  setFullAccessPrompt(false);
-                  applyAccessMode("full");
+                  setFullAccessPrompt(null);
+                  applyAccessMode("full", fullAccessPrompt.threadId);
                 }}
                 style={{
                   display: "flex",
@@ -9197,7 +9214,7 @@ function useEntryTransition(open = true): boolean {
 type LiveTurnClock = { threadId: string | null; running: boolean; startedAt: number | null; elapsedSeconds: number };
 type LiveTurnClockReader = () => LiveTurnClock | null;
 
-function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, threads, width, connected, accessMode, onAccessModeChange, planMode, onTogglePlanMode, onAdd, onCreate, onOpenChat, onRemove, onCreateProject, onFreshTurnLanded, onSelectFreshEnvironment, onTurnLanded, onOpenFile, onPreviewImage, onOpenLink, onOpenMcp, onOpenConnectors, onOpenSkills }: {
+function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, threads, width, connected, accessModeFor, onAccessModeChange, planMode, onTogglePlanMode, onAdd, onCreate, onOpenChat, onRemove, onCreateProject, onFreshTurnLanded, onSelectFreshEnvironment, onTurnLanded, onOpenFile, onPreviewImage, onOpenLink, onOpenMcp, onOpenConnectors, onOpenSkills }: {
   ids: string[];
   freshIds: Set<string>;
   freshProjects: Record<string, ProjectSelection | null>;
@@ -9207,8 +9224,8 @@ function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, 
   threads: ThreadSummary[];
   width: number;
   connected: boolean;
-  accessMode: AccessMode;
-  onAccessModeChange: (mode: AccessMode) => void;
+  accessModeFor: (id: string) => AccessMode;
+  onAccessModeChange: (mode: AccessMode, id: string) => void;
   planMode: boolean;
   onTogglePlanMode: () => void;
   onAdd: (id: string) => void;
@@ -9244,7 +9261,7 @@ function MultiView({ ids, freshIds, freshProjects, freshWork, drafts, projects, 
         <MosaicEmptyState onCreate={onCreate} />
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "grid", gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(${rows === 1 ? 0 : 420}px, 1fr))`, gap: 6, padding: 6 }}>
-          {ids.map((id, index) => <MultiViewTile key={id} id={id} columnSpan={columnSpans[index]} fresh={freshIds.has(id)} project={freshProjects[id] ?? null} work={freshWork[id]} projects={projects} drafts={drafts.get(id)} onSelectEnvironment={(project, mode, dir) => onSelectFreshEnvironment(id, project, mode, dir)} onCreateProject={() => onCreateProject(id)} title={threads.find((thread) => thread.id === id)?.title ?? "New chat"} connected={connected} accessMode={accessMode} onAccessModeChange={onAccessModeChange} planMode={planMode} onTogglePlanMode={onTogglePlanMode} onOpenChat={(readClock) => onOpenChat(id, readClock)} onRemove={() => onRemove(id)} onTurnLanded={() => { onTurnLanded(); if (freshIds.has(id)) onFreshTurnLanded(id); }} onOpenFile={onOpenFile} onPreviewImage={onPreviewImage} onOpenLink={onOpenLink} onOpenMcp={onOpenMcp} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />)}
+          {ids.map((id, index) => <MultiViewTile key={id} id={id} columnSpan={columnSpans[index]} fresh={freshIds.has(id)} project={freshProjects[id] ?? null} work={freshWork[id]} projects={projects} drafts={drafts.get(id)} onSelectEnvironment={(project, mode, dir) => onSelectFreshEnvironment(id, project, mode, dir)} onCreateProject={() => onCreateProject(id)} title={threads.find((thread) => thread.id === id)?.title ?? "New chat"} connected={connected} accessMode={accessModeFor(id)} onAccessModeChange={(mode) => onAccessModeChange(mode, id)} planMode={planMode} onTogglePlanMode={onTogglePlanMode} onOpenChat={(readClock) => onOpenChat(id, readClock)} onRemove={() => onRemove(id)} onTurnLanded={() => { onTurnLanded(); if (freshIds.has(id)) onFreshTurnLanded(id); }} onOpenFile={onOpenFile} onPreviewImage={onPreviewImage} onOpenLink={onOpenLink} onOpenMcp={onOpenMcp} onOpenConnectors={onOpenConnectors} onOpenSkills={onOpenSkills} />)}
         </div>
       )}
     </div>

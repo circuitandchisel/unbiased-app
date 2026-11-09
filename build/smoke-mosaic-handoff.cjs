@@ -12,14 +12,16 @@ const deadline=setTimeout(()=>{console.error('Mosaic handoff timed out');app.exi
  const css=[];
  const bundled=await build({stdin:{resolveDir:process.cwd(),loader:'tsx',contents:`
 import React from 'react';import {createRoot} from 'react-dom/client';import {App} from './src/renderer/src/App';
-localStorage.setItem('unbiased.authed','1');localStorage.setItem('multiViewChats',JSON.stringify(['chat-one','chat-two']));
-window.qaNow=Date.now();Date.now=()=>window.qaNow;window.qaRunning={};window.qaStream={};window.qaApproval={};window.qaCalls=[];window.qaListeners=new Map();
+localStorage.setItem('accessMode','full');localStorage.setItem('unbiased.authed','1');localStorage.setItem('multiViewChats',JSON.stringify(['chat-one','chat-two']));
+window.qaModes={defaultMode:'full',threads:{'chat-one':'full','chat-two':'full'}};window.qaNow=Date.now();Date.now=()=>window.qaNow;window.qaRunning={};window.qaStream={};window.qaApproval={};window.qaCalls=[];window.qaListeners=new Map();
 window.qaEmit=(name,payload)=>{for(const cb of window.qaListeners.get(name)??[])cb(payload)};
 const base=[{kind:'user',text:'Earlier prompt'},{kind:'assistant',text:'Earlier completed answer.'}];
 const snapshot=id=>{const approval=window.qaApproval[id];const entries=window.qaRunning[id]?[...base,{kind:'user',text:'Current request for '+id},...(approval?[{kind:'command',itemId:'qa-command',command:approval.command,status:'awaitingApproval',approval}]:[])]:base;return {id,entries,total:entries.length,offset:0,sessionId:'session-'+id,running:!!window.qaRunning[id],streamText:window.qaStream[id]??'',approvals:approval?[approval]:[],userInputs:[],runningTurnStart:window.qaRunning[id]?3:null,runningTurnStartedAt:window.qaRunning[id]?window.qaNow-45000:null}};
 window.unbiased=new Proxy({}, {get:(_,key)=>{
  if(String(key).startsWith('on'))return cb=>{const set=window.qaListeners.get(key)??new Set();set.add(cb);window.qaListeners.set(key,set);return()=>set.delete(cb)};
  return async(...args)=>{window.qaCalls.push([key,...args]);${homeApiFixture}
+ if(key==='getAccessModes')return window.qaModes;
+ if(key==='setAccessMode'){if(args[1])window.qaModes.threads[args[1]]=args[0];else window.qaModes.defaultMode=args[0];return {mode:args[0]}}
  if(key==='recentSideChats')return [];if(key==='getEngineStatus')return {state:'connected'};
  if(key==='sideBrowserTabs')return {root:args[0],tabs:[]};if(key==='contextUsage')return {usage:null};
  if(key==='liveApprovals')return {requestIds:['qa-approval']};if(key==='liveUserInputs')return {requestIds:[]};if(key==='subagentsList')return {agents:[]};
@@ -47,6 +49,29 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  await win.loadFile(html);await until(`window.qaListeners.get('onPetNoticeOpenThread')?.size>0`);
  await ev(`window.qaEmit('onPetNoticeOpenThread',{threadId:'chat-one'})`);await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('Earlier completed answer.')`);
  await ev(`window.qaRunning['chat-one']=true`);await mosaic();
+ const pill=id=>`document.querySelector('[data-mosaic-chat-id="${id}"] [title="How should Pareto actions be approved?"]')`;
+ const chooseMode=async(id,label)=>{
+   await ev(pill(id)+'.click()');
+   await ev(`Array.from(document.querySelectorAll('[data-mosaic-chat-id="${id}"] button')).find(b=>b.textContent.trim().startsWith(${JSON.stringify(label)})).click()`);
+ };
+ await until(pill('chat-one')+"?.textContent.includes('Full access')");
+ await chooseMode('chat-one','Approve for me');
+ await until(pill('chat-one')+".textContent.includes('Approve for me')");
+ assert.ok(await ev(pill('chat-two')+".textContent.includes('Full access')"),'changing one tile leaves its neighbor untouched');
+ assert.ok(await ev(`window.qaCalls.some(c=>c[0]==='setAccessMode'&&c[1]==='auto'&&c[2]==='chat-one')`),'IPC targets the chosen conversation');
+ await chooseMode('chat-two','Ask for approval');
+ assert.ok(await ev(pill('chat-one')+".textContent.includes('Approve for me')"));
+ await chooseMode('chat-two','Full access');
+ await until(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='Confirm')`);
+ assert.ok(await ev(pill('chat-two')+".textContent.includes('Ask for approval')"),'Full access needs confirmation');
+ await ev(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Cancel').click()`);
+ assert.equal(await ev(`window.qaModes.threads['chat-two']`),'ask');
+ await chooseMode('chat-two','Full access');
+ await until(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='Confirm')`);
+ await ev(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Confirm').click()`);
+ await until(pill('chat-two')+".textContent.includes('Full access')");
+ assert.ok(await ev(pill('chat-one')+".textContent.includes('Approve for me')"),'confirmation changes its captured tile rather than the active main chat');
+ await chooseMode('chat-two','Ask for approval');
  // The main pane is still mounted but hidden. A turn begun in Mosaic must
  // carry its stream and clock when returning to that SAME selected thread.
  await pause(100);await ev(`window.qaNow+=28000`);await pause(150);
@@ -56,6 +81,7 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  assert.equal(await ev(`!!document.querySelector('[data-mosaic-chat-id="chat-one"]')`),true,'source stays mounted during handoff');
  await ev(`window.qaNow+=1000;window.qaStream['chat-one']+=' Tail received while opening.';for(const paneId of ['main','multi:chat-one'])window.qaEmit('onDelta',{paneId,delta:' Tail received while opening.'});window.qaReleaseOpen();window.qaHoldOpen=false`);
  await until(`!document.querySelector('[data-mosaic-chat-id]')`);
+ assert.ok(await ev(`document.querySelector('[data-chat-pane-id="main"] [title="How should Pareto actions be approved?"]').textContent.includes('Approve for me')`),'individual view retains the conversation permission');
  await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('1m 14s')`);
  assert.ok((await mainText()).includes('Partial reply from Mosaic. Tail received while opening.'));
  // The elapsed display updates on an interval. Wait for its observable
@@ -91,6 +117,6 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('thinking… 3s')`);
  assert.deepEqual(errors,[]);
  fs.writeFileSync(join(fixture,'handoff.png'),(await win.webContents.capturePage()).toPNG());
- console.log('PASS: same-thread Mosaic handoff refreshes live state; source stays mounted during load; in-flight text and subsequent deltas survive; thinking-only and paused-approval clocks carry over; mirrored starts initialize timing. Artifacts: '+fixture);
+ console.log('PASS: independent tile permissions, scoped Full Access confirmation and permission handoff; same-thread Mosaic handoff refreshes live state; source stays mounted during load; in-flight text and subsequent deltas survive; thinking-only and paused-approval clocks carry over; mirrored starts initialize timing. Artifacts: '+fixture);
  }finally{win.destroy();clearTimeout(deadline);app.quit()}
 })().catch(error=>{console.error(error);app.exit(1)});
