@@ -162,16 +162,16 @@ jobs:
             echo "::error::the packaged bridge did not answer hello"; exit 1; }
           echo "bridge shipped and answers: $bin"
 
-      - name: verify the preview Pareto engine shipped
+      - name: verify the Pareto engine shipped
         working-directory: unbiased-app
         run: |
           bin="release/mac-arm64/Unbiased.app/Contents/Resources/engine/unbiased-app-engine"
           [ -x "$bin" ] || { echo "::error::$bin missing from the packaged app"; exit 1; }
-          strings "$bin" | grep -q 'model = "pareto-26.10-preview"' || {
-            echo "::error::packaged engine is not configured for pareto-26.10-preview"; exit 1; }
-          strings "$bin" | grep -q 'model_context_window = 1048576' || {
+          strings "$bin" | grep -F 'model = "pareto"' > /dev/null || {
+            echo "::error::packaged engine is not configured for pareto"; exit 1; }
+          strings "$bin" | grep -F 'model_context_window = 1048576' > /dev/null || {
             echo "::error::packaged engine does not declare the 1M context window"; exit 1; }
-          echo "preview Pareto engine shipped: $bin"
+          echo "Pareto engine shipped: $bin"
 
       - name: checksums
         working-directory: unbiased-app/release

@@ -6,7 +6,7 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
-## 1.13.34 — November 9, 2026
+## 1.13.35 — November 9, 2026
 
 ### Improved
 
