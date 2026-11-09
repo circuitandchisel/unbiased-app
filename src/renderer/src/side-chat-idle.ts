@@ -20,6 +20,8 @@ export class SideChatIdleTracker {
     this.busy.delete(id);
   }
 
+  isBusy(id: string): boolean { return this.busy.has(id); }
+
   expired(now = Date.now()): string[] {
     return [...this.lastUsed].filter(([id, lastUsed]) =>
       !this.busy.has(id) && now - lastUsed >= SIDE_CHAT_IDLE_MS,

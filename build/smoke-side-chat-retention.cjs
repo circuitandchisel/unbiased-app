@@ -40,9 +40,16 @@ async function checkMainNavigation() {
     assert.ok(!calls.some(call => call === 'reset' || call.startsWith('settle:')), 'same parent leaves approvals and side turn intact');
     assert.equal(calls[0], running ? 'thread/read' : 'thread/resume');
     await open(null, 'chat-two');
-    assert.equal(state.panes['side:live'], undefined, 'different parent closes side panes');
-    assert.ok(calls.includes('reset') && calls.includes('settle:chat-one'));
+    assert.equal(state.panes['side:live'], side, 'different parent parks the original live side pane');
+    assert.ok(!calls.includes('reset') && calls.includes('settle:chat-one'));
+    await open(null, 'chat-one');
+    assert.equal(state.panes['side:live'], side, 'returning uses the original side session');
   }
+  const resetStart=source.indexOf('function resetSidePanes('),resetEnd=source.indexOf('/** Where chats outside',resetStart);
+  const closed=[];const scoped={panes:{'side:a':{},'side:b':{}},sideChatRecents:{get:id=>({parentThreadId:id==='side:a'?'chat-one':'chat-two'})},dropSidePane:id=>{closed.push(id);delete scoped.panes[id]}};
+  vm.runInNewContext(transformSync(source.slice(resetStart,resetEnd),{loader:'ts'}).code,scoped);
+  scoped.resetSidePanes('chat-one');assert.deepEqual(closed,['side:a']);assert.ok(scoped.panes['side:b'],'deleting one parent preserves parked side panes of another');
+  scoped.resetSidePanes();assert.deepEqual(closed,['side:a','side:b'],'shutdown still closes every side session');
   const recoveryStart = source.indexOf('ipcMain.handle("side:reopen",');
   const recoveryEnd = source.indexOf('ipcMain.handle("side:reset",', recoveryStart);
   assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart);
@@ -155,25 +162,59 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     await ev(`window.qaReleaseRecovery()`);
     await until(`document.querySelector('[data-chat-pane-id="side:recovered"]')?.innerText.includes('Recovered side answer.')`);
     assert.equal(await ev(`${panel}.dataset.open`),'true');
-    // A real conversation switch still closes the old side panes.
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
+    const retainedWidth=await ev(`${panel}.getBoundingClientRect().width`);
+    // Ordinary conversation switches park tabs and retain the mounted composer.
     await open('chat-two');
-    await until(`!document.querySelector('[data-chat-pane-id="${paneId}"]')&&!document.querySelector('[data-chat-pane-id="side:recovered"]')`);
-    assert.ok(await ev(`window.qaCalls.some(c=>c[0]==='resetSideChat'&&c[1]==='${paneId}')`));
-    // Navigating away during a delayed recovery cannot attach it to the new chat.
-    await ev(`window.qaRecents=[{...window.qaRecents[0],parentThreadId:'chat-two'}];window.qaEmit('onSideChatRecents',{chats:window.qaRecents});document.querySelector('[title="Open side panel"]').click()`);
-    await until(`document.querySelector('[title="Reopen side chat"]')`);
-    await ev(`document.querySelector('[title="Reopen side chat"]').click()`); await until(`typeof window.qaReleaseRecovery==='function'`);
-    await open('chat-one'); await ev(`window.qaReleaseRecovery()`);
+    assert.equal(await ev(`${panel}.dataset.open`),'false');
+    assert.equal(await ev(`${composer}===window.qaComposer`),true);
+    assert.equal(await ev(`${composer}.getBoundingClientRect().height`),0,'foreign side chat stays hidden');
+    assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='resetSideChat').length`),resets);
+    await ev(`window.qaEmit('onDelta',{paneId:'${paneId}',delta:' Background work while in another chat.'});document.querySelector('[title="Open side panel"]').click()`);
+    await until(`document.querySelector('[aria-label="Tools"]')?.innerText.includes('Side chat')`);
+    await ev(`[...document.querySelectorAll('[aria-label="Tools"] button')].find(b=>b.textContent.trim()==='Side chat').click()`);
+    const otherPaneId=await ev(`[...document.querySelectorAll('[data-pane-id^="side:"][role="textbox"]')].find(el=>el.getBoundingClientRect().height>0).dataset.paneId`);
+    const otherComposer=`document.querySelector('[data-pane-id="${otherPaneId}"][role="textbox"]')`;
+    await ev(`${otherComposer}.focus();window.qaOtherComposer=${otherComposer}`);await win.webContents.insertText('Other chat draft');
+    await open('chat-one');
+    await until(`${panel}.dataset.open==='true'&&document.querySelector('[data-chat-pane-id="side:recovered"]').getBoundingClientRect().height>0`);
+    await ev(`document.querySelector('[title="Side chat 1"]').click()`);
+    assert.equal(await ev(`${composer}===window.qaComposer`),true);
+    assert.equal(await ev(`${composer}.textContent`),'Keep this side draft');
+    assert.ok(await ev(`document.querySelector('[data-chat-pane-id="${paneId}"]').innerText.includes('Background work while in another chat.')`));
+    await until(`${panel}.getAnimations().every(animation=>animation.playState==='finished')`);
+    assert.ok(Math.abs(await ev(`${panel}.getBoundingClientRect().width`)-retainedWidth)<1,'original panel width returns');
+    await browser();
+    const browserId=await ev(`Number([...document.querySelectorAll('[data-browser-host]')].find(el=>el.getBoundingClientRect().height>0).dataset.browserHost)`);
+    await ev(`window.qaEmit('onBrowserState',{id:${browserId},url:'https://example.test/retained',title:'Retained page',canGoBack:true,canGoForward:false,loading:false})`);
+    await until(`window.qaCalls.some(c=>c[0]==='setBrowserVisible'&&c[1].id===${browserId}&&c[1].visible)`);
+    const browserOpens=await ev(`window.qaCalls.filter(c=>c[0]==='openBrowser'&&c[1].id===${browserId}).length`);
+    await open('chat-two');
+    await until(`${panel}.dataset.open==='true'&&${otherComposer}.getBoundingClientRect().height>0`);
+    assert.equal(await ev(`${otherComposer}===window.qaOtherComposer`),true);
+    assert.equal(await ev(`${otherComposer}.textContent`),'Other chat draft');
+    await ev(`document.querySelector('[title="Close side panel"]').click()`);
+    await open('chat-one');
+    await until(`${panel}.dataset.open==='true'&&document.querySelector('[data-browser-host="${browserId}"]').getBoundingClientRect().height>0`);
+    await until(`window.qaCalls.filter(c=>c[0]==='setBrowserVisible'&&c[1].id===${browserId}).at(-1)[1].visible===true`);
+    assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='openBrowser'&&c[1].id===${browserId}).length`),browserOpens,'returning neither reopens nor reloads the browser');
+    assert.equal(await ev(`window.qaCalls.some(c=>c[0]==='closeBrowser'&&c[1]===${browserId})`),false);
+    await open('chat-two');assert.equal(await ev(`${panel}.dataset.open`),'false','each chat retains its closed preference');
+    // Navigating away during a delayed cold recovery cannot attach it to another chat.
+    await ev(`window.qaRecents=[{paneId:'side:late',threadId:'late-thread',parentThreadId:'chat-two',cwd:'/fixture',baselineTurns:0,title:'Saved late chat',closedAt:Date.now()}];window.qaRecovery={...window.qaRecovery,threadId:'late-thread'};window.qaEmit('onSideChatRecents',{chats:window.qaRecents});document.querySelector('[title="Open side panel"]').click()`);
+    await browser();await until(`document.querySelector('[title="Reopen side chat"]')`);
+    await ev(`document.querySelector('[title="Reopen side chat"]').click()`);await until(`typeof window.qaReleaseRecovery==='function'`);
+    await open('chat-one');await ev(`window.qaReleaseRecovery()`);
     await ev(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
-    assert.equal(await ev(`!!document.querySelector('[data-chat-pane-id="side:recovered"]')`),false);
-    assert.ok(await ev(`window.qaCalls.some(c=>c[0]==='resetSideChat'&&c[1]==='side:recovered')`),'stale completed recovery remains recoverable');
+    assert.equal(await ev(`!!document.querySelector('[data-chat-pane-id="side:late"]')`),false);
+    assert.ok(await ev(`window.qaCalls.some(c=>c[0]==='resetSideChat'&&c[1]==='side:late')`),'stale recovery is closed without changing parked chats');
     // A recent side chat from another parent still opens its original chat.
-    await ev(`document.querySelector('[title="Open side panel"]').click()`);
-    await until(`document.querySelector('[title="Reopen side chat"]')`);
+    await browser();await until(`document.querySelector('[title="Reopen side chat"]')`);
     await ev(`document.querySelector('[title="Reopen side chat"]').click()`);
     await until(`typeof window.qaReleaseRecovery==='function'&&document.querySelector('[data-chat-pane-id="main"]').innerText.includes('Completed answer chat-two')`);
     await ev(`window.qaReleaseRecovery()`);
-    await until(`document.querySelector('[data-chat-pane-id="side:recovered"]')?.innerText.includes('Recovered side answer.')&&${panel}.dataset.open==='true'`);
+    await until(`document.querySelector('[data-chat-pane-id="side:late"]')?.innerText.includes('Recovered side answer.')&&${panel}.dataset.open==='true'`);
+    await ev(`document.querySelector('[title="Close side panel"]').click()`);
     // Approved scoped browser activity reopens a retained but closed mirror.
     await ev(`window.qaEmit('onAgentMirrorActivity',{tool:'browser_open',threadId:'chat-two'})`);
     await until(`${panel}.dataset.open==='true'&&window.qaCalls.some(c=>c[0]==='agentMirrorStart'&&c[1].threadId==='chat-two')`);
@@ -208,7 +249,12 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
     assert.equal(await ev(`${panel}.dataset.open`),'false','wait for the new thread ID rather than opening a foreign panel');
     await open('fresh-browser-chat');
     await until(`${panel}.dataset.open==='true'&&window.qaCalls.some(c=>c[0]==='agentMirrorStart'&&c[1].threadId==='fresh-browser-chat')`);
+    // Cache pressure can retire idle sessions, but never a live side turn.
+    for(let index=0;index<13;index++)await open('cache-chat-'+index);
+    await open('chat-one');
+    assert.equal(await ev(`${composer}===window.qaComposer`),true,'cache eviction never interrupts or remounts a running side chat');
+    assert.equal(await ev(`window.qaCalls.some(c=>c[0]==='resetSideChat'&&c[1]==='${paneId}')`),false);
     assert.deepEqual(errors.filter(e=>!e.includes('Electron Security Warning')),[]);
-    console.log('PASS: Mosaic retains live side chat, stream, draft, DOM, panel width and closed preference without recovery RPC; Recents progress, duplicate suppression, restore and navigation isolation; scoped Agent Browser reopening, background isolation, first-turn adoption and visible-tab/width retention.');
+    console.log('PASS: conversation switching parks side chats and browsers without reloading, preserves independent widths and closed states; Mosaic retains live side chat, stream, draft, DOM, panel width and closed preference without recovery RPC; Recents progress, duplicate suppression, restore and navigation isolation; scoped Agent Browser reopening, background isolation, first-turn adoption and visible-tab/width retention.');
   } finally { win.destroy(); fs.rmSync(fixture,{recursive:true,force:true}); }
 })().then(()=>app.exit(0),error=>{console.error(error);app.exit(1)});

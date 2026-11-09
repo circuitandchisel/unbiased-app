@@ -6,6 +6,8 @@ import { transformSync } from "esbuild";
 import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./turn-continuation";
 import { ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
 import type { ServerToolCapabilities } from "../shared/server-tools";
+import { SideChatRecents } from "./side-chat-recents";
+import { sideChatStartTarget } from "./side-chat-start";
 
 function sendFixture(capabilities: ServerToolCapabilities = { web_search: false, image_generation: false }) {
   const guard = new TurnContinuation(), sender = {};
@@ -42,8 +44,57 @@ function sendFixture(capabilities: ServerToolCapabilities = { web_search: false,
   const fieldEnd = preload.indexOf("  continueUnfinished:", fieldAt);
   const bridge: any = { ipcRenderer: { invoke: (_method: string, payload: any) => handler({ sender }, payload) } };
   runInNewContext(transformSync(`globalThis.api = ({${preload.slice(fieldAt, fieldEnd)}})`, { loader: "ts" }).code, bridge);
-  return { guard, calls, pane, send: (wire: string, userRequests?: unknown) => bridge.api.sendMessage("main", wire, [], { userRequests }) };
+  return { guard, calls, pane, context, send: (wire: string, userRequests?: unknown) => bridge.api.sendMessage("main", wire, [], { userRequests }),
+    sendSide: (id: string, parentThreadId: string) => bridge.api.sendMessage(id, "Side question", [], { parentThreadId }) };
 }
+
+test("a side chat starting during navigation retains its original parent, directory and permissions", async () => {
+  const f = sendFixture();
+  const c: any = f.context;
+  const side = { threadId: null, turnId: null };
+  c.panes['side:one'] = side;
+  c.ensurePane = (id: string) => c.panes[id];
+  let release!: (caps: ServerToolCapabilities) => void;
+  c.serverTools.capabilities = () => new Promise(resolve => { release = resolve; });
+  const recents = new SideChatRecents();
+  Object.assign(c, {
+    sideChatRecents: recents, saveSideChatRecents: () => {}, sideChatStartTarget,
+    threadProject: (id: string, cwd: string) => { assert.equal(id, "chat"); assert.equal(cwd, "/repo"); return { id: "project-a" }; },
+    projectStore: () => ({ assign: () => {} }), projectMembership: () => ({ projectId: "project-a" }),
+    threadMcp: new Map(), enabledMcpFor: () => [], saveThreadMcp: () => {},
+    conversationLineage: { register: () => {} }, learning: null,
+    conversationAccess: { defaultMode: "full", set: () => {} }, saveConversationAccess: () => {},
+    liveAccessMode: (id: string) => { assert.equal(id, "chat"); return "auto"; },
+    MODE_THREAD_POLICY: { auto: { approvalPolicy: "on-request", sandbox: "workspace-write" } },
+    developerInstructionsFor: () => "", mcpOverrideFor: () => ({}),
+    threadPolicy: (id: string) => { assert.equal(id, "new-side"); return { approvalPolicy: "on-request" }; },
+    turnSandbox: (cwd: string, id: string) => { assert.equal(cwd, "/repo"); assert.equal(id, "new-side"); return { type: "workspaceWrite" }; },
+    engine: { request: async (method: string, params: any) => {
+      f.calls.push({ method, params });
+      return method === "turn/start" ? { turn: { id: "side-turn" } } : { thread: { id: "new-side", turns: [] } };
+    } },
+  });
+  const sending = f.sendSide("side:one", "chat");
+  c.panes.main.threadId = "other";
+  c.panes.main.turnId = "other-turn";
+  c.mainCwd = "/other-repo";
+  release({ web_search: false, image_generation: false });
+  await sending;
+  const fork = f.calls.find(call => call.method === "thread/fork")!;
+  assert.equal(fork.params.threadId, "chat");
+  assert.equal(fork.params.approvalPolicy, "on-request");
+  assert.equal(fork.params.sandbox, "workspace-write");
+  assert.equal(recents.get("side:one")?.parentThreadId, "chat");
+  assert.equal(recents.get("side:one")?.cwd, "/repo");
+  assert.equal(c.panes['side:one'], side);
+  const beforeClose = f.calls.length;
+  c.panes['side:closed'] = { threadId: null, turnId: null };
+  const closed = f.sendSide("side:closed", "chat");
+  delete c.panes['side:closed'];
+  release({ web_search: false, image_generation: false });
+  await assert.rejects(closed, /closed while starting/);
+  assert.equal(f.calls.length, beforeClose, "closing during discovery cannot resurrect a parked pane");
+});
 
 test("plain user sends install the eligible native catalog before automatic tool selection", async () => {
   const f = sendFixture({ web_search: true, image_generation: true });
