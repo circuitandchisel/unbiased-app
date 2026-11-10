@@ -1,3 +1,8 @@
+import { Globe, SquareTerminal } from "lucide-react";
+import { ProjectSourcePicker } from "./project-source-picker";
+import { SshSettings } from "./SshSettings";
+import "./workspace-context.css";
+import { parseSshPath, type SshConnection, type SshStatus, type SshEngineStatus } from "../../shared/ssh";
 import { LiquidMenuSurface, useLiquidMenuPresence } from "./liquid-menu";
 import type { AccessMode, AccessModesSnapshot } from "../../shared/access-mode";
 import { MessageCircleMoreIcon } from "./message-circle-more-icon";
@@ -352,6 +357,7 @@ function looksLikeFilePath(text: string): boolean {
 }
 type ProjectSelection = { id: string; name: string; path: string };
 type ProjectInfo = {
+  connectionName?: string;
   id: string;
   name: string;
   path: string;
@@ -361,8 +367,8 @@ type ProjectInfo = {
   folders?: string[];
   threads: ThreadSummary[];
 };
-type RailPeekSection = "home" | "mosaic" | "projects" | "connectors" | "scheduled" | "updates" | "whats-new" | "settings";
-type SettingsTab = "appearance" | "agent" | "personalization" | "pals" | "account" | "updates" | "resources";
+type RailPeekSection = "home" | "mosaic" | "projects" | "connectors" | "ssh" | "scheduled" | "updates" | "whats-new" | "settings";
+type SettingsTab = "connections" | "appearance" | "agent" | "personalization" | "pals" | "account" | "updates" | "resources";
 /** A thread we know exists because we just created it, but which the engine
  *  will not return from thread/list yet — verified: a list issued straight
  *  after thread/start does not include the new id. Without a stand-in row, a
@@ -596,6 +602,18 @@ declare global {
       onAppCommand: (cb: (command: string) => void) => () => void;
       resolveProjectMembership: (threadId:string,projectId:string|null) => Promise<{ok:boolean}>;
 
+      sshList: () => Promise<SshStatus[]>;
+      resolveWorkspaceFile: (threadId: string | null, path: string) => Promise<string>;
+      sshSave: (connection: Partial<SshConnection>) => Promise<SshConnection>;
+      sshCheckEngine: (id: string) => Promise<SshEngineStatus>;
+      sshConnect: (id: string) => Promise<SshStatus>;
+      sshDisconnect: (id: string) => Promise<void>;
+      sshRemove: (id: string) => Promise<void>;
+      sshIdentity: () => Promise<string | null>;
+      sshFolders: (p: { id: string; path: string }) => Promise<{ dir: string; entries: { name: string; dir: boolean }[] }>;
+      sshProject: (p: { id: string; path: string; name: string }) => Promise<ProjectSelection>;
+      onSshStatus: (cb: (p: SshStatus[]) => void) => () => void;
+      onSshReconcile: (cb: (p: { threadIds: string[] }) => void) => () => void;
       getEngineStatus: () => Promise<EngineStatus>;
       onEngineStatus: (cb: (status: EngineStatus) => void) => () => void;
       checkUpdate: () => Promise<UpdateInfo | { none: true }>;
@@ -876,7 +894,7 @@ declare global {
       fileExists: (path: string) => Promise<{ exists: boolean }>;
       readImage: (path: string) => Promise<{ dataUrl?: string; fullPath?: string; error?: string }>;
       listDir: (dir?: string) => Promise<{ dir: string; entries: DirEntry[]; error?: string }>;
-      searchRefs: (word: string) => Promise<{ results: RefHit[]; truncated?: boolean; error?: string }>;
+      searchRefs: (word: string, file?: string) => Promise<{ results: RefHit[]; truncated?: boolean; error?: string }>;
       blameLine: (file: string, line: number) => Promise<BlameInfo>;
       gitBranch: (path: string) => Promise<{ branch: string | null }>;
       gitBranches: (
@@ -1008,6 +1026,7 @@ const btnSmallStyle: React.CSSProperties = {
 
 const REMARK_PLUGINS = [remarkGfm];
 const StreamingVisualContext = createContext({ streaming: false, markdown: "" });
+const FileScopeContext = createContext<string | null>(null);
 // File previews render embedded HTML (chat markdown stays text-only).
 // Scripts can't run regardless — the CSP has no unsafe-inline.
 const REHYPE_PLUGINS = [rehypeRaw];
@@ -1345,6 +1364,7 @@ export function App() {
     pickerOpen: boolean;
     error: string | null;
     targetFreshId?: string;
+    remoteConnectionId?: string | null;
   } | null>(null);
   // Per-thread ⋯ menu (fixed-positioned like the project menu) and its dialogs.
   const [threadMenu, setThreadMenu] = useState<{ id: string; title: string; inProject: boolean; x: number; y: number } | null>(null);
@@ -1395,7 +1415,7 @@ export function App() {
   }, [threadMenu]);
 
   useEffect(() => {
-    if (!renameDialog && !moveDialog && !editProj) return;
+    if (showSettings || (!renameDialog && !moveDialog && !editProj)) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setRenameDialog(null);
@@ -1405,12 +1425,12 @@ export function App() {
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [renameDialog, moveDialog, editProj]);
+  }, [renameDialog, moveDialog, editProj, showSettings]);
 
   async function doSaveProject() {
     if (!editProj) return;
     if (editProj.mode === "create") {
-      if (!editProj.name.trim()) return;
+      if (!editProj.name.trim() || (editProj.remoteConnectionId && !editProj.folders.length)) return;
       snapshotSideView(); // same as every other context switch
       const r = await window.unbiased.createProject({
         name: editProj.name.trim(),
@@ -1659,6 +1679,34 @@ export function App() {
   const [branchName, setBranchName] = useState("");
   const [branchError, setBranchError] = useState<string | null>(null);
   const [branchBusy, setBranchBusy] = useState(false);
+  const branchAnchorRef = useRef<HTMLSpanElement>(null);
+  const [branchPopupLayout, setBranchPopupLayout] = useState({ below: false, maxHeight: 380, width: 338, left: -8 });
+  useLayoutEffect(() => {
+    if (!branchMenu) return;
+    const place = () => {
+      const anchor = branchAnchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      // Home scrolls beneath the app toolbar. Staying inside that visible
+      // scrollport avoids both toolbar overlap and clipping by overflow:auto.
+      const pane = anchor.closest(".home-chat-pane")?.getBoundingClientRect();
+      const top = Math.max(8, (pane?.top ?? 0) + 8);
+      const bottom = Math.min(window.innerHeight - 8, (pane?.bottom ?? window.innerHeight) - 8);
+      const above = Math.max(0, rect.top - top - 10);
+      const below = Math.max(0, bottom - rect.bottom - 10);
+      const openBelow = above < 240 && below > above;
+      const width = Math.min(338, window.innerWidth - 32, (pane?.width ?? window.innerWidth) - 16);
+      const left = Math.max(8, pane?.left ?? 8);
+      const right = Math.min(window.innerWidth - 8, pane?.right ?? window.innerWidth - 8);
+      setBranchPopupLayout({ below: openBelow, maxHeight: Math.min(380, openBelow ? below : above), width,
+        left: Math.max(left, Math.min(rect.left - 8, right - width)) - rect.left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); document.removeEventListener("scroll", place, true); };
+  }, [branchMenu]);
+
 
   useEffect(() => {
     if (!branchMenu) return;
@@ -2168,6 +2216,11 @@ export function App() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!window.unbiased.onSshStatus) return;
+    return window.unbiased.onSshStatus(() => { void refreshThreads().catch(() => {}); });
+  }, []);
+
   // The side panel's composition belongs to the conversation it was built
   // for — leaving parks its tabs without closing their sessions. Snapshots are
   // keyed by thread id; terminals are excluded (their PTYs die on unmount,
@@ -2552,6 +2605,13 @@ export function App() {
   // activeThreadId — it would compare against the value at mount forever.
   const activeThreadIdRef = useRef<string | null>(null);
   activeThreadIdRef.current = activeThreadId;
+  useEffect(() => {
+    if (!window.unbiased.onSshReconcile) return;
+    return window.unbiased.onSshReconcile(({ threadIds }) => {
+      const id = activeThreadIdRef.current;
+      if (!pageOpen && !showSettings && id && threadIds.includes(id)) void openThread(id).catch(() => {});
+    });
+  }, [pageOpen, showSettings]);
   const pendingAgentMirrorActivityRef = useRef<string | null>(null);
   const revealAgentMirrorActivityRef = useRef(() => {});
   revealAgentMirrorActivityRef.current = () => {
@@ -3383,6 +3443,7 @@ export function App() {
   const activeProjectName = activeProject?.name ?? activeSidebarProject?.name ?? null;
   const activeProjectId = activeProject?.id ?? activeSidebarProject?.id ?? null;
   const activeProjectPath = activeProject?.path ?? activeSidebarProject?.path ?? null;
+  const activeRemote = parseSshPath(activeProjectPath);
   /** Exactly one row in the sidebar is ever lit. A project carries the
    *  highlight only until its chat has a thread (the thread row takes over
    *  from there) — and neither may claim it while Scheduled, which is a
@@ -3562,6 +3623,19 @@ export function App() {
           }}
         >
           <SettingsView
+            onRemoteProject={(project) => {
+              setShowSettings(false);
+              void newChat(project);
+              void refreshThreads().then(() => {
+                setProjectsCollapsed(false);
+                localStorage.setItem("navProjectsCollapsed", "false");
+                requestAnimationFrame(() => {
+                  [...document.querySelectorAll<HTMLElement>("[data-project-id]")]
+                    .find(element => element.dataset.projectId === project.id)
+                    ?.scrollIntoView({ block: "nearest" });
+                });
+              });
+            }}
             initialTab={settingsTab}
             releases={releases}
             theme={theme}
@@ -3693,6 +3767,9 @@ export function App() {
           </SidebarRailButton>
           <SidebarRailButton label="Connectors" active={connectorsOpen} onClick={() => { setNavPeekOpen(false); showConnectorsPage(); }} {...railPeekHandlers("connectors")}>
             <PlugIcon />
+          </SidebarRailButton>
+          <SidebarRailButton label="SSH" onClick={() => { setNavPeekOpen(false); setSettingsTab("connections"); setShowSettings(true); }} {...railPeekHandlers("ssh")}>
+            <SquareTerminal size={18} strokeWidth={1.5} />
           </SidebarRailButton>
           <SidebarRailButton label="Scheduled" active={scheduledOpen} badge={missedCount} onClick={() => { setNavPeekOpen(false); showScheduledPage(); }} {...railPeekHandlers("scheduled")}>
             <ClockIcon />
@@ -4419,8 +4496,8 @@ export function App() {
                       }}
                     />
                     <EnvRow
-                      icon={convCwd ? <SteerIcon /> : <LaptopIcon />}
-                      label={convCwd ? "Worktree" : "Local"}
+                      icon={convCwd ? <SteerIcon /> : activeRemote ? <Globe size={16} /> : <LaptopIcon />}
+                      label={activeRemote ? convCwd ? "Remote worktree" : "Remote" : convCwd ? "Worktree" : "Local"}
                       right={<Chevron open={envSection === "workin"} />}
                       onClick={() => setEnvSection((s) => (s === "workin" ? null : "workin"))}
                     />
@@ -4428,8 +4505,8 @@ export function App() {
                       <div style={{ padding: "0 0 4px 12px" }}>
                         {(
                           [
-                            { sel: { mode: "local" } as const, key: "local", label: "Local", icon: <LaptopIcon /> },
-                            { sel: { mode: "worktree" } as const, key: "worktree", label: "New worktree", icon: <SteerIcon /> },
+                            { sel: { mode: "local" } as const, key: "local", label: activeRemote ? "Remote" : "Local", icon: activeRemote ? <Globe size={16} /> : <LaptopIcon /> },
+                            { sel: { mode: "worktree" } as const, key: "worktree", label: activeRemote ? "New remote worktree" : "New worktree", icon: <SteerIcon /> },
                             ...existingWts.map((wt) => ({
                               sel: { mode: "existing", dir: wt.dir, branch: wt.branch } as const,
                               key: wt.dir,
@@ -4786,15 +4863,19 @@ export function App() {
             // Environment popover carries this information instead.
             !mainStarted && !activeThreadId ? (
               <div
+                className="u-workspace-context"
                 style={{
-                  maxWidth: 768,
+                  // Match the composer: 768px content plus 18px padding on each side.
+                  maxWidth: 804,
                   margin: "0 auto 8px",
                   display: "flex",
                   alignItems: "center",
-                  gap: 18,
-                  padding: "8px 14px",
+                  gap: 14,
+                  padding: "6px 12px",
+                  minHeight: 42,
+                  boxSizing: "border-box",
                   background: colors.panel,
-                  borderRadius: 12,
+                  borderRadius: 16,
                   fontSize: 13,
                   color: colors.dim,
                   // No overflow:hidden here — the branch dropdown escapes
@@ -4805,6 +4886,7 @@ export function App() {
                 {activeProjectPath && <>
                 <span data-workmenu style={{ position: "relative", display: "flex", flexShrink: 0 }}>
                   <button
+                    className="u-workspace-mode"
                     onClick={() => (workMenuOpen ? setWorkMenuOpen(false) : void openWorkMenu())}
                     title="Where new chats in this project work"
                     aria-expanded={workMenuOpen}
@@ -4812,63 +4894,50 @@ export function App() {
                       display: "flex",
                       alignItems: "center",
                       gap: 7,
-                      background: workMenuOpen ? "var(--chip)" : "transparent",
                       border: "none",
-                      borderRadius: 8,
-                      padding: "3px 8px",
-                      margin: "-3px -8px",
-                      color: colors.dim,
+                      borderRadius: 999,
+                      padding: "5px 10px",
+                      color: colors.fg,
                       fontSize: 13,
                       cursor: "pointer",
                       fontFamily: "inherit",
                     }}
                   >
-                    {mainStarted ? (
-                      convCwd !== null ? (
-                        <>
-                          <SteerIcon />
-                          Worktree
-                        </>
-                      ) : (
-                        <>
-                          <LaptopIcon />
-                          Local
-                        </>
-                      )
-                    ) : workSel.mode === "local" ? (
-                      <>
-                        <LaptopIcon />
-                        Local
-                      </>
-                    ) : (
-                      <>
-                        <SteerIcon />
-                        <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
-                          {workSel.mode === "existing" ? workSel.branch : "New worktree"}
-                        </span>
-                      </>
-                    )}
+                    {workSel.mode === "local" ? <>
+                      {activeRemote ? <Globe size={16} /> : <LaptopIcon />}
+                      {activeRemote ? "Remote" : "Local"}
+                    </> : <>
+                      <SteerIcon />
+                      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
+                        {workSel.mode === "existing" ? workSel.branch : activeRemote ? "New remote worktree" : "New worktree"}
+                      </span>
+                    </>}
                   </button>
                   {workMenuOpen && (
                     <div
+                      role="menu"
+                      aria-label="Work in"
+                      className="u-workspace-menu"
                       style={{
                         position: "absolute",
                         bottom: "calc(100% + 10px)",
-                        left: -8,
-                        width: 250,
+                        left: -6,
+                        width: 228,
+                        maxWidth: "calc(100vw - 32px)",
+                        boxSizing: "border-box",
                         background: colors.panel,
                         border: `1px solid ${colors.border}`,
-                        borderRadius: 14,
-                        padding: 8,
+                        borderRadius: 18,
+                        padding: 6,
                         zIndex: 30,
                         boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
                       }}
                     >
-                      <div style={{ color: colors.dim, fontSize: 12.5, padding: "4px 10px 8px" }}>Work in</div>
+                      <div style={{ color: colors.dim, fontSize: 12.5, padding: "4px 10px 6px" }}>Work in</div>
                       {(
                         [
-                          { sel: { mode: "local" } as const, key: "local", label: "Local", icon: <LaptopIcon /> },
-                          { sel: { mode: "worktree" } as const, key: "worktree", label: "New worktree", icon: <SteerIcon /> },
+                          { sel: { mode: "local" } as const, key: "local", label: activeRemote ? "Remote" : "Local", icon: activeRemote ? <Globe size={16} /> : <LaptopIcon /> },
+                          { sel: { mode: "worktree" } as const, key: "worktree", label: activeRemote ? "New remote worktree" : "New worktree", icon: <SteerIcon /> },
                           ...existingWts.map((wt) => ({
                             sel: { mode: "existing", dir: wt.dir, branch: wt.branch } as const,
                             key: wt.dir,
@@ -4892,6 +4961,10 @@ export function App() {
                             </div>
                           )}
                           <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={workSel.mode === opt.sel.mode && (opt.sel.mode !== "existing" || (workSel.mode === "existing" && workSel.dir === opt.sel.dir))}
+                            className="u-workspace-choice"
                             onClick={() => changeWorkMode(opt.sel)}
                             style={{
                               display: "flex",
@@ -4938,18 +5011,11 @@ export function App() {
                           </button>
                         </div>
                       ))}
-                      {/* The choice binds to THIS project — picking it here while
-                          meaning "my next chat elsewhere" is how a worktree once
-                          landed in the wrong repo, so always name the scope. */}
-                      <div style={{ color: colors.dim, fontSize: 12, padding: "6px 10px 2px", lineHeight: 1.4 }}>
-                        Applies to new chats in {activeProjectName ?? "this project"}
-                        {mainStarted ? " — this conversation keeps its checkout." : "."}
-                      </div>
                     </div>
                   )}
                 </span>
                 {projectBranch && (
-                  <span data-branchmenu style={{ position: "relative", display: "flex", minWidth: 0 }}>
+                  <span ref={branchAnchorRef} data-branchmenu style={{ position: "relative", display: "flex", minWidth: 0 }}>
                     <button
                       onClick={() => (branchMenu ? setBranchMenu(null) : void openBranchMenu())}
                       title="Switch branch"
@@ -4977,12 +5043,18 @@ export function App() {
                     </button>
                     {branchMenu && (
                       <div
+                        role="dialog"
+                        aria-label="Switch branch"
+                        data-placement={branchPopupLayout.below ? "bottom" : "top"}
                         style={{
                           position: "absolute",
-                          bottom: "calc(100% + 10px)",
-                          left: -8,
-                          width: 320,
-                          maxHeight: 380,
+                          bottom: branchPopupLayout.below ? undefined : "calc(100% + 10px)",
+                          top: branchPopupLayout.below ? "calc(100% + 10px)" : undefined,
+                          left: branchPopupLayout.left,
+                          width: branchPopupLayout.width,
+                          boxSizing: "border-box",
+                          overflow: "hidden",
+                          maxHeight: branchPopupLayout.maxHeight,
                           display: "flex",
                           flexDirection: "column",
                           background: colors.panel,
@@ -4994,12 +5066,14 @@ export function App() {
                         }}
                       >
                         <input
+                          aria-label="Search branches"
                           autoFocus
                           value={branchSearch}
                           onChange={(e) => setBranchSearch(e.target.value)}
                           placeholder={`Search ${activeProjectName ?? ""} branches`}
                           spellCheck={false}
                           style={{
+                            flexShrink: 0,
                             background: "var(--panel-2)",
                             border: `1px solid ${colors.border}`,
                             borderRadius: 8,
@@ -5010,8 +5084,8 @@ export function App() {
                             fontFamily: "inherit",
                           }}
                         />
-                        <div style={{ color: colors.dim, fontSize: 12.5, padding: "10px 10px 4px" }}>Branches</div>
-                        <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+                        <div style={{ color: colors.dim, fontSize: 12.5, flexShrink: 0, padding: "10px 10px 4px" }}>Branches</div>
+                        <div data-branch-list style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
                           {branchMenu.branches
                             .filter((b) => b.toLowerCase().includes(branchSearch.toLowerCase()))
                             .map((b) => (
@@ -5092,6 +5166,7 @@ export function App() {
                     )}
                   </span>
                 )}
+                {activeRemote && <RemoteHostIndicator connectionId={activeRemote.connectionId} fallbackName={sidebarView.projects.find(project => project.id === activeProjectId)?.connectionName} />}
                 </>}
               </div>
             ) : undefined
@@ -6137,7 +6212,7 @@ export function App() {
           />
         </div>
       )}
-      {editProj && (
+      {editProj && !showSettings && (
         <div
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setEditProj(null);
@@ -6350,40 +6425,16 @@ export function App() {
               ))}
               {editProj.mode === "create" && editProj.folders.length === 0 && (
                 <div style={{ padding: "11px 14px", fontSize: 12.5, color: colors.dim }}>
-                  No folders yet — a new folder named after the project is created in your home directory.
+                  {editProj.remoteConnectionId ? "Choose a folder on the remote device." : "No folders yet — a new folder named after the project is created in your home directory."}
                 </div>
               )}
-              <button
-                onClick={() =>
-                  void window.unbiased.pickProjectLocation().then((r) => {
-                    if (r.path && !editProj.folders.includes(r.path)) {
-                      setEditProj((e) =>
-                        e
-                          ? { ...e, folders: [...e.folders, r.path!], primary: e.primary || r.path! }
-                          : e,
-                      );
-                    }
-                  })
-                }
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  width: "100%",
-                  background: "transparent",
-                  border: "none",
-                  borderTop: `1px solid ${colors.border}`,
-                  padding: "11px 14px",
-                  fontSize: 13.5,
-                  color: colors.fg,
-                  cursor: "pointer",
-                  textAlign: "left",
-                  fontFamily: "inherit",
-                }}
-              >
-                <FolderPlusIcon />
-                Add folder
-              </button>
+              <ProjectSourcePicker
+                folders={editProj.folders}
+                deviceId={editProj.remoteConnectionId}
+                onDevice={(id) => setEditProj(e => e ? { ...e, remoteConnectionId: id, error: null } : e)}
+                onFolder={(path, suggestedName) => setEditProj(e => e && !e.folders.includes(path) ? { ...e, folders: [...e.folders, path], primary: e.primary || path, name: e.name || suggestedName, error: null } : e)}
+                onSetup={() => { setSettingsTab("connections"); setShowSettings(true); }}
+              />
             </div>
             {editProj.error && <div style={{ color: colors.err, fontSize: 13, marginTop: 10 }}>{editProj.error}</div>}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20 }}>
@@ -6409,7 +6460,7 @@ export function App() {
               </button>
               <button
                 onClick={() => void doSaveProject()}
-                disabled={!editProj.name.trim()}
+                disabled={!editProj.name.trim() || (!!editProj.remoteConnectionId && !editProj.folders.length)}
                 style={{
                   background: editProj.name.trim() ? colors.fg : "var(--panel-2)",
                   border: "none",
@@ -8444,6 +8495,7 @@ function MdImage({
   chat?: boolean;
 }) {
   const [url, setUrl] = useState<string | null>(null);
+  const fileScope = useContext(FileScopeContext);
 
   useEffect(() => {
     let alive = true;
@@ -8455,18 +8507,20 @@ function MdImage({
     }
     const resolved = src.startsWith("/") || !baseDir ? src : `${baseDir}/${src}`;
     void (async () => {
+      const qualified = fileScope && !baseDir && window.unbiased.resolveWorkspaceFile ? await window.unbiased.resolveWorkspaceFile(fileScope, resolved) : resolved;
+      const path = typeof qualified === "string" ? qualified : resolved;
       if (/\.svg$/i.test(resolved)) {
-        const r = await window.unbiased.readFile(resolved);
+        const r = await window.unbiased.readFile(path);
         if (alive) setUrl(r.content ? `data:image/svg+xml;utf8,${encodeURIComponent(r.content)}` : null);
       } else {
-        const r = await window.unbiased.readImage(resolved);
+        const r = await window.unbiased.readImage(path);
         if (alive) setUrl(r.dataUrl ?? null);
       }
-    })();
+    })().catch(() => { if (alive) setUrl(null); });
     return () => {
       alive = false;
     };
-  }, [src, baseDir]);
+  }, [src, baseDir, fileScope]);
 
   if (!url) return <span style={{ color: colors.dim, fontSize: 12.5 }}>[image: {alt || src}]</span>;
   return (
@@ -8762,7 +8816,7 @@ function FileViewer({
     const lineTop = PAD_TOP + Math.floor(Math.max(contentY - PAD_TOP, 0) / LINE_H) * LINE_H;
     const anchor = { x: contentX, lineTop };
     setRefs({ word, items: [], truncated: false, loading: true, ...anchor });
-    void window.unbiased.searchRefs(word).then((res) => {
+    void window.unbiased.searchRefs(word, file.fullPath).then((res) => {
       setRefs({
         word,
         items: res.results ?? [],
@@ -9321,6 +9375,28 @@ function MosaicEmptyState({ onCreate }: { onCreate: () => Promise<void> }) {
   );
 }
 
+function RemoteHostIndicator({ connectionId, fallbackName }: { connectionId: string; fallbackName?: string }) {
+  const [connections, setConnections] = useState<SshStatus[]>([]);
+  useEffect(() => {
+    let active = true;
+    let receivedStatus = false;
+    const off = window.unbiased.onSshStatus((rows) => {
+      if (active && Array.isArray(rows)) { receivedStatus = true; setConnections(rows); }
+    });
+    void window.unbiased.sshList().then(rows => {
+      if (active && !receivedStatus && Array.isArray(rows)) setConnections(rows);
+    }).catch(() => {});
+    return () => { active = false; off(); };
+  }, [connectionId]);
+  const host = connections.find(connection => connection.id === connectionId);
+  const state = !host ? "unknown" : host.state === "connected" && host.engineState && host.engineState !== "ready" ? "setup-required" : host.state;
+  const label = { connected: "Connected", disconnected: "Disconnected", connecting: "Connecting", error: "Connection needs attention", "setup-required": "Engine setup required", unknown: "Status unavailable" }[state];
+  const name = host?.name ?? fallbackName ?? "Remote host";
+  return <span className="u-remote-host" data-remote-host={connectionId} data-state={state} aria-label={`${name}: ${label}`} title={`${name} · ${label}`}>
+    <span>{name}</span><i aria-hidden="true" />
+  </span>;
+}
+
 function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, disabled = false }: {
   selected: ProjectSelection | null;
   projects: ProjectInfo[];
@@ -9398,7 +9474,10 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
   const selectedProject = projects.find((project) => project.id === selected?.id);
   return <span ref={ref} style={{ position: "relative", display: "flex", minWidth: 0, flexShrink: 0 }}>
     <button type="button" className="u-liquid-menu-trigger" title="Choose where this chat works" aria-label="Choose where this chat works" aria-expanded={open} aria-haspopup="dialog" disabled={disabled || busy} onClick={() => { setQuery(""); setError(null); setOpen((value) => !value); }} style={{ display: "flex", alignItems: "center", gap: 7, maxWidth: 220, padding: "3px 5px", border: 0, background: "transparent", color: selected ? colors.fg : colors.dim, fontSize: 13, fontFamily: "inherit", cursor: disabled || busy ? "default" : "pointer" }}>
-      {selected ? <ProjectIcon icon={selectedProject?.icon} color={selectedProject?.color} size={14} /> : <ProjectIcon size={14} />}
+      <span className="u-workspace-project-icon">
+        <ProjectIcon icon={selectedProject?.icon} color={selectedProject?.color} size={16} />
+        {parseSshPath(selected?.path) && <Globe size={9} className="u-workspace-remote-badge" aria-label="Remote project" />}
+      </span>
       <span style={{ overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{selected?.name ?? "Choose a project"}</span>
       <ChevronDown size={13} />
     </button>
@@ -9423,7 +9502,7 @@ function NewChatProjectPicker({ selected, projects, onSelect, onCreateProject, d
         {showNone && filtered.length > 0 && <div className="u-project-picker-separator" />}
         {filtered.map((project) => <button type="button" className="u-project-picker-row" aria-pressed={project.id === selected?.id} key={project.id} title={project.path} disabled={busy} onClick={() => void choose(project)}>
           <ProjectIcon icon={project.icon} color={project.color} size={18} />
-          <span className="u-project-picker-project"><span className="u-project-picker-name">{project.name}</span><span className="u-project-picker-path">{project.path.split(/[\\/]/).filter(Boolean).at(-1)}</span></span>
+          <span className="u-project-picker-project"><span className="u-project-picker-name">{project.name}</span><span className="u-project-picker-path">{project.connectionName ? "SSH · " + project.connectionName : project.path.split(/[\\/]/).filter(Boolean).at(-1)}</span></span>
           {project.id === selected?.id && <Check size={16} className="u-project-picker-check" />}
         </button>)}
         {!showNone && filtered.length === 0 && <div className="u-project-picker-empty">No matching projects</div>}
@@ -9537,13 +9616,13 @@ function MosaicNewChatEnvironment({ project, work, projects, onSelect, onCreateP
     {project && <>
       <span style={{ position: "relative", display: "flex" }}>
         <button type="button" title="Choose checkout for this chat" aria-expanded={workOpen} disabled={disabled || changing} onClick={() => workOpen ? setWorkOpen(false) : void openWork()} style={triggerStyle}>
-          {work?.mode === "local" || !work ? <LaptopIcon /> : <SteerIcon />}
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{work?.mode === "worktree" ? "New worktree" : work?.mode === "existing" ? work.branch ?? "Worktree" : "Local"}</span>
+          {work?.mode === "local" || !work ? parseSshPath(cwd) ? <Globe size={16} /> : <LaptopIcon /> : <SteerIcon />}
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{work?.mode === "worktree" ? parseSshPath(cwd) ? "New remote worktree" : "New worktree" : work?.mode === "existing" ? work.branch ?? "Worktree" : parseSshPath(cwd) ? "Remote" : "Local"}</span>
           <ChevronDown size={13} />
         </button>
         {workOpen && <div role="menu" aria-label="Choose checkout" style={menuStyle}>
-          <button type="button" role="menuitemradio" aria-checked={work?.mode === "local"} onClick={() => work?.mode === "local" ? setWorkOpen(false) : void selectEnvironment(project, "local")} style={choiceStyle}><LaptopIcon />Local{work?.mode === "local" && <CheckIcon />}</button>
-          <button type="button" role="menuitemradio" aria-checked={work?.mode === "worktree"} onClick={() => void selectEnvironment(project, "worktree")} style={choiceStyle}><SteerIcon />New worktree{work?.mode === "worktree" && <CheckIcon />}</button>
+          <button type="button" role="menuitemradio" aria-checked={work?.mode === "local"} onClick={() => work?.mode === "local" ? setWorkOpen(false) : void selectEnvironment(project, "local")} style={choiceStyle}>{parseSshPath(cwd) ? <Globe size={16} /> : <LaptopIcon />}{parseSshPath(cwd) ? "Remote" : "Local"}{work?.mode === "local" && <CheckIcon />}</button>
+          <button type="button" role="menuitemradio" aria-checked={work?.mode === "worktree"} onClick={() => void selectEnvironment(project, "worktree")} style={choiceStyle}><SteerIcon />{parseSshPath(cwd) ? "New remote worktree" : "New worktree"}{work?.mode === "worktree" && <CheckIcon />}</button>
           {worktrees.length > 0 && <div style={{ padding: "8px 10px 4px", color: colors.dim, fontSize: 12, borderTop: `1px solid ${colors.border}` }}>Existing worktrees</div>}
           {worktrees.map((item) => <button type="button" role="menuitemradio" aria-checked={work?.cwd === item.dir} key={item.dir} onClick={() => work?.cwd === item.dir ? setWorkOpen(false) : void selectEnvironment(project, "existing", item.dir)} style={choiceStyle}><BranchIcon /><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{item.branch}</span>{work?.cwd === item.dir && <CheckIcon />}</button>)}
         </div>}
@@ -9561,6 +9640,7 @@ function MosaicNewChatEnvironment({ project, work, projects, onSelect, onCreateP
         </div>}
       </span>}
     </>}
+    {parseSshPath(cwd) && <RemoteHostIndicator connectionId={parseSshPath(cwd)!.connectionId} fallbackName={projects.find(item => item.id === project?.id)?.connectionName} />}
     {error && <span role="alert" style={{ color: colors.err, fontSize: 12 }}>{error}</span>}
   </div>;
 }
@@ -9606,6 +9686,12 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
   const [loaded, setLoaded] = useState<Awaited<ReturnType<Window["unbiased"]["mountThread"]>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sshReload, setSshReload] = useState(0);
+  const [loadedNonce, setLoadedNonce] = useState(0);
+  useEffect(() => {
+    if (fresh || !window.unbiased.onSshReconcile) return;
+    return window.unbiased.onSshReconcile(({ threadIds }) => { if (threadIds.includes(id)) setSshReload(n => n + 1); });
+  }, [id, fresh]);
   useEffect(() => {
     if (fresh) return;
     let active = true;
@@ -9614,9 +9700,11 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
       lease = result.lease;
       if (!active) { void window.unbiased.unmountThread(id, lease); return; }
       setLoaded(result);
+      setLoadedNonce(n => n + 1);
+      setError(null);
     }).catch((cause) => { if (active) setError(String(cause)); });
     return () => { active = false; if (lease) void window.unbiased.unmountThread(id, lease); };
-  }, [id, fresh]);
+  }, [id, fresh, sshReload]);
   const entries = loaded?.entries ?? [];
   const streamText = loaded?.running ? loaded.streamText : "";
   const last = entries[entries.length - 1];
@@ -9646,7 +9734,7 @@ function MultiViewTile({ id, columnSpan, fresh, project, work, projects, drafts,
           connected={connected}
           threadId={id}
           composerDrafts={drafts}
-          reset={{ entries: resetEntries, nonce: 0, resume: loaded?.running ? { running: true, approvals: loaded.approvals, userInputs: loaded.userInputs } : null, runningTurnStart: loaded?.runningTurnStart, runningTurnStartedAt: loaded?.runningTurnStartedAt, compacting: loaded?.compacting, sessionId: loaded?.sessionId, offset: loaded?.offset }}
+          reset={{ entries: resetEntries, nonce: loadedNonce, resume: loaded?.running ? { running: true, approvals: loaded.approvals, userInputs: loaded.userInputs } : null, runningTurnStart: loaded?.runningTurnStart, runningTurnStartedAt: loaded?.runningTurnStartedAt, compacting: loaded?.compacting, sessionId: loaded?.sessionId, offset: loaded?.offset }}
           emptyState={null}
           composerHeader={fresh ? <MosaicNewChatEnvironment project={project} work={work} projects={projects} onSelect={onSelectEnvironment} onCreateProject={onCreateProject} disabled={busy} /> : undefined}
           onBusyChange={setBusy}
@@ -10168,7 +10256,10 @@ function ChatPane({
   const onAskSideChatRef = useRef(onAskSideChat);
   onAskSideChatRef.current = onAskSideChat;
   const onOpenFileRef = useRef(onOpenFile);
-  onOpenFileRef.current = onOpenFile;
+  onOpenFileRef.current = onOpenFile ? (path) => {
+    if (!window.unbiased.resolveWorkspaceFile) { onOpenFile(path); return; }
+    void window.unbiased.resolveWorkspaceFile(threadIdRef.current, path).then(qualified => onOpenFile(typeof qualified === "string" ? qualified : path));
+  } : undefined;
   const onOpenLinkRef = useRef(onOpenLink);
   onOpenLinkRef.current = onOpenLink;
 
@@ -11746,6 +11837,7 @@ function ChatPane({
     : [];
   const showingHome = !!homeDashboard && entries.length === 0 && !busy && !compacting;
   return (
+    <FileScopeContext.Provider value={threadIdRef.current}>
     <div
       className={showingHome ? "home-chat-pane" : undefined}
       ref={paneRef}
@@ -13012,6 +13104,7 @@ function ChatPane({
       </div>
       {showingHome && homeDashboard}
     </div>
+    </FileScopeContext.Provider>
   );
 }
 
@@ -13098,11 +13191,13 @@ function Favicon({ host, inline = false }: { host: string; inline?: boolean }) {
 // folds, and every probe is an IPC + stat. Cleared on thread switch (the
 // resolution base changes with the conversation's cwd).
 const fileExistsCache = new Map<string, Promise<boolean>>();
-function probeFileExists(text: string): Promise<boolean> {
-  let p = fileExistsCache.get(text);
+function probeFileExists(text: string, scope: string | null): Promise<boolean> {
+  const cacheKey = JSON.stringify([scope, text]);
+  let p = fileExistsCache.get(cacheKey);
   if (!p) {
-    p = window.unbiased.fileExists(text).then((r) => r.exists);
-    fileExistsCache.set(text, p);
+    p = Promise.resolve(window.unbiased.resolveWorkspaceFile ? window.unbiased.resolveWorkspaceFile(scope, text) : text)
+      .then(path => window.unbiased.fileExists(typeof path === "string" ? path : text)).then(r => r.exists).catch(() => false);
+    fileExistsCache.set(cacheKey, p);
   }
   return p;
 }
@@ -13116,6 +13211,7 @@ function InlineCodeChip({
   children?: React.ReactNode;
   openRef: React.MutableRefObject<((path: string) => void) | undefined>;
 }) {
+  const scope = useContext(FileScopeContext);
   const candidate = Boolean(openRef.current) && looksLikeFilePath(text);
   const [exists, setExists] = useState(false);
   useEffect(() => {
@@ -13124,13 +13220,13 @@ function InlineCodeChip({
     setExists(false);
     if (!candidate) return;
     let alive = true;
-    void probeFileExists(text).then((ok) => {
+    void probeFileExists(text, scope).then((ok) => {
       if (alive) setExists(ok);
     });
     return () => {
       alive = false;
     };
-  }, [candidate, text]);
+  }, [candidate, text, scope]);
   const clickable = candidate && exists;
   return (
     <code
@@ -17406,6 +17502,7 @@ function SettingsGroup({ title, children }: { title: string; children: React.Rea
 }
 
 function SettingsView({
+  onRemoteProject,
   initialTab,
   theme,
   onChange,
@@ -17422,6 +17519,7 @@ function SettingsView({
   onSignOut,
   releases,
 }: {
+  onRemoteProject: (project: ProjectSelection) => void;
   initialTab: SettingsTab;
   theme: ThemeConfig;
   onChange: (t: ThemeConfig) => void;
@@ -17591,6 +17689,7 @@ function SettingsView({
       items: [
         { id: "updates", label: "Updates", icon: <DownloadIcon /> },
         { id: "resources", label: "Resources", icon: <LaptopIcon /> },
+        { id: "connections", label: "SSH", icon: <SquareTerminal size={15} strokeWidth={1.5} /> },
       ],
     },
   ] as const;
@@ -17617,6 +17716,7 @@ function SettingsView({
             <SidebarRailButton label="Home" onClick={onBack}><Home size={18} strokeWidth={1.5} /></SidebarRailButton>
             <SidebarRailButton label="Open project" onClick={onOpenProject}><FolderOpen size={18} strokeWidth={1.5} /></SidebarRailButton>
             <SidebarRailButton label="Connectors" onClick={onOpenConnectors}><PlugIcon /></SidebarRailButton>
+            <SidebarRailButton label="SSH" active={tab === "connections"} onClick={() => setTab("connections")}><SquareTerminal size={18} strokeWidth={1.5} /></SidebarRailButton>
             <SidebarRailButton label="Scheduled" badge={missedCount} onClick={onOpenScheduled}><ClockIcon /></SidebarRailButton>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "8px 2px" }}>
@@ -17624,7 +17724,7 @@ function SettingsView({
               <SidebarRailButton label={updateStaged ? "Install update" : "Download update"} onClick={onUpdate}><DownloadIcon size={18} /></SidebarRailButton>
             )}
             <SidebarRailButton label="What's new" badge={changelogUnread} onClick={onOpenWhatsNew}><BellIcon /></SidebarRailButton>
-            <SidebarRailButton label="Settings" active onClick={() => {}}><GearIcon /></SidebarRailButton>
+            <SidebarRailButton label="Settings" active={tab !== "connections"} onClick={() => setTab("appearance")}><GearIcon /></SidebarRailButton>
           </div>
         </nav>
         <div className="u-settings-surface" style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", overflow: "hidden", borderRadius: 12, background: "var(--nav-bg)" }}>
@@ -17678,7 +17778,7 @@ function SettingsView({
           </nav>
 
           <div className="u-settings-content" style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "72px 48px 64px", borderRadius: "12px 0 0 12px", background: colors.bg }}>
-        {tab === "resources" ? (
+        {tab === "connections" ? <SshSettings onProject={onRemoteProject} /> : tab === "resources" ? (
           <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <ResourcesView />
           </div>
@@ -18853,6 +18953,7 @@ function SidebarSectionPreview({
   const [tasks, setTasks] = useState<ScheduledTaskView[] | null>(null);
   const [connectors, setConnectors] = useState<ConnectorInfo[] | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const [sshConnections, setSshConnections] = useState<SshStatus[] | null>(null);
 
   useEffect(() => {
     if (section !== "scheduled") return;
@@ -18879,21 +18980,39 @@ function SidebarSectionPreview({
     return () => { active = false; unsubscribe(); };
   }, [section]);
 
+  useEffect(() => {
+    if (section !== "ssh") return;
+    let active = true;
+    let receivedStatus = false;
+    const unsubscribe = window.unbiased.onSshStatus((connections) => {
+      if (!active) return;
+      receivedStatus = true;
+      setSshConnections(connections);
+      setLoadError(false);
+    });
+    void window.unbiased.sshList()
+      .then((connections) => { if (active && !receivedStatus) { setSshConnections(connections); setLoadError(false); } })
+      .catch(() => { if (active && !receivedStatus) setLoadError(true); });
+    return () => { active = false; unsubscribe(); };
+  }, [section]);
+
   const title = {
     mosaic: "Mosaic",
     projects: "Projects",
     connectors: "Connectors",
+    ssh: "SSH",
     scheduled: "Scheduled",
     updates: "Update",
     "whats-new": "What's new",
     settings: "Settings",
   }[section];
-  const searchable = section === "projects" || section === "connectors" || section === "scheduled";
+  const searchable = section === "projects" || section === "connectors" || section === "ssh" || section === "scheduled";
   const matches = (value: string) => value.toLowerCase().includes(query.trim().toLowerCase());
   const projectRows = projects.filter((project) => matches(`${project.name} ${project.path}`));
   const taskRows = (tasks ?? [])
     .filter((task) => matches(`${task.name} ${task.prompt}`))
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextDueAt ?? "9999").localeCompare(b.nextDueAt ?? "9999") || a.name.localeCompare(b.name));
+  const sshRows = (sshConnections ?? []).filter((connection) => matches(`${connection.name} ${connection.host}`));
   const installed = (connectors ?? []).filter((connector) => connector.added && matches(connector.displayName));
   const available = (connectors ?? []).filter((connector) => !connector.added && matches(connector.displayName));
 
@@ -18949,6 +19068,24 @@ function SidebarSectionPreview({
               />
             ))}
             {projectRows.length === 0 && <SidebarPreviewEmpty>{query ? "No matching projects" : "No projects yet"}</SidebarPreviewEmpty>}
+          </>
+        )}
+        {section === "ssh" && (
+          <>
+            <SidebarPreviewRow icon={<SquareTerminal size={17} />} title="Manage connections" onClick={() => onOpenSettings("connections")} />
+            <SidebarPreviewLabel>Connections</SidebarPreviewLabel>
+            {sshRows.map((connection) => (
+              <SidebarPreviewRow
+                key={connection.id}
+                icon={<Globe size={16} />}
+                title={connection.name}
+                detail={`${connection.state === "connected" ? "Connected" : connection.state === "connecting" ? "Connecting…" : connection.state === "error" ? "Needs attention" : "Disconnected"} · ${connection.host}`}
+                onClick={() => onOpenSettings("connections")}
+              />
+            ))}
+            {sshConnections === null && !loadError && <SidebarPreviewEmpty>Loading connections...</SidebarPreviewEmpty>}
+            {loadError && <SidebarPreviewEmpty>Connections unavailable</SidebarPreviewEmpty>}
+            {sshConnections !== null && sshRows.length === 0 && <SidebarPreviewEmpty>{query ? "No matching connections" : "No SSH connections yet"}</SidebarPreviewEmpty>}
           </>
         )}
         {section === "scheduled" && (

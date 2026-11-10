@@ -63,6 +63,10 @@ import { BrowserRuntimeClient } from "./browser-runtime-client";
 import { agentStyleInstructions, DEFAULT_AGENT_STYLE, parseAgentStylePrefs, type AgentStylePrefs } from "../shared/agent-style";
 import { projectContextForDirectory } from "./project-context";
 import { ProjectStore } from "./project-store";
+import { SshConnections } from "./ssh-connections";
+import sshHelperSource from "./ssh-helper.py?raw";
+import sshBootstrapSource from "./ssh-bootstrap.py?raw";
+import { parseSshPath, sshPath, displayWorkspacePath } from "../shared/ssh";
 import { OPENUI_VISUAL_INSTRUCTIONS, VISUALIZE_DIRECTIVE } from "./visual-instructions";
 import { epochMillis } from "../shared/conversation-time";
 import { alignRunningTurnStart, chooseTranscript, initialTranscriptPage, replaceTranscriptTail, retitleTranscript, transcriptPage, type TranscriptRow } from "../shared/transcript-pages";
@@ -238,13 +242,34 @@ if (!productionBuild() && process.env.UNBIASED_DEV_USER_DATA_DIR) {
 }
 
 const engine = new EngineClient();
+const sshConnections = new SshConnections(join(app.getPath("userData"), "ssh-connections.json"), () => resolveEngineDir({
+  override: process.env.UNBIASED_ENGINE_DIR, isPackaged: productionBuild(), resourcesPath: process.resourcesPath, appPath: app.getAppPath(),
+}), app.getVersion(), { helper: sshHelperSource, bootstrap: sshBootstrapSource });
+sshConnections.on("notification", msg => engine.emit("notification", msg));
+sshConnections.on("server-request", msg => engine.emit("server-request", msg));
+sshConnections.on("status", statuses => send("ssh:status", statuses));
+// Reconcile after ready, when history RPCs can use the recovered client.
+sshConnections.on("ready", (connectionId: string) => {
+  void (async () => {
+    // History is authoritative after a daemon restart or bounded replay gap.
+    for (const threadId of [...runningTurns.keys()]) {
+      if (sshConnections.owner(threadId) !== connectionId) continue;
+      const result = await engine.request("thread/read", { threadId, includeTurns: true }) as { thread: WireThread };
+      const turn = result.thread.turns?.at(-1);
+      if (turn?.id && runningTurns.get(threadId) === turn.id && turn.status !== "inProgress" && turn.status !== "in_progress") engine.emit("notification", { method: "turn/completed", params: { threadId, turn } });
+    }
+    send("ssh:reconcile", { threadIds: sshConnections.threadsFor(connectionId) });
+  })().catch(e => console.warn("[ssh] could not reconcile remote history:", e instanceof Error ? e.message : String(e)));
+});
+const localEngineRespond = engine.respond.bind(engine);
+engine.respond = (id, result) => { if (!sshConnections.respond(id, result)) localEngineRespond(id, result); };
 // Persisted remote bindings guard every thread RPC, including restart recovery.
 const cloudBindings = new CloudBindings(join(app.getPath("userData"), "cloud-bindings"));
 const scopedIdentity = new ScopedIdentity();
 function currentScopedOwner(): Owner | null { return scopedIdentity.owner(readStoredKey()?.key ?? ""); }
 const conversationRouter = new ConversationRouter(cloudBindings, () => currentScopedOwner());
 const localEngineRequest = engine.request.bind(engine);
-engine.request = (method, params = {}) => conversationRouter.request(method, params, () => localEngineRequest(method, params));
+engine.request = (method, params = {}) => conversationRouter.request(method, params, () => sshConnections.request(method, params, () => localEngineRequest(method, params)));
 const environmentStore = new EnvironmentStore(join(app.getPath("userData"), "environments"));
 const turnEnvironments = new TurnEnvironments();
 function signInFile(): string { return join(app.getPath("userData"), "sign-in-provenance.json"); }
@@ -631,6 +656,10 @@ function baseDeveloperInstructions(): string {
 }
 
 function developerInstructionsFor(cwd: string | null, threadId: string | null = null, projectId?: string | null): string {
+  if (parseSshPath(cwd) || sshConnections.owner(threadId)) return [
+    "You are working in a remote Linux workspace over SSH. Shell commands, file edits and Git run directly on that host. Use its native tools normally; do not wrap commands in ssh or refer to the desktop Mac's filesystem. Local desktop/computer tools are unavailable.",
+    agentStyleInstructions(agentStylePrefs()), configuredProjectContext(cwd, threadId, projectId),
+  ].filter(Boolean).join("\n\n");
   const dir = memoryDirForCwd(cwd, threadId, projectId);
   const section = dir ? renderMemorySection(loadMemoryNotes(dir), dir) : "";
   const base = baseDeveloperInstructions();
@@ -3362,6 +3391,17 @@ function excludeFromGit(project: string, entry: string): void {
 
 /** Create a fresh worktree for a conversation; null = fall back to local. */
 async function createWorktree(project: string, seed?: string): Promise<string | null> {
+  if (parseSshPath(project)) {
+    const name = worktreeName(seed ?? "");
+    const dir = join(project, ".unbiased", "worktrees", name);
+    const branch = "pareto/" + name;
+    const result = await sshConnections.workspace(project, "worktree", { name });
+    if (result.code !== 0) throw new Error(result.err || "Remote worktree creation failed");
+    const map = loadWorktrees();
+    map[dir] = { project, branch, checkoutId: randomUUID() };
+    atomicJson(worktreesFile(), map);
+    return dir;
+  }
   const name = worktreeName(seed ?? "");
   // Inside the project, alongside how codex and Claude Code do it
   // (.codex/worktrees, .claude/worktrees). Keeping them in the app's data
@@ -3604,6 +3644,12 @@ async function resumeParamsFor(id: string): Promise<Record<string, unknown>> {
 // Project identity is independent of the repository used as its working directory.
 function projectStore(): ProjectStore { return new ProjectStore(app.getPath("userData")); }
 function loadProjects(): ProjectRecord[] { return projectStore().list(); }
+function workspacePath(raw: string, base = mainCwd ?? pendingCwd ?? homedir()): string {
+  if (parseSshPath(raw)) return raw;
+  if (isAbsolute(raw)) return raw; // Explicit local attachments stay local.
+  const remote = parseSshPath(base);
+  return remote ? sshPath(remote.connectionId, isAbsolute(raw) ? raw : join(remote.path, raw)) : isAbsolute(raw) ? raw : join(base, raw);
+}
 function saveProjects(projects: ProjectRecord[]): void { projectStore().save(projects); }
 function projectMembership(id: string, cwd?: string) {
   return projectStore().membership(id, cwd, loadWorktrees());
@@ -7829,6 +7875,48 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("engine:status", () => lastStatus);
+  ipcMain.handle("ssh:list", () => sshConnections.list());
+  ipcMain.handle("workspace:resolve-file", (_e, p: { threadId?: string | null; path: string }) => {
+    if (!p || typeof p.path !== "string" || !p.path || p.path.includes("\0")) throw new Error("Invalid workspace file");
+    const base = p.threadId ? threadCwds.get(p.threadId) : mainCwd ?? pendingCwd;
+    const owner = sshConnections.owner(p.threadId);
+    const explicit = parseSshPath(p.path);
+    if (explicit && owner && explicit.connectionId !== owner) throw new Error("File belongs to a different SSH host");
+    if (explicit) return p.path;
+    const remote = parseSshPath(base);
+    if (owner && !remote) throw new Error("Open the remote conversation before resolving its files");
+    return remote ? sshPath(remote.connectionId, isAbsolute(p.path) ? p.path : join(remote.path, p.path)) : workspacePath(p.path, base ?? homedir());
+  });
+  ipcMain.handle("ssh:save", (_e, value) => {
+    if (value?.id && loadProjects().some(p => p.folders.some(folder => parseSshPath(folder)?.connectionId === value.id))) {
+      const previous = sshConnections.connection(value.id);
+      if (previous.host !== value.host || previous.port !== value.port) throw new Error("Create a separate connection for a different host; existing projects cannot change servers");
+    }
+    return sshConnections.upsert(value);
+  });
+  ipcMain.handle("ssh:check-engine", async (_e, id: string) => sshConnections.checkEngine(id));
+  ipcMain.handle("ssh:connect", async (_e, id: string) => sshConnections.connect(id));
+  ipcMain.handle("ssh:disconnect", (_e, id: string) => sshConnections.disconnect(id));
+  ipcMain.handle("ssh:remove", (_e, id: string) => {
+    if (loadProjects().some(p => parseSshPath(p.primary)?.connectionId === id)) throw new Error("Remove this host's projects first");
+    sshConnections.remove(id);
+  });
+  ipcMain.handle("ssh:identity", async () => {
+    const result = await dialog.showOpenDialog({ title: "Choose SSH identity file", properties: ["openFile"], defaultPath: join(homedir(), ".ssh") });
+    return result.canceled ? null : result.filePaths[0];
+  });
+  ipcMain.handle("ssh:folders", async (_e, p: { id: string; path: string }) => {
+    const result = await sshConnections.workspace(sshPath(p.id, p.path), "list");
+    return { ...result, entries: result.entries.filter((entry: { dir: boolean }) => entry.dir) };
+  });
+  ipcMain.handle("ssh:project", async (_e, p: { id: string; path: string; name: string }) => {
+    if (typeof p.name !== "string" || !p.name.trim()) throw new Error("Project name is required");
+    const path = sshPath(p.id, p.path);
+    if (!(await sshConnections.workspace(path, "stat")).dir) throw new Error("Remote project folder is unavailable");
+    const project = projectRecord({ name: p.name.trim(), folders: [path], primary: path });
+    saveProjects([...loadProjects(), project]);
+    return { id: project.id, name: project.name, path: project.primary };
+  });
 
   // ── Auth IPC ────────────────────────────────────────────────────────
   // Presence + source of the stored key (no network). keyName is the
@@ -7979,6 +8067,7 @@ app.whenReady().then(async () => {
     resetServerTools();
     conversationMetadata.reset(); metadataTurns.clear();
     engine.stop();
+    sshConnections.stop();
     // Without this the timer keeps firing against a dead engine, turning
     // every scheduled task into a "engine not running" failure row.
     stopScheduler();
@@ -8022,6 +8111,9 @@ app.whenReady().then(async () => {
     parentThreadId?: string | null;
   }) => {
     const { paneId, text, attachments, computer, visualize } = payload;
+    const mainSelectionAtSend = paneId === "main" ? { sequence: mainOpenSequence, project: pendingProjectId, cwd: pendingCwd } : null;
+    const contextPath = panes[paneId]?.threadId ? threadCwds.get(panes[paneId].threadId!) : pendingCwd;
+    if ((parseSshPath(contextPath) || sshConnections.owner(panes[paneId]?.threadId)) && computer) throw new Error("Computer control is only available in local chats");
     const sideParentAtSend = paneId.startsWith("side:")
       ? sideChatRecents.get(paneId)?.parentThreadId ?? payload.parentThreadId ?? panes.main.threadId
       : null;
@@ -8038,6 +8130,7 @@ app.whenReady().then(async () => {
     }
     // Eligibility discovery must not delay canceling a superseded continuation.
     const serverCapabilities = await serverCapabilitiesPending;
+    if (mainSelectionAtSend && (mainSelectionAtSend.sequence !== mainOpenSequence || mainSelectionAtSend.project !== pendingProjectId || mainSelectionAtSend.cwd !== pendingCwd)) throw new Error("The conversation changed while starting this message. Return to it and send again.");
     if (payload.serverTool !== undefined && !serverCapabilities[payload.serverTool]) throw new Error("This server tool is unavailable for your account or workload.");
     for (const attachment of attachments ?? []) {
       if (!isAbsolute(attachment.path)) throw new Error(`Invalid attachment path: ${attachment.name}`);
@@ -8109,7 +8202,7 @@ app.whenReady().then(async () => {
           // A previously created worktree — validate it still exists and
           // belongs to this project before trusting it.
           const info = loadWorktrees()[workMode.existing];
-          if (info && info.project === pendingCwd && existsSync(workMode.existing)) {
+          if (info && info.project === pendingCwd && (parseSshPath(workMode.existing) || existsSync(workMode.existing))) {
             cwd = workMode.existing;
           }
         }
@@ -8847,6 +8940,13 @@ app.whenReady().then(async () => {
   ipcMain.handle("worktrees:remove", async (_e, dir: string) => {
     const map = loadWorktrees();
     const info = map[dir];
+    if (parseSshPath(dir)) {
+      if (!info || parseSshPath(info.project)?.connectionId !== parseSshPath(dir)?.connectionId) throw new Error("Unknown remote worktree");
+      const result = await sshConnections.workspace(info.project, "exec", { argv: ["git", "worktree", "remove", "--force", displayWorkspacePath(dir)] });
+      if (result.code !== 0) return { ok: false, error: result.err || "Remote worktree removal failed" };
+      delete map[dir]; atomicJson(worktreesFile(), map);
+      return { ok: true };
+    }
     if (info) {
       const removed = await new Promise<boolean>((resolve) => {
         execFile(
@@ -8879,7 +8979,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("worktrees:list", (_e, project: string) => {
     const map = loadWorktrees();
     const worktrees = Object.entries(map)
-      .filter(([dir, info]) => info.project === project && existsSync(dir))
+      .filter(([dir, info]) => info.project === project && (parseSshPath(dir) || existsSync(dir)))
       .map(([dir, info]) => ({ dir, branch: info.branch }));
     return { worktrees };
   });
@@ -10654,6 +10754,7 @@ app.whenReady().then(async () => {
       }
       const project = payload.scope === "project" ? skillProject(payload.cwd ?? null, payload.projectId) : null;
       if (payload.scope === "project" && !project) return { ok: false, error: "Choose a project before adding a project skill." };
+      if (payload.scope === "project" && parseSshPath(payload.cwd)) return { ok: false, error: "Install remote project skills on the SSH host. Local skill folders are not copied automatically." };
       const ownership = project ? { scope: "project" as const, projectId: project.id } : { scope: "global" as const };
       const root = project ? join(payload.cwd!, ".codex", "skills") : globalSkillsDir();
       try {
@@ -10801,6 +10902,7 @@ app.whenReady().then(async () => {
       projects: records.map((r) => ({
         id: r.id,
         sources: r.sources,
+        connectionName: parseSshPath(r.primary) ? sshConnections.connection(parseSshPath(r.primary)!.connectionId).name : undefined,
         path: r.primary,
         name: r.name,
         icon: r.icon,
@@ -10914,6 +11016,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("project:reveal", (_e, path: string) => {
+    if (parseSshPath(path)) throw new Error("Remote folders are shown in the workspace panel");
     void shell.openPath(path);
     return { ok: true };
   });
@@ -10947,10 +11050,28 @@ app.whenReady().then(async () => {
   // directory named after the project in the home folder.
   ipcMain.handle(
     "project:create",
-    (_e, p: { name: string; folders?: string[]; primary?: string; icon?: string; color?: string | null }) => {
+    async (_e, p: { name: string; folders?: string[]; primary?: string; icon?: string; color?: string | null }) => {
       const name = p.name.trim();
       if (!name) return { path: null, name: null, error: "Project name is required" };
       const folders = (p.folders ?? []).filter(Boolean);
+      // Remote folders must belong to a single device and exist there.
+      // Never fall back to creating a local directory for a remote selection.
+      try {
+        const remote = folders.map(folder => parseSshPath(folder));
+        const host = remote.find(Boolean)?.connectionId;
+        if (host) {
+          if (remote.some(path => !path || path.connectionId !== host)) {
+            return { path: null, name: null, error: "All source folders must be on the same device" };
+          }
+          for (const folder of folders) {
+            if (!(await sshConnections.workspace(folder, "stat")).dir) {
+              return { path: null, name: null, error: "Remote source folder is no longer available" };
+            }
+          }
+        }
+      } catch (error) {
+        return { path: null, name: null, error: String(error instanceof Error ? error.message : error) };
+      }
       let primary: string;
       if (folders.length > 0) {
         primary = p.primary && folders.includes(p.primary) ? p.primary : folders[0];
@@ -11023,7 +11144,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("threads:create-multi", async (_e, options?: { projectId?: string | null; replaceId?: string; workMode?: "local" | "worktree" | "existing"; worktreeDir?: string }) => {
     const project = options?.projectId ? loadProjects().find((p) => p.id === options.projectId) : null;
     const projectPath = project?.primary ?? null;
-    if (options?.projectId && (!projectPath || !existsSync(projectPath))) throw new Error("Project is no longer available");
+    if (options?.projectId && (!projectPath || (!parseSshPath(projectPath) && !existsSync(projectPath)))) throw new Error("Project is no longer available");
     const selectedMode = options?.workMode ?? "local";
     if (selectedMode !== "local" && !projectPath) throw new Error("Choose a project first");
     const oldId = options?.replaceId;
@@ -11036,7 +11157,7 @@ app.whenReady().then(async () => {
     let cwd = projectPath ?? defaultChatDir();
     if (selectedMode === "existing") {
       const dir = options?.worktreeDir;
-      if (!dir || loadWorktrees()[dir]?.project !== projectPath || !existsSync(dir)) {
+      if (!dir || loadWorktrees()[dir]?.project !== projectPath || (!parseSshPath(dir) && !existsSync(dir))) {
         throw new Error("Worktree is no longer available");
       }
       cwd = dir;
@@ -11358,9 +11479,13 @@ app.whenReady().then(async () => {
 
   // Read-only file access for the viewer panel. Paths resolve against the
   // active conversation's cwd; output is capped and binary files refused.
-  ipcMain.handle("file:read", (_e, rawPath: string) => {
+  ipcMain.handle("file:read", async (_e, rawPath: string) => {
     const base = mainCwd ?? pendingCwd ?? app.getPath("home");
-    const fullPath = isAbsolute(rawPath) ? rawPath : join(base, rawPath);
+    const fullPath = workspacePath(rawPath, base);
+    if (parseSshPath(fullPath)) {
+      try { return { ...await sshConnections.workspace(fullPath, "read"), fullPath }; }
+      catch (e) { return { fullPath, error: e instanceof Error ? e.message : String(e) }; }
+    }
     try {
       const info = statSync(fullPath);
       if (!info.isFile()) return { error: "Not a file", fullPath };
@@ -11377,6 +11502,7 @@ app.whenReady().then(async () => {
   const fileActionPath = (rawPath: unknown): string => {
     if (typeof rawPath !== "string" || !rawPath) throw new Error("A local file path is required.");
     const base = mainCwd ?? pendingCwd ?? app.getPath("home");
+    if (parseSshPath(workspacePath(rawPath, base))) throw new Error("Remote files cannot be revealed in Finder. Use the workspace file viewer.");
     return localFileForAction(isAbsolute(rawPath) ? rawPath : join(base, rawPath));
   };
 
@@ -11407,9 +11533,10 @@ app.whenReady().then(async () => {
 
   // Existence probe for inline file chips: same resolution as file:read,
   // so a chip only renders as a link when clicking it would actually work.
-  ipcMain.handle("file:exists", (_e, rawPath: string) => {
+  ipcMain.handle("file:exists", async (_e, rawPath: string) => {
     const base = mainCwd ?? pendingCwd ?? app.getPath("home");
-    const fullPath = isAbsolute(rawPath) ? rawPath : join(base, rawPath);
+    const fullPath = workspacePath(rawPath, base);
+    if (parseSshPath(fullPath)) return { exists: (await sshConnections.workspace(fullPath, "stat")).file };
     try {
       return { exists: statSync(fullPath).isFile() };
     } catch {
@@ -11651,11 +11778,12 @@ app.whenReady().then(async () => {
   ipcMain.handle("term:create", (_e, opts: { cols?: number; rows?: number }) => {
     requireLocalConversation("term:create");
     const cwd = mainCwd ?? pendingCwd ?? app.getPath("home");
-    const shell = process.env.SHELL || "/bin/zsh";
+    const remote = parseSshPath(cwd) ? sshConnections.terminal(cwd) : null;
+    const shell = remote?.command ?? process.env.SHELL ?? "/bin/zsh";
     const id = `pty_${nextPtyId++}`;
-    const pty = ptySpawn(shell, [], {
+    const pty = ptySpawn(shell, remote?.args ?? [], {
       name: "xterm-256color",
-      cwd,
+      cwd: remote ? homedir() : cwd,
       cols: opts.cols || 80,
       rows: opts.rows || 24,
       env: process.env as Record<string, string>,
@@ -11686,9 +11814,13 @@ app.whenReady().then(async () => {
   // One directory level for the workspace tree — the renderer expands
   // lazily, so huge folders (node_modules…) cost nothing until opened.
   // No path argument = the active conversation's root.
-  ipcMain.handle("fs:list", (_e, rawDir?: string) => {
+  ipcMain.handle("fs:list", async (_e, rawDir?: string) => {
     const base = mainCwd ?? pendingCwd ?? app.getPath("home");
-    const dir = rawDir ? (isAbsolute(rawDir) ? rawDir : join(base, rawDir)) : base;
+    const dir = rawDir ? workspacePath(rawDir, base) : base;
+    if (parseSshPath(dir)) {
+      try { return { ...await sshConnections.workspace(dir, "list"), dir }; }
+      catch (e) { return { dir, entries: [], error: e instanceof Error ? e.message : String(e) }; }
+    }
     try {
       const entries = readdirSync(dir, { withFileTypes: true })
         .map((d) => ({ name: d.name, dir: d.isDirectory() }))
@@ -11700,7 +11832,11 @@ app.whenReady().then(async () => {
   });
 
   // Current branch of a project, for the composer's context strip.
-  ipcMain.handle("git:branch", (_e, path: string) => {
+  ipcMain.handle("git:branch", async (_e, path: string) => {
+    if (parseSshPath(path)) {
+      const result = await sshConnections.workspace(path, "exec", { argv: ["git", "rev-parse", "--abbrev-ref", "HEAD"] });
+      return { branch: result.code === 0 ? result.out.trim() : null };
+    }
     return new Promise((resolve) => {
       execFile("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: path, timeout: 3000 }, (err, stdout) => {
         resolve({ branch: err ? null : stdout.trim() });
@@ -11708,8 +11844,8 @@ app.whenReady().then(async () => {
     });
   });
 
-  const runGit = (cwd: string, args: string[]) =>
-    new Promise<{ out: string; err: string; code: number }>((resolve) => {
+  const runGit = (cwd: string, args: string[]): Promise<{ out: string; err: string; code: number }> =>
+    parseSshPath(cwd) ? sshConnections.workspace(cwd, "exec", { argv: ["git", ...args.map(displayWorkspacePath)] }) : new Promise<{ out: string; err: string; code: number }>((resolve) => {
       execFile("git", args, { cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
         resolve({ out: stdout ?? "", err: stderr ?? "", code: error ? 1 : 0 });
       });
@@ -11844,7 +11980,8 @@ app.whenReady().then(async () => {
       const rel = line.slice(3).trim();
       if (rel.endsWith("/")) continue;
       try {
-        const content = readFileSync(join(p.path, rel), "utf8");
+        const file = join(p.path, rel);
+        const content: string = parseSshPath(file) ? (await sshConnections.workspace(file, "read")).content : readFileSync(file, "utf8");
         if (content.includes("\u0000") || content.length > 400_000) continue;
         const lines = content.split("\n");
         if (lines[lines.length - 1] === "") lines.pop();
@@ -11876,8 +12013,12 @@ app.whenReady().then(async () => {
     return push.code === 0 ? { ok: true } : { ok: false, error: push.err.trim() || "push failed" };
   });
 
-  ipcMain.handle("review:create-pr", (_e, path: string) => {
+  ipcMain.handle("review:create-pr", async (_e, path: string) => {
     requireLocalConversation("review:create-pr");
+    if (parseSshPath(path)) {
+      const result = await sshConnections.workspace(path, "exec", { argv: ["gh", "pr", "create", "--fill"] });
+      return result.code === 0 ? { ok: true } : { ok: false, error: result.err || "Remote PR creation failed" };
+    }
     return new Promise((resolve) => {
       execFile("gh", ["pr", "create", "--fill", "--web"], { cwd: path, timeout: 60000 }, (err, _o, stderr) => {
         resolve(err ? { ok: false, error: (stderr ?? "").trim() || "gh pr create failed (is GitHub CLI installed?)" } : { ok: true });
@@ -11900,8 +12041,8 @@ app.whenReady().then(async () => {
   // origin remote (ssh remotes normalized to https).
   ipcMain.handle("git:blame-line", async (_e, p: { file: string; line: number }) => {
     const dir = p.file.split("/").slice(0, -1).join("/") || "/";
-    const run = (args: string[]) =>
-      new Promise<string>((resolve) => {
+    const run = (args: string[]): Promise<string> =>
+      parseSshPath(dir) ? sshConnections.workspace(dir, "exec", { argv: ["git", ...args.map(displayWorkspacePath)] }).then(r => r.code === 0 ? r.out : "") : new Promise<string>((resolve) => {
         execFile("git", args, { cwd: dir, timeout: 5000 }, (err, stdout) => resolve(err ? "" : stdout));
       });
     const out = await run(["blame", "-L", `${p.line},${p.line}`, "--porcelain", "--", p.file]);
@@ -11940,12 +12081,21 @@ app.whenReady().then(async () => {
   // behind ⌘-click in the file viewer. Text-based (grep), not semantic:
   // works for every language, no language servers. execFile with an args
   // array means the symbol is never shell-interpreted.
-  ipcMain.handle("fs:search-refs", (_e, word: string) => {
-    const base = mainCwd ?? pendingCwd;
+  ipcMain.handle("fs:search-refs", async (_e, word: string, sourcePath?: string) => {
+    const roots = typeof sourcePath === "string" ? loadProjects().flatMap(p => p.folders).filter(root => sourcePath === root || sourcePath.startsWith(root + "/")).sort((a,b) => b.length-a.length) : [];
+    const base = roots[0] ?? (sourcePath ? dirname(sourcePath) : mainCwd ?? pendingCwd);
     if (!base || base === app.getPath("home")) {
       return { results: [], error: "References need a project conversation" };
     }
     if (!/^[\w$]{1,128}$/.test(word)) return { results: [], error: "Not a searchable symbol" };
+    if (parseSshPath(base)) {
+      const result = await sshConnections.workspace(base, "exec", { argv: ["git", "grep", "-nIwF", "--", word] });
+      const lines = result.out.split("\n").filter(Boolean);
+      return { results: lines.slice(0, 200).flatMap((line: string) => {
+        const match = /^(.*?):(\d+):(.*)$/.exec(line);
+        return match ? [{ path: join(base, match[1]), rel: match[1], line: Number(match[2]), text: match[3].slice(0, 200) }] : [];
+      }), truncated: lines.length > 200 };
+    }
     return new Promise((resolve) => {
       execFile(
         "grep",
@@ -11985,10 +12135,18 @@ app.whenReady().then(async () => {
 
   // Full-size image as a data URL for the side panel's preview tab (the
   // renderer can't load file:// under its CSP; data: is allowed).
-  ipcMain.handle("file:read-image", (_e, path: string) => {
+  ipcMain.handle("file:read-image", async (_e, path: string) => {
     if (typeof path !== "string" || !path) return { error: "A file path is required." };
     const base = mainCwd ?? pendingCwd ?? app.getPath("home");
-    const fullPath = isAbsolute(path) ? path : join(base, path);
+    const fullPath = workspacePath(path, base);
+    if (parseSshPath(fullPath)) {
+      try {
+        const image = await sshConnections.workspace(fullPath, "image");
+        const mime = ({ ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" } as Record<string, string>)[image.suffix];
+        if (!mime) return { fullPath, error: "Unsupported image format" };
+        return { fullPath, dataUrl: "data:" + mime + ";base64," + image.base64 };
+      } catch (e) { return { fullPath, error: e instanceof Error ? e.message : String(e) }; }
+    }
     try {
       if (statSync(fullPath).size > 15_000_000) return { fullPath, error: "Image is larger than 15 MB" };
       const img = nativeImage.createFromPath(fullPath);
@@ -12166,6 +12324,7 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
+  sshConnections.stop();
   for (const pty of ptys.values()) pty.kill();
   ptys.clear();
   void learning?.stop();

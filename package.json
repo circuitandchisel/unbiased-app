@@ -4,7 +4,7 @@
   "description": "Unbiased desktop — Pareto-powered coding agent",
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "npm run prepare:browser && node build/dev-launcher.cjs",
+    "dev": "node build/prepare-ssh-runtime.cjs && npm run prepare:browser && node build/dev-launcher.cjs",
     "build": "node build/prepare-browser.cjs --runtime-only && electron-vite build",
     "prepare:browser": "node build/prepare-browser.cjs",
     "smoke:browser": "node build/smoke-browser.cjs",
@@ -16,7 +16,7 @@
     "smoke:visual-height": "electron build/smoke-visual-height.cjs",
     "smoke:completed-visuals": "electron build/smoke-completed-visuals.cjs",
     "typecheck": "tsc --noEmit",
-    "dist": "npm run prepare:browser && electron-vite build && electron-builder --publish never",
+    "dist": "node build/prepare-ssh-runtime.cjs && npm run prepare:browser && electron-vite build && electron-builder --publish never",
     "test": "node --import tsx --test src/main/*.test.ts src/renderer/src/*.test.ts src/renderer/src/*.test.tsx",
     "smoke:browser-tabs": "electron build/smoke-browser-tabs.cjs",
     "smoke:browser-runtime": "node build/smoke-browser-runtime.cjs",
@@ -33,7 +33,9 @@
     "smoke:agent-instructions": "node build/smoke-agent-instructions.cjs",
     "smoke:side-browser": "electron build/smoke-side-browser.cjs",
     "smoke:side-browser-ui": "electron build/smoke-side-browser-ui.cjs",
-    "smoke:browser-captures": "electron build/smoke-browser-captures.cjs"
+    "smoke:browser-captures": "electron build/smoke-browser-captures.cjs",
+    "smoke:ssh": "node --import tsx build/smoke-ssh-remote.mts",
+    "smoke:ssh-ui": "electron build/smoke-ssh-ui.cjs"
   },
   "build": {
     "appId": "ai.unbiased.desktop",

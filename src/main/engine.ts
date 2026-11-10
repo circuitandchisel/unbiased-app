@@ -34,7 +34,7 @@ export class EngineClient extends EventEmitter {
     return this.proc?.pid ?? null;
   }
 
-  start(enginePath: string, extraEnv?: Record<string, string>): void {
+  start(enginePath: string, extraEnv?: Record<string, string>, args: string[] = []): void {
     this.routing.reset();
     this.emitStatus({ state: "starting" });
     // Held in a local as well as on `this`, because every handler below has to
@@ -46,7 +46,7 @@ export class EngineClient extends EventEmitter {
     // footer while a perfectly healthy engine was running, and could reject
     // the new engine's in-flight handshake. `code` is null there because our
     // own stop() kills with SIGTERM rather than the child exiting on its own.
-    const proc = spawn(enginePath, [], {
+    const proc = spawn(enginePath, args, {
       stdio: ["pipe", "pipe", "pipe"],
       // extraEnv lets the caller pin the API key for THIS launch (login flow)
       // so a stale process-level UNBIASED_API_KEY can't override the key the
@@ -76,6 +76,15 @@ export class EngineClient extends EventEmitter {
       console.error("[engine]", chunk.toString().trimEnd());
     });
 
+    proc.on("error", (error) => {
+      if (this.proc !== proc) return;
+      this.routing.reset();
+      for (const pending of this.pending.values()) pending.reject(error);
+      this.pending.clear();
+      this.proc = null;
+      this.emitStatus({ state: "exited", code: null, detail: error.message });
+    });
+
     proc.on("exit", (code, signal) => {
       // Superseded by a newer child: its exit is ours to expect, not to
       // report, and `this.pending` no longer belongs to it.
@@ -95,6 +104,8 @@ export class EngineClient extends EventEmitter {
 
   stop(): void {
     this.routing.reset();
+    for (const p of this.pending.values()) p.reject(new Error("Engine connection stopped; the request was not retried"));
+    this.pending.clear();
     this.proc?.kill();
     this.proc = null;
   }

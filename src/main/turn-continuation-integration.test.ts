@@ -1,3 +1,4 @@
+import { parseSshPath } from "../shared/ssh";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -18,9 +19,9 @@ function sendFixture(capabilities: ServerToolCapabilities = { web_search: false,
   const endAt = source.indexOf("  // One-use host ticket:", startAt);
   assert.ok(startAt > 0 && endAt > startAt);
   const pane = { threadId: "chat", turnId: null };
-  const context = { ipcMain: { handle: (_name: string, cb: typeof handler) => { handler = cb; } },
+  const context = { parseSshPath, sshConnections: { owner: () => null }, ipcMain: { handle: (_name: string, cb: typeof handler) => { handler = cb; } },
     panes: { main: pane }, ensurePane: () => pane, turnContinuation: guard, automaticTurnStarts: new Map(),
-    readJson: () => null, signInFile: () => "", pendingCwd: null, mainCwd: "/repo", planMode: false,
+    readJson: () => null, signInFile: () => "", pendingCwd: null, pendingProjectId: null, mainOpenSequence: 0, mainCwd: "/repo", planMode: false,
     threadCwds: new Map([["chat", "/repo"]]), loadWorktrees: () => ({}), bundledSkillsDir: () => "/skills",
     resolveSlashSkill: async () => null, configuredProjectContext: () => null, fileAttachmentContext: () => "",
     pinTurnEnvironment: () => {}, turnEnvironments: { end: () => {} },
@@ -47,6 +48,17 @@ function sendFixture(capabilities: ServerToolCapabilities = { web_search: false,
   return { guard, calls, pane, context, send: (wire: string, userRequests?: unknown) => bridge.api.sendMessage("main", wire, [], { userRequests }),
     sendSide: (id: string, parentThreadId: string) => bridge.api.sendMessage(id, "Side question", [], { parentThreadId }) };
 }
+
+test("switching project or host while a send starts cannot run it in the new selection", async () => {
+  const f = sendFixture();
+  let release!: (value: ServerToolCapabilities) => void;
+  f.context.serverTools.capabilities = () => new Promise(resolve => { release = resolve; });
+  const sent = f.send("Work in the selected project");
+  f.context.pendingCwd = "/different-project" as any;
+  release({ web_search: false, image_generation: false });
+  await assert.rejects(sent, /conversation changed while starting/);
+  assert.equal(f.calls.length, 0);
+});
 
 test("a side chat starting during navigation retains its original parent, directory and permissions", async () => {
   const f = sendFixture();
