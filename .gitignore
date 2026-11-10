@@ -8,3 +8,4 @@ build/.browser-cache/
 build/browser-bundle/
 build/browser-runtime/
 build/.browser-source/
+__pycache__/

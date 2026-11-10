@@ -79,6 +79,9 @@ jobs:
       - name: Smoke test side-chat retention and recovery
         run: npm run smoke:side-chat-retention
 
+      - name: Smoke test SSH connection and remote-project UI
+        run: npm run smoke:ssh-ui
+
       - name: Smoke test custom agent instructions settings
         run: |
           npx electron-vite build

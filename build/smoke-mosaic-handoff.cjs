@@ -49,6 +49,12 @@ window.unbiased=new Proxy({}, {get:(_,key)=>{
  await win.loadFile(html);await until(`window.qaListeners.get('onPetNoticeOpenThread')?.size>0`);
  await ev(`window.qaEmit('onPetNoticeOpenThread',{threadId:'chat-one'})`);await until(`document.querySelector('[data-chat-pane-id="main"]').innerText.includes('Earlier completed answer.')`);
  await ev(`window.qaRunning['chat-one']=true`);await mosaic();
+ const mountsBeforeRecovery=await ev(`window.qaCalls.filter(c=>c[0]==='mountThread').length`);
+ await ev(`window.qaEmit('onSshReconcile',{threadIds:['another-host-thread']})`);await pause(60);
+ assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='mountThread').length`),mountsBeforeRecovery,'unrelated remote recovery does not remount Mosaic tiles');
+ await ev(`window.qaEmit('onSshReconcile',{threadIds:['chat-one']})`);
+ await until(`window.qaCalls.filter(c=>c[0]==='mountThread').length===${mountsBeforeRecovery+1}`);
+ assert.equal(await ev(`window.qaCalls.filter(c=>c[0]==='mountThread').at(-1)[1]`),'chat-one','only the recovered host conversation reloads history');
  const pill=id=>`document.querySelector('[data-mosaic-chat-id="${id}"] [title="How should Pareto actions be approved?"]')`;
  const chooseMode=async(id,label)=>{
    await ev(pill(id)+'.click()');
