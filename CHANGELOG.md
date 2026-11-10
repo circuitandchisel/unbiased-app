@@ -6,6 +6,24 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.36 — November 10, 2026
+
+### Added
+
+- **Work on a remote server over SSH.** Add a connection in Settings → SSH, choose a remote folder, and work with its files, Git, and terminal from the desktop app. Remote projects appear in the sidebar and work in Mosaic too.
+- **Choose where a project lives.** Create project now lets you pick this computer, a saved SSH host, or add a remote connection. Choosing a folder fills in the project name automatically.
+- **Clear remote setup guidance.** SSH checks for a compatible app engine and shows a command for you to run when installation or an update is needed. Installation, updates, and stopping an old session stay manual. Remote workspaces require Linux and sign-in on that host.
+
+### Improved
+
+- **Recover remote work after disconnecting.** Reconnect to restore saved conversations, streamed updates, and pending approvals. Recovery refreshes only the affected host's chats, including Mosaic tiles.
+- **See your remote environment.** The project bar shows the remote host and connection status, with remote checkout and worktree choices.
+
+### Fixed
+
+- **Keep branch menus visible.** Long branch lists open where there is room and scroll inside the window, keeping search and branch creation clear of the top bar.
+- **Keep remote projects and approvals on their host.** Offline requests fail clearly, source folders stay on one device, and an existing project's SSH destination cannot silently change.
+
 ## 1.13.35 — November 9, 2026
 
 ### Improved
