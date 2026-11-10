@@ -37,6 +37,15 @@ async function main(){
   ipcMain.handle('chat:live-approvals',()=>({requestIds:[]}));
   ipcMain.handle('chat:live-user-inputs',()=>({requestIds:[]}));
   ipcMain.handle('file:exists',()=>({exists:false}));
+  let workspaceResolutions=0;
+  // The production preload resolves inline images in their owning chat.
+  // This fixture's screenshot is local, so resolution preserves its path.
+  ipcMain.handle('workspace:resolve-file',(_event,p)=>{
+    assert.equal(p.threadId,'capture-chat');
+    assert.equal(p.path,saved.capture.path);
+    workspaceResolutions++;
+    return p.path;
+  });
   ipcMain.handle('transcript:save',(_event,p)=>{fs.writeFileSync(cachePath,JSON.stringify(p.entries));return {ok:true}});
   ipcMain.handle('file:read-image',(_event,path)=>{assert.equal(path,saved.capture.path);return {fullPath:path,dataUrl:nativeImage.createFromPath(path).toDataURL()}});
   const result=await build({stdin:{resolveDir:process.cwd(),loader:'tsx',contents:`
@@ -76,6 +85,7 @@ createRoot(document.getElementById('root')).render(<Fixture/>);
   if(process.env.UNBIASED_CAPTURE_QA_SCREENSHOT){win.showInactive();await evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))");fs.writeFileSync(process.env.UNBIASED_CAPTURE_QA_SCREENSHOT,(await win.webContents.capturePage()).toPNG())}
   await evaluate("document.querySelector('[aria-label=\"Open browser screenshot\"]').click()");
   await until("document.querySelector('[aria-label=\"Screenshot preview\"] img')?.naturalWidth>0");
+  assert.ok(workspaceResolutions>=2,'live and reopened screenshot attachments resolve against their conversation');
   assert.deepEqual(errors.filter(error=>!error.includes('Electron Security Warning')),[]);
   console.log('PASS: real in-app screenshot pixels, durable PNG and turn association, live automatic attachment without model Markdown, production preload image preview, disk-cached reply and reopened chat.');
  }finally{win?.destroy();await controller.shutdown();for(const view of views)if(!view.webContents.isDestroyed())view.webContents.close();host.destroy();await new Promise(done=>server.close(done));fs.rmSync(fixture,{recursive:true,force:true})}
