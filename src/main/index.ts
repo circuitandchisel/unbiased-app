@@ -200,7 +200,7 @@ import {
   validateMemory,
 } from "./memory";
 import { writeAutomaticMemory } from "./automatic-memory";
-import { lastFinishedTurnBeforeActive, sideChatStartTarget, SIDE_CHAT_THREAD_SOURCE } from "./side-chat-start";
+import { lastFinishedTurnBeforeActive, sideChatInstructions, sideChatStartTarget, SIDE_CHAT_THREAD_SOURCE } from "./side-chat-start";
 import { SideChatRecents, listVisibleThreads, parseSideChatRecords } from "./side-chat-recents";
 import {
   LearningClient,
@@ -3630,12 +3630,13 @@ function mcpOverrideFor(threadId: string | null): Record<string, unknown> {
  *  thread the engine's whole default server set back. */
 async function resumeParamsFor(id: string): Promise<Record<string, unknown>> {
   serverToolSessions.invalidate(id);
+  const instructions = developerInstructionsFor(threadCwds.get(id) ?? null, id);
   return {
     threadId: id,
     ...threadPolicy(id),
     // A cold reopen can safely recover thread-private notes by ID. Project
     // memory still needs a known cwd; never substitute the previous chat's.
-    developerInstructions: developerInstructionsFor(threadCwds.get(id) ?? null, id),
+    developerInstructions: sideChatRecents.forThread(id) ? sideChatInstructions(instructions) : instructions,
     experimentalRawEvents: true,
     config: mcpOverrideFor(id),
   };
@@ -8182,9 +8183,7 @@ app.whenReady().then(async () => {
           ...target.params,
           ...MODE_THREAD_POLICY[startingAccessMode],
           dynamicTools: await threadDynamicTools(serverCapabilities),
-          developerInstructions: `${developerInstructionsFor(sideCwd, parentId)}\n\n` +
-            "This is a side chat. Inherited parent history is background context, not an active task. " +
-            "Follow this side chat's current request; do not continue parent work unless the user explicitly asks.",
+          developerInstructions: sideChatInstructions(developerInstructionsFor(sideCwd, parentId)),
           experimentalRawEvents: true,
           // A side chat keeps its parent's MCP selection even when its turn
           // must start independently of the parent's in-progress task.
