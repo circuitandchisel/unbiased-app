@@ -11450,6 +11450,9 @@ app.whenReady().then(async () => {
     threadCwds.set(record.threadId, record.cwd);
     try {
       await sideChatInterrupts.get(record.threadId);
+      // Loaded idle sessions ignore resume overrides while subscribed. Detach this
+      // closed pane first so the engine can apply its side-chat instruction boundary.
+      await engine.request("thread/unsubscribe", { threadId: record.threadId });
       const result = await engine.request("thread/resume", await resumeParamsFor(record.threadId)) as { thread: WireThread };
       if (mainOpenSequence !== parentOpenSequence || panes.main.threadId !== record.parentThreadId) return { error: "Original chat changed while restoring" };
       const replay = threadToEntries({ ...result.thread, turns: result.thread.turns?.slice(record.baselineTurns) });
