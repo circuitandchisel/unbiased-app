@@ -8150,6 +8150,7 @@ app.whenReady().then(async () => {
     let created = false;
     if (!pane.threadId) {
       let started: { thread: { id: string } };
+      let forked = false;
       const sideParentId = sideParentAtSend;
       const startingAccessMode = sideParentId ? liveAccessMode(sideParentId) : conversationAccess.defaultMode;
       let startedCwd: string;
@@ -8179,10 +8180,11 @@ app.whenReady().then(async () => {
           sideCwd,
           lastFinishedTurnId,
         );
+        forked = target.method === "thread/fork";
         started = (await engine.request(target.method, {
           ...target.params,
           ...MODE_THREAD_POLICY[startingAccessMode],
-          dynamicTools: await threadDynamicTools(serverCapabilities),
+          ...(!forked ? { dynamicTools: await threadDynamicTools(serverCapabilities) } : {}),
           developerInstructions: sideChatInstructions(developerInstructionsFor(sideCwd, parentId)),
           experimentalRawEvents: true,
           // A side chat keeps its parent's MCP selection even when its turn
@@ -8284,7 +8286,10 @@ app.whenReady().then(async () => {
       conversationAccess.set(startingAccessMode, started.thread.id);
       saveConversationAccess();
       created = true;
-      serverToolSessions.remember(pane.threadId!, serverCapabilities);
+      // thread/fork ignores dynamicTools; install this child's catalog through
+      // the idle resume path below before its first turn, without touching its parent.
+      if (forked) serverToolSessions.requireRefresh(pane.threadId!);
+      else serverToolSessions.remember(pane.threadId!, serverCapabilities);
     }
     // Natural-language requests get the same eligible tool catalog as menu
     // selections. Refresh a stale/old idle session once, never on every turn.

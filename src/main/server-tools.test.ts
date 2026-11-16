@@ -182,6 +182,24 @@ test("natural-language turns refresh unknown and changed eligible catalogs once"
   assert.equal(refreshes, 3, "resumed threads refresh before an automatic tool choice");
 });
 
+test("fork catalog refresh remains required across failed resumes, including ineligible accounts", async () => {
+  const sessions = new ServerToolSessions();
+  const none = { web_search: false, image_generation: false };
+  sessions.requireRefresh("child");
+  await assert.rejects(sessions.prepareAvailable("child", none, false, async () => {
+    sessions.invalidate("child");
+    throw Error("resume failed");
+  }), /resume failed/);
+  let refreshes = 0;
+  const refresh = async () => { refreshes++; };
+  await sessions.prepareAvailable("child", none, false, refresh);
+  await sessions.prepareAvailable("child", none, false, refresh);
+  assert.equal(refreshes, 1, "retry installs the catalog once, even without eligible server tools");
+  sessions.requireRefresh("running-child");
+  await assert.rejects(sessions.prepareAvailable("running-child", none, true, refresh), /current turn/);
+  assert.equal(refreshes, 1, "a running thread cannot be detached");
+});
+
 test("catalog refresh handles revoked eligibility and retries after a failed reload", async () => {
   const sessions = new ServerToolSessions(); let refreshes = 0;
   const none = { web_search: false, image_generation: false };
