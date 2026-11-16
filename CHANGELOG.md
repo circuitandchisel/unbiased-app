@@ -6,6 +6,17 @@ Format matters: `## <version> — <date>`, then `### <section>`, then `-` bullet
 
 Write for the person using the app, not the person who wrote the code.
 
+## 1.13.37 — November 16, 2026
+
+### Fixed
+
+- **Preserve side-chat instructions.** Starting or reopening a side chat keeps its own instructions alongside inherited context, so the parent conversation remains background rather than an instruction to continue its task.
+- **Web Search in side chats.** Eligible side chats now receive the current tool list before their first reply, including Web Search and Create image. Follow-up messages reuse those tools without interrupting the main chat.
+
+### Improved
+
+- **Updated local and remote runtime.** The desktop bundles the updated side-chat runtime, and SSH setup now requests app engine 0.1.1. Remote installation and updates remain manual.
+
 ## 1.13.36 — November 10, 2026
 
 ### Added
