@@ -142,13 +142,16 @@ export function browserToolsForAccount(tools: Record<string, unknown>[], capabil
 /** Loaded engine sessions keep their original tool declarations. */
 export class ServerToolSessions {
   private tools = new Map<string, Set<ServerToolName>>();
+  private refreshRequired = new Set<string>();
+  /** Forks do not accept dynamicTools, so their catalog must be installed on resume. */
+  requireRefresh(thread: string): void { this.tools.delete(thread); this.refreshRequired.add(thread); }
   invalidate(thread: string): void { this.tools.delete(thread); }
-  clear(): void { this.tools.clear(); }
-  remember(thread: string, capabilities: ServerToolCapabilities): void { this.tools.set(thread, new Set(SERVER_TOOL_NAMES.filter(name => capabilities[name]))); }
+  clear(): void { this.tools.clear(); this.refreshRequired.clear(); }
+  remember(thread: string, capabilities: ServerToolCapabilities): void { this.tools.set(thread, new Set(SERVER_TOOL_NAMES.filter(name => capabilities[name]))); this.refreshRequired.delete(thread); }
   async prepareAvailable(thread: string, capabilities: ServerToolCapabilities, running: boolean, refresh: () => Promise<void>): Promise<void> {
     const desired = SERVER_TOOL_NAMES.filter(name => capabilities[name]);
     const current = this.tools.get(thread);
-    if (current ? current.size === desired.length && desired.every(name => current.has(name)) : desired.length === 0) return;
+    if (!this.refreshRequired.has(thread) && (current ? current.size === desired.length && desired.every(name => current.has(name)) : desired.length === 0)) return;
     if (running) throw new ServerToolError("Wait for the current turn to finish before refreshing server tools.");
     await refresh();
     this.remember(thread, capabilities);

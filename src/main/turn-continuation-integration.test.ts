@@ -8,7 +8,7 @@ import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./tur
 import { ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
 import type { ServerToolCapabilities } from "../shared/server-tools";
 import { SideChatRecents } from "./side-chat-recents";
-import { sideChatInstructions, sideChatStartTarget } from "./side-chat-start";
+import { lastFinishedTurnBeforeActive, sideChatInstructions, sideChatStartTarget } from "./side-chat-start";
 
 function sendFixture(capabilities: ServerToolCapabilities = { web_search: false, image_generation: false }) {
   const guard = new TurnContinuation(), sender = {};
@@ -60,17 +60,15 @@ test("switching project or host while a send starts cannot run it in the new sel
   assert.equal(f.calls.length, 0);
 });
 
-test("a side chat starting during navigation retains its original parent, directory and permissions", async () => {
-  const f = sendFixture();
+function sideSendFixture(capabilities: ServerToolCapabilities = { web_search: false, image_generation: false }) {
+  const f = sendFixture(capabilities);
   const c: any = f.context;
   const side = { threadId: null, turnId: null };
   c.panes['side:one'] = side;
   c.ensurePane = (id: string) => c.panes[id];
-  let release!: (caps: ServerToolCapabilities) => void;
-  c.serverTools.capabilities = () => new Promise(resolve => { release = resolve; });
   const recents = new SideChatRecents();
   Object.assign(c, {
-    sideChatRecents: recents, saveSideChatRecents: () => {}, sideChatInstructions, sideChatStartTarget,
+    sideChatRecents: recents, saveSideChatRecents: () => {}, sideChatInstructions, sideChatStartTarget, lastFinishedTurnBeforeActive,
     threadProject: (id: string, cwd: string) => { assert.equal(id, "chat"); assert.equal(cwd, "/repo"); return { id: "project-a" }; },
     projectStore: () => ({ assign: () => {} }), projectMembership: () => ({ projectId: "project-a" }),
     threadMcp: new Map(), enabledMcpFor: () => [], saveThreadMcp: () => {},
@@ -86,6 +84,15 @@ test("a side chat starting during navigation retains its original parent, direct
       return method === "turn/start" ? { turn: { id: "side-turn" } } : { thread: { id: "new-side", turns: [] } };
     } },
   });
+  return { ...f, side, recents };
+}
+
+test("a side chat starting during navigation retains its original parent, directory and permissions", async () => {
+  const f = sideSendFixture();
+  const c: any = f.context;
+  const { side, recents } = f;
+  let release!: (caps: ServerToolCapabilities) => void;
+  c.serverTools.capabilities = () => new Promise(resolve => { release = resolve; });
   const sending = f.sendSide("side:one", "chat");
   c.panes.main.threadId = "other";
   c.panes.main.turnId = "other-turn";
@@ -107,6 +114,56 @@ test("a side chat starting during navigation retains its original parent, direct
   release({ web_search: false, image_generation: false });
   await assert.rejects(closed, /closed while starting/);
   assert.equal(f.calls.length, beforeClose, "closing during discovery cannot resurrect a parked pane");
+});
+
+for (const capabilities of [
+  { web_search: true, image_generation: true },
+  { web_search: true, image_generation: false },
+  { web_search: false, image_generation: false },
+]) test(`forked side chats install the eligible catalog before their first turn: ${JSON.stringify(capabilities)}`, async () => {
+  const f = sideSendFixture(capabilities);
+  await f.sendSide("side:one", "chat");
+  assert.deepEqual(f.calls.map(call => call.method), ["thread/fork", "thread/read", "thread/unsubscribe", "thread/resume", "turn/start"]);
+  assert.equal(f.calls[0].params.dynamicTools, undefined, "fork does not support tool replacement");
+  assert.equal(f.calls[2].params.threadId, "new-side", "never detach the parent");
+  assert.equal(f.calls[3].params.threadId, "new-side");
+  const tools = f.calls[3].params.dynamicTools.map((tool: { name: string }) => tool.name);
+  assert.equal(tools.includes("web_search"), capabilities.web_search);
+  assert.equal(tools.includes("image_generation"), capabilities.image_generation);
+  assert.equal(tools.includes("browser_search"), !capabilities.web_search);
+  assert.ok(tools.includes("browser_open"), "browser interaction remains available");
+  f.side.turnId = null;
+  await f.sendSide("side:one", "chat");
+  assert.equal(f.calls.filter(call => call.method === "thread/resume").length, 1, "follow-ups reuse the installed catalog");
+});
+
+test("a side chat fork through a completed turn installs tools without unloading its running parent", async () => {
+  const f = sideSendFixture({ web_search: true, image_generation: true });
+  f.context.runningTurns.set("chat", "active-turn");
+  const c: any = f.context;
+  const request = c.engine.request;
+  c.engine.request = async (method: string, params: any) => {
+    if (method === "thread/read" && params.threadId === "chat") {
+      return { thread: { turns: [{ id: "finished-turn", status: "completed" }, { id: "active-turn", status: "inProgress" }] } };
+    }
+    return request(method, params);
+  };
+  await f.sendSide("side:one", "chat");
+  assert.equal(f.calls[0].method, "thread/fork");
+  assert.equal(f.calls[0].params.lastTurnId, "finished-turn");
+  assert.deepEqual(f.calls.filter(call => call.method === "thread/unsubscribe").map(call => call.params.threadId), ["new-side"]);
+  assert.ok(f.calls.find(call => call.method === "thread/resume")!.params.dynamicTools.some((tool: { name: string }) => tool.name === "web_search"));
+  assert.equal(f.context.runningTurns.get("chat"), "active-turn");
+});
+
+test("a side chat starting fresh while its parent runs receives tools without a reload", async () => {
+  const f = sideSendFixture({ web_search: true, image_generation: true });
+  f.context.runningTurns.set("chat", "active-turn");
+  await f.sendSide("side:one", "chat");
+  assert.deepEqual(f.calls.map(call => call.method), ["thread/read", "thread/start", "thread/read", "turn/start"]);
+  const tools = f.calls[1].params.dynamicTools.map((tool: { name: string }) => tool.name);
+  assert.ok(tools.includes("web_search") && tools.includes("image_generation"));
+  assert.equal(f.context.runningTurns.get("chat"), "active-turn");
 });
 
 test("plain user sends install the eligible native catalog before automatic tool selection", async () => {
