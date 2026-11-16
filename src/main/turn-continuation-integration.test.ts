@@ -8,7 +8,7 @@ import { TurnContinuation, CONTINUATION_INPUT, CONTINUATION_NOTICE } from "./tur
 import { ServerToolSessions, offeredServerTools, browserToolsForAccount } from "./server-tools";
 import type { ServerToolCapabilities } from "../shared/server-tools";
 import { SideChatRecents } from "./side-chat-recents";
-import { sideChatStartTarget } from "./side-chat-start";
+import { sideChatInstructions, sideChatStartTarget } from "./side-chat-start";
 
 function sendFixture(capabilities: ServerToolCapabilities = { web_search: false, image_generation: false }) {
   const guard = new TurnContinuation(), sender = {};
@@ -70,7 +70,7 @@ test("a side chat starting during navigation retains its original parent, direct
   c.serverTools.capabilities = () => new Promise(resolve => { release = resolve; });
   const recents = new SideChatRecents();
   Object.assign(c, {
-    sideChatRecents: recents, saveSideChatRecents: () => {}, sideChatStartTarget,
+    sideChatRecents: recents, saveSideChatRecents: () => {}, sideChatInstructions, sideChatStartTarget,
     threadProject: (id: string, cwd: string) => { assert.equal(id, "chat"); assert.equal(cwd, "/repo"); return { id: "project-a" }; },
     projectStore: () => ({ assign: () => {} }), projectMembership: () => ({ projectId: "project-a" }),
     threadMcp: new Map(), enabledMcpFor: () => [], saveThreadMcp: () => {},
@@ -96,6 +96,7 @@ test("a side chat starting during navigation retains its original parent, direct
   assert.equal(fork.params.threadId, "chat");
   assert.equal(fork.params.approvalPolicy, "on-request");
   assert.equal(fork.params.sandbox, "workspace-write");
+  assert.equal(fork.params.developerInstructions, sideChatInstructions(""));
   assert.equal(recents.get("side:one")?.parentThreadId, "chat");
   assert.equal(recents.get("side:one")?.cwd, "/repo");
   assert.equal(c.panes['side:one'], side);
