@@ -67,7 +67,7 @@ jobs:
           repository: circuitandchisel/unbiased-app-engine
           # Standalone engine 0.1.1 pins app-server 0.1.8. Publish engine-v0.1.1
           # before releasing this desktop build; SSH prompts install that version.
-          ref: 6cf5a3bcf0a152da269364adc77b486092f8cbc9
+          ref: 0324f0af5a0360bf0b1d859d4b8a0d3df99691ba
           token: ${{ steps.app-token.outputs.token }}
           path: unbiased-app-engine
 
