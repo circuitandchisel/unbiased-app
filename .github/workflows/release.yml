@@ -65,9 +65,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: circuitandchisel/unbiased-app-engine
-          # Standalone engine 0.1.0 metadata pins app-server 0.1.7. SSH uses
-          # this version to prompt for a compatible manual installation.
-          ref: 675ed71e33515767b539addbcaf8a5bcca8b44ec
+          # Standalone engine 0.1.1 pins app-server 0.1.8. Publish engine-v0.1.1
+          # before releasing this desktop build; SSH prompts install that version.
+          ref: 6cf5a3bcf0a152da269364adc77b486092f8cbc9
           token: ${{ steps.app-token.outputs.token }}
           path: unbiased-app-engine
 
